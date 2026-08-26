@@ -21,7 +21,6 @@ OFFICIAL_SPECS = {
 READINESS_ENDPOINTS = {
     "technocore": "https://technocore.chat/healthz",
     "did_note": "https://technocore.chat/kv/did-4e/1df29904c79a56",
-    "mailbox": "https://technocore.chat/r/mb-p-87d20323b91af58f3b79f342c1265210?format=json",
     "public_repo": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence",
     "official_repo": "https://api.github.com/repos/flop-labs/technocore-chat",
 }
@@ -32,6 +31,7 @@ SCHEMAS = {
     "evidence.json": "flop-evidence-v1",
     "maintenance.json": "flop-maintenance-v1",
     "monitor.json": "flop-public-monitor-status-v1",
+    "capacity_evidence.json": "technocore-capacity-evidence-v1",
 }
 
 
@@ -49,7 +49,7 @@ def validate_dashboard_data(data_dir: Path) -> None:
         if not isinstance(value, dict) or value.get("schema") != schema:
             raise ValueError(f"{filename}: invalid schema")
     readiness = json.loads((data_dir / "readiness.json").read_text(encoding="utf-8"))
-    allowed = {"READY", "VERIFIED", "LIVE", "PENDING", "SUBMITTED", "NOT ANNOUNCED", "REVIEW REQUIRED", "ERROR"}
+    allowed = {"READY", "VERIFIED", "LIVE", "RETIRED", "PENDING", "SUBMITTED", "NOT ANNOUNCED", "REVIEW REQUIRED", "ERROR"}
     for item in readiness["items"]:
         if item["status"] not in allowed:
             raise ValueError(f"unknown readiness status: {item['status']}")
@@ -100,6 +100,7 @@ def run_readiness_check(root: Path, fetcher: Callable[[str], bytes] = fetch_byte
             checks[name] = {"status": "READY", "bytes": len(body)}
         except Exception as error:
             checks[name] = {"status": "ERROR", "error": type(error).__name__}
+    checks["mailbox"] = {"status": "MIGRATION_PENDING", "read_only": True}
     specs = compare_spec_hashes(expected, fetcher)
     return {
         "schema": "flop-readiness-check-v1",

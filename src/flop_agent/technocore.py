@@ -14,6 +14,7 @@ from .identity import load_identity, sign_message
 
 BASE_URL = "https://technocore.chat"
 ALLOWED_READ_PATHS = {"/healthz", "/rooms", "/r/lobby?format=json", "/llms.txt", "/skill.md", "/patterns.md", "/.well-known/agent.json"}
+DID_NOTE_PATH = "/kv/did-4e/1df29904c79a56"
 
 
 def _request(url: str, payload: Dict[str, Any] | None = None) -> Any:
@@ -42,6 +43,21 @@ def healthcheck() -> Dict[str, Any]:
         "rooms": read_official("/rooms"),
         "lobby": read_official("/r/lobby?format=json"),
     }
+
+
+def requires_signed_write(room: str) -> bool:
+    return room.startswith("mb-")
+
+
+def conditional_note_payload(current: str, value: str) -> Dict[str, str]:
+    if not current or not value:
+        raise ValueError("current and replacement note values are required")
+    return {"value": value, "if": current}
+
+
+def update_did_note_cas(current: str, value: str) -> Any:
+    """Update the configured DID Note only if its exact current value matches."""
+    return _request(BASE_URL + DID_NOTE_PATH, conditional_note_payload(current, value))
 
 
 def post_signed(identity_path: Path, room: str, text: str, nonce: int | None = None) -> Dict[str, Any]:

@@ -30,6 +30,16 @@
       "commit": null,
       "receipt": null,
       "technocore_seq": null
+    },
+    {
+      "date": "2026-08-27",
+      "type": "privacy_and_evidence_remediation",
+      "change": "Handled expected Technocore ring eviction and retired a disclosed unlisted mailbox locator.",
+      "reason": "Phase A removes the locator from discoverability and treats expected ring rotation separately from verified offchain evidence",
+      "source": "Technocore official README, SECURITY.md and deployment manifest",
+      "commit": null,
+      "receipt": null,
+      "technocore_seq": null
     }
   ]
 }

@@ -20,19 +20,17 @@ VERSION = "flop-readiness-health-monitor-v1"
 DID = "did:key:z6MkkTuFggpkYcZ61zGxej2Ae7Lf6MHk3AbsYASULYTqiqXy"
 DID_NOTE_VALUE = (
     f"{DID} x25519:a-EbwHNshrhf00Aqq4P7xrZ8Cqmncxr3HW_wTSOoXW0 "
-    "mailbox:mb-p-87d20323b91af58f3b79f342c1265210 "
     "name:FLOP-Agent-Intelligence-and-Safety-Layer "
     "repo:https://github.com/ksk7777m/flop-agent-intelligence"
 )
-DID_NOTE_HASH = "6cfad6a2a6af42f59671170a2c5d28de6d0fa37f022b2b2d29f49c80a87e34fd"
-MAILBOX = "mb-p-87d20323b91af58f3b79f342c1265210"
+DID_NOTE_HASH = "f1f0f6a3dbf73e9a42841959aa1af1e43347018f710cdd036f9b4951c77e26f9"
+MAILBOX = None
 X25519_PUBLIC = "a-EbwHNshrhf00Aqq4P7xrZ8Cqmncxr3HW_wTSOoXW0"
 KNOWN_MAILBOX_SEQ = 1
 
 ENDPOINTS = {
     "technocore": "https://technocore.chat/healthz",
     "did_note": "https://technocore.chat/kv/did-4e/1df29904c79a56",
-    "mailbox": f"https://technocore.chat/r/{MAILBOX}?format=json",
     "contribution": "https://technocore.chat/r/lobby?since=929749&limit=1&format=json",
     "repo": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence",
     "original_commit": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence/commits/e388c6fd549de2931c40f1647dc1540a78b5c920",
@@ -42,6 +40,8 @@ ENDPOINTS = {
     "flop_site": "https://flop.finance/",
     "x_official": "https://x.com/flop_labs",
     "x_evidence": "https://x.com/Giappone_Medici/status/2092613806434218126",
+    "capacity_manifest": "https://technocore.chat/.well-known/agent.json",
+    "rooms_summary": "https://technocore.chat/rooms?limit=1&format=json",
 }
 ALLOWED_URLS = set(ENDPOINTS.values()) | set(OFFICIAL_SPECS.values())
 SENSITIVE_TERMS = {
@@ -92,10 +92,10 @@ def evaluate_did_note(body: bytes) -> Dict[str, Any]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     value = next((line for line in reversed(lines) if line.startswith("did:key:")), "")
     digest = hashlib.sha256(value.encode()).hexdigest()
-    expected_parts = (DID, "repo:https://github.com/ksk7777m/flop-agent-intelligence", f"mailbox:{MAILBOX}", f"x25519:{X25519_PUBLIC}")
-    if digest != DID_NOTE_HASH or value != DID_NOTE_VALUE or not all(part in value for part in expected_parts):
+    expected_parts = (DID, "repo:https://github.com/ksk7777m/flop-agent-intelligence", f"x25519:{X25519_PUBLIC}")
+    if digest != DID_NOTE_HASH or value != DID_NOTE_VALUE or "mailbox:" in value or not all(part in value for part in expected_parts):
         return _result("REVIEW_REQUIRED", "DID Note missing or changed", sha256=digest)
-    return _result("READY", "Expected DID, repository, mailbox and X25519 key match", sha256=digest)
+    return _result("READY", "Expected DID, repository and X25519 key match; mailbox omitted", sha256=digest)
 
 
 def evaluate_mailbox(body: bytes) -> Dict[str, Any]:
@@ -120,6 +120,46 @@ def evaluate_mailbox(body: bytes) -> Dict[str, Any]:
             unsafe_message_seqs=unsafe, last_seq=max(m["seq"] for m in newer),
         )
     return _result("READY", "Known signed message present; no new messages", last_seq=KNOWN_MAILBOX_SEQ)
+
+
+def classify_live_record(body: bytes, historical_seq: int = 929750) -> Dict[str, Any]:
+    try:
+        room = json.loads(body)
+        first_seq = room.get("first_seq")
+        messages = room.get("messages", [])
+    except (TypeError, json.JSONDecodeError):
+        return _result("UNKNOWN", "Room response is invalid")
+    match = next((m for m in messages if m.get("seq") == historical_seq), None)
+    if match:
+        if match.get("from") != DID:
+            return _result("INVALID", "Historical seq has unexpected DID", first_seq=first_seq)
+        return _result("LIVE", "Historical signed record remains in the live ring", first_seq=first_seq)
+    if isinstance(first_seq, int) and first_seq > historical_seq:
+        return _result("EVICTED_EXPECTED", "Historical seq is below current first_seq", first_seq=first_seq)
+    if isinstance(first_seq, int) and first_seq <= historical_seq:
+        return _result("UNEXPECTED_MISSING", "Historical seq should still be inside the live ring boundary", first_seq=first_seq)
+    return _result("UNKNOWN", "Live ring boundary is unavailable", first_seq=first_seq)
+
+
+def evaluate_capacity_contract(manifest_body: bytes, rooms_body: bytes, observed_rejection_cap: int = 10240) -> Dict[str, Any]:
+    try:
+        manifest = json.loads(manifest_body)
+        rooms = json.loads(rooms_body)
+        advertised = int(manifest["limits"]["rooms"])
+        runtime = int(rooms["capacity"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return _result("UNKNOWN", "Capacity contract could not be parsed")
+    if advertised == runtime == observed_rejection_cap:
+        return _result(
+            "CONSISTENT", "Configured runtime cap matches manifest and prior rejection evidence",
+            documented_default=5120, advertised_cap=advertised, runtime_cap=runtime,
+            observed_rejection_cap=observed_rejection_cap,
+        )
+    return _result(
+        "DIVERGED", "SPEC_RUNTIME_DIVERGENCE", documented_default=5120,
+        advertised_cap=advertised, runtime_cap=runtime,
+        observed_rejection_cap=observed_rejection_cap, classification="REVIEW_REQUIRED",
+    )
 
 
 def detect_signal_delta(previous: bytes, current: bytes) -> Dict[str, Any]:
@@ -174,12 +214,12 @@ def _local_evidence(root: Path) -> Dict[str, Any]:
     try:
         from .identity import verify_message
         records = [json.loads(line) for line in (root / "data/activity.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-        mailbox = next(item for item in reversed(records) if item.get("room") == MAILBOX and item.get("seq") == KNOWN_MAILBOX_SEQ)
-        verify_message(mailbox["did"], mailbox["signature"], MAILBOX, int(mailbox["nonce"]), mailbox["text_after_sweep"])
-        details["mailbox_signature"] = mailbox["did"] == DID
+        contribution = next(item for item in reversed(records) if item.get("room") == "lobby" and item.get("seq") == 929750)
+        verify_message(contribution["did"], contribution["signature"], "lobby", int(contribution["nonce"]), contribution["text_after_sweep"])
+        details["contribution_signature"] = contribution["did"] == DID
     except Exception:
-        details["mailbox_signature"] = False
-    return _result("READY" if all(details.values()) else "ERROR", "Local receipts and mailbox signature verified" if all(details.values()) else "Receipt verification failed", receipts=details)
+        details["contribution_signature"] = False
+    return _result("READY" if all(details.values()) else "ERROR", "Local receipts and contribution signature verified" if all(details.values()) else "Receipt verification failed", receipts=details)
 
 
 def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Dict[str, Any]:
@@ -192,8 +232,7 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Di
             bodies[name] = body
     if "did_note" in bodies:
         checks["did_note"] = evaluate_did_note(bodies["did_note"])
-    if "mailbox" in bodies:
-        checks["mailbox"] = evaluate_mailbox(bodies["mailbox"])
+    checks["mailbox"] = _result("READY", "MIGRATION_PENDING; no mailbox endpoint advertised or fetched")
     if "repo" in bodies:
         try:
             repo = json.loads(bodies["repo"])
@@ -207,14 +246,25 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Di
         checks["dashboard"] = _result("REVIEW_REQUIRED", "Dashboard content marker missing")
     if "flop_site" in bodies and b"https://x.com/flop_labs" not in bodies["flop_site"]:
         checks["flop_site"] = _result("REVIEW_REQUIRED", "Official @flop_labs link missing")
-    if "contribution" in bodies:
-        try:
-            messages = json.loads(bodies["contribution"]).get("messages", [])
-            match = any(m.get("seq") == 929750 and m.get("from") == DID for m in messages)
-            checks["contribution"] = _result("READY" if match else "DEGRADED", "Signed contribution reachable" if match else "Record not in current room retention; local evidence retained")
-        except json.JSONDecodeError:
-            checks["contribution"] = _result("ERROR", "Contribution response is invalid")
-    checks["receipts"] = _local_evidence(root)
+    if "capacity_manifest" in bodies and "rooms_summary" in bodies:
+        capacity = evaluate_capacity_contract(bodies["capacity_manifest"], bodies["rooms_summary"])
+        checks["capacity_contract"] = _result(
+            "READY" if capacity["status"] == "CONSISTENT" else "REVIEW_REQUIRED",
+            capacity["detail"], capacity_status=capacity["status"],
+            **{key: value for key, value in capacity.items() if key not in {"status", "detail"}},
+        )
+    else:
+        checks["capacity_contract"] = _result("UNKNOWN", "Capacity sources unavailable", capacity_status="UNKNOWN")
+    live_record = classify_live_record(bodies["contribution"]) if "contribution" in bodies else _result("UNKNOWN", "Contribution endpoint unavailable")
+    evidence = _local_evidence(root)
+    checks["receipts"] = evidence
+    historical_status = "VERIFIED_OFFCHAIN" if evidence["status"] == "READY" else "INVALID"
+    if live_record["status"] == "LIVE" and evidence["status"] == "READY":
+        checks["contribution"] = _result("READY", "Historical contribution verified live", live_record_status="LIVE", historical_evidence_status="VERIFIED_LIVE", first_seq=live_record.get("first_seq"))
+    elif live_record["status"] == "EVICTED_EXPECTED" and evidence["status"] == "READY":
+        checks["contribution"] = _result("READY", "Expected ring eviction; historical evidence remains verified", live_record_status="EVICTED_EXPECTED", historical_evidence_status=historical_status, first_seq=live_record.get("first_seq"))
+    else:
+        checks["contribution"] = _result("REVIEW_REQUIRED", live_record["detail"], live_record_status=live_record["status"], historical_evidence_status=historical_status, first_seq=live_record.get("first_seq"))
 
     baselines = json.loads((root / "data/monitor_baseline.json").read_text(encoding="utf-8"))
     spec_results = {}
@@ -244,12 +294,12 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Di
         overall = "REVIEW_REQUIRED"
     elif "ERROR" in statuses:
         overall = "ERROR"
-    elif "CHANGED" in statuses or "DEGRADED" in statuses:
+    elif "CHANGED" in statuses:
         overall = "CHANGED"
     else:
         overall = "READY"
     meaningful = any(item.get("detail") in {"OFFICIAL_SPEC_CHANGED", "DID Note missing or changed", "Receipt verification failed"} for item in list(checks.values()) + list(spec_results.values()))
-    meaningful = meaningful or any(checks.get(name, {}).get("status") not in {None, "READY"} for name in ("did_note", "mailbox", "repo", "dashboard", "contribution", "receipts"))
+    meaningful = meaningful or any(checks.get(name, {}).get("status") not in {None, "READY"} for name in ("did_note", "mailbox", "repo", "dashboard", "contribution", "receipts", "capacity_contract"))
     if signals["status"] == "REVIEW_REQUIRED":
         meaningful = True
     return {

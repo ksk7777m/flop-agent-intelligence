@@ -46,7 +46,6 @@ class MonitorTests(unittest.TestCase):
         self.responses = {
             ENDPOINTS["technocore"]: b"ok",
             ENDPOINTS["did_note"]: DID_NOTE_VALUE.encode(),
-            ENDPOINTS["mailbox"]: mailbox(),
             ENDPOINTS["contribution"]: json.dumps({"messages": [{"seq": 929750, "from": DID}]}).encode(),
             ENDPOINTS["repo"]: json.dumps({"private": False, "default_branch": "main"}).encode(),
             ENDPOINTS["original_commit"]: b"{}",
@@ -56,6 +55,8 @@ class MonitorTests(unittest.TestCase):
             ENDPOINTS["flop_site"]: self.flop,
             ENDPOINTS["x_official"]: b"X",
             ENDPOINTS["x_evidence"]: b"X",
+            ENDPOINTS["capacity_manifest"]: json.dumps({"limits": {"rooms": 10240}}).encode(),
+            ENDPOINTS["rooms_summary"]: json.dumps({"capacity": 10240}).encode(),
             **self.spec_bodies,
         }
 
@@ -85,9 +86,10 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(result["checks"]["did_note"]["status"], "REVIEW_REQUIRED")
         self.assertTrue(result["meaningful_change"])
 
-    def test_mailbox_unavailable(self):
-        del self.responses[ENDPOINTS["mailbox"]]
-        self.assertEqual(self.run_fixture()["checks"]["mailbox"]["status"], "ERROR")
+    def test_mailbox_migration_pending_without_fetch(self):
+        result = self.run_fixture()["checks"]["mailbox"]
+        self.assertEqual(result["status"], "READY")
+        self.assertIn("MIGRATION_PENDING", result["detail"])
 
     def test_unknown_mailbox_message(self):
         value = evaluate_mailbox(mailbox({"seq": 2, "from": DID, "text": "hello"}))
@@ -126,6 +128,21 @@ class MonitorTests(unittest.TestCase):
         del self.responses[ENDPOINTS["dashboard"]]
         result = self.run_fixture()
         self.assertEqual(result["checks"]["dashboard"]["status"], "ERROR")
+        self.assertTrue(result["meaningful_change"])
+
+    def test_expected_eviction_with_valid_offchain_evidence_is_ready(self):
+        self.responses[ENDPOINTS["contribution"]] = json.dumps({"first_seq": 2000000, "messages": []}).encode()
+        result = self.run_fixture()
+        self.assertEqual(result["checks"]["contribution"]["live_record_status"], "EVICTED_EXPECTED")
+        self.assertEqual(result["checks"]["contribution"]["historical_evidence_status"], "VERIFIED_OFFCHAIN")
+        self.assertEqual(result["checks"]["contribution"]["status"], "READY")
+        self.assertFalse(result["meaningful_change"])
+
+    def test_invalid_receipt_after_eviction_requires_review(self):
+        self.responses[ENDPOINTS["contribution"]] = json.dumps({"first_seq": 2000000, "messages": []}).encode()
+        with patch("flop_agent.monitor._local_evidence", return_value={"status": "ERROR", "detail": "Receipt verification failed"}):
+            result = run_monitor(self.root, self.fetch)
+        self.assertEqual(result["checks"]["contribution"]["status"], "REVIEW_REQUIRED")
         self.assertTrue(result["meaningful_change"])
 
     def test_stale_last_check(self):

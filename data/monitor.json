@@ -1,15 +1,16 @@
 {
   "schema": "flop-public-monitor-status-v1",
   "monitor_version": "1",
-  "last_checked": "2026-08-26T14:57:14Z",
-  "last_successful_check": null,
+  "last_checked": "2026-08-26T15:28:01Z",
+  "last_successful_check": "2026-08-26T15:28:01Z",
   "freshness": "FRESH",
-  "overall_status": "CHANGED",
+  "overall_status": "READY",
   "official_spec_drift": "UNCHANGED",
   "new_actionable_signals": 0,
   "did_note_integrity": "READY",
-  "mailbox_health": "READY",
-  "public_evidence_health": "DEGRADED",
-  "public_evidence_detail": "Technocore seq 929750 is outside current room retention; local signed evidence and exact Git receipts remain verified.",
+  "mailbox_health": "MIGRATION_PENDING",
+  "capacity_contract": "CONSISTENT",
+  "public_evidence_health": "READY",
+  "public_evidence_detail": "Live record: EVICTED_EXPECTED. Historical evidence: VERIFIED_OFFCHAIN. Technocore rooms are intentionally ephemeral; exact Git receipts and DID signature evidence remain verified.",
   "writes_performed": 0
 }

@@ -7,7 +7,7 @@
     {"id": "technocore", "label": "Technocore reachable", "status": "READY"},
     {"id": "github-official", "label": "Official GitHub reachable", "status": "READY"},
     {"id": "did-note", "label": "DID Note readable", "status": "READY"},
-    {"id": "mailbox", "label": "Mailbox readable", "status": "READY"},
+    {"id": "mailbox", "label": "Mailbox migration", "status": "PENDING"},
     {"id": "public-repo", "label": "Public repo reachable", "status": "READY"},
     {"id": "contribution", "label": "Technocore contribution recorded", "status": "VERIFIED"},
     {"id": "receipt", "label": "Local receipt verification", "status": "VERIFIED"},

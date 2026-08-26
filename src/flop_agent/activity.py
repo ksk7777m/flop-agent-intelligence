@@ -33,7 +33,6 @@ def append_activity(
         "note_value": evidence.get("note_value"),
         "note_hash": evidence.get("note_hash"),
         "x25519_public_key": evidence.get("x25519_public_key"),
-        "x25519_private_key_location": evidence.get("x25519_private_key_location"),
         "verification_method": "Ed25519 over UTF-8 room|nonce|text_after_sweep; server-verified DID",
         "persistence": "Technocore room ring; local JSONL is the retained receipt",
         "permalink": permalink(room, message["seq"]),

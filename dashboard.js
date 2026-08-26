@@ -39,6 +39,7 @@ function renderMonitor(data) {
     ["Actionable signals", String(data.new_actionable_signals)],
     ["DID Note", data.did_note_integrity],
     ["Mailbox", data.mailbox_health],
+    ["Capacity contract", data.capacity_contract],
     ["Public evidence", data.public_evidence_health],
     ["External writes", String(data.writes_performed)]
   ];
@@ -86,7 +87,9 @@ function renderEvidence(data) {
     receipt_sha256: "Receipt SHA-256", canonical_payload_sha256: "Payload SHA-256",
     technocore_seq: "Technocore seq", technocore_permalink: "Signed record", did: "DID",
     did_note_path: "DID Note", did_note_sha256: "Note SHA-256",
-    mailbox_last_verified_seq: "Mailbox seq", x25519_public_key: "X25519 public",
+    mailbox_status: "Mailbox", legacy_mailbox_status: "Legacy mailbox",
+    legacy_mailbox_historical_seq: "Legacy evidence seq", live_record_status: "Live record",
+    historical_evidence_status: "Historical evidence", x25519_public_key: "X25519 public",
     x_explanation: "X explanation"
   };
   const root = document.querySelector("#evidence");

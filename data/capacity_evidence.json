@@ -1,0 +1,13 @@
+{
+  "schema": "technocore-capacity-evidence-v1",
+  "observed_at": "2026-08-27T00:25:00+09:00",
+  "documented_default_cap": 5120,
+  "official_manifest_cap": 10240,
+  "runtime_summary_cap": 10240,
+  "runtime_observed_rejection_cap": 10240,
+  "runtime_rooms_total_after_reaping": 8578,
+  "openapi_version": "0.9.6",
+  "classification": "CONSISTENT",
+  "interpretation": "README documents a configurable default; the official deployment manifest, runtime summary and prior rejection evidence agree on 10240.",
+  "probe_performed": false
+}

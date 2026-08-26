@@ -53,7 +53,6 @@ def main() -> None:
     publish.add_argument("--note-value")
     publish.add_argument("--note-hash")
     publish.add_argument("--x25519-public-key")
-    publish.add_argument("--x25519-private-key-location")
     args = parser.parse_args()
 
     if args.command == "create-identity":
@@ -84,7 +83,7 @@ def main() -> None:
         else:
             checks = record["checks"]
             print(f"OVERALL: {record['overall_status']}\n")
-            for key in ("technocore", "did_note", "mailbox", "repo", "dashboard", "official_repo", "receipts"):
+            for key in ("technocore", "did_note", "mailbox", "repo", "dashboard", "official_repo", "capacity_contract", "receipts"):
                 print(f"{key.replace('_', ' ').title():<22} {checks[key]['status']}")
             spec_status = "UNCHANGED" if all(v["status"] == "READY" for v in record["official_specs"].values()) else "REVIEW_REQUIRED"
             print(f"{'Official specs':<22} {spec_status}")
@@ -146,7 +145,6 @@ def main() -> None:
                 "note_value": args.note_value,
                 "note_hash": args.note_hash,
                 "x25519_public_key": args.x25519_public_key,
-                "x25519_private_key_location": args.x25519_private_key_location,
             },
         )
         print(json.dumps(message, indent=2))
