@@ -1,0 +1,14 @@
+.env
+.env.*
+secrets/
+*.key
+*.pem
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+dist/
+build/
+.DS_Store
+receipts/
+*.receipt.json

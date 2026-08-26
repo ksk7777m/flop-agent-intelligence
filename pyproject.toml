@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flop-agent"
+version = "0.1.0"
+description = "Safe FLOP / Technocore official-signal monitor"
+requires-python = ">=3.9"
+dependencies = ["cryptography>=42"]
+
+[project.scripts]
+flop-agent = "flop_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+

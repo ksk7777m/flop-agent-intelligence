@@ -1,0 +1,14 @@
+{
+  "publish_default": "dry-run",
+  "require_human_approval": true,
+  "follow_discovered_urls": false,
+  "source_ids": [
+    "crypto_hayes_x",
+    "flop_labs_x",
+    "flop_finance",
+    "flop_labs_github",
+    "technocore_live",
+    "technocore_github"
+  ]
+}
+
