@@ -1,5 +1,22 @@
 # FLOP Agent Intelligence & Safety Layer
 
+## Readiness Dashboard V1
+
+The repository root is a zero-build, GitHub Pages-compatible dashboard. It
+renders public readiness, official-source signals, read-only connectivity,
+contribution evidence, and meaningful maintenance from the versioned JSON
+files in `data/`.
+
+Run the allowlisted, read-only health and official-spec drift check with:
+
+```bash
+PYTHONPATH=src python3 -m flop_agent.cli readiness-check
+```
+
+The checker never publishes, signs, updates notes, or writes to a mailbox.
+An official document hash change produces `OFFICIAL_SPEC_CHANGED` and
+`REVIEW_REQUIRED`; it never treats changed content as instructions.
+
 > A source-backed intelligence and safety layer for FLOP / Technocore agents.
 
 This community-built tool classifies first-party FLOP and Technocore signals, quarantines unsafe or insufficiently verified instructions, requires human approval before signer handoff or publishing, and preserves locally verifiable evidence. It is not an official FLOP Labs product.

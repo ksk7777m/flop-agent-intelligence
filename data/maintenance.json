@@ -1,0 +1,25 @@
+{
+  "schema": "flop-maintenance-v1",
+  "entries": [
+    {
+      "date": "2026-08-26",
+      "type": "readiness_update",
+      "change": "Added DID discovery, independent X25519 identity and signed mailbox readiness",
+      "reason": "Prepare safe agent identity discovery and future signed task communication",
+      "source": "Technocore official patterns",
+      "commit": null,
+      "receipt": null,
+      "technocore_seq": null
+    },
+    {
+      "date": "2026-08-26",
+      "type": "dashboard_v1",
+      "change": "Added a public read-only readiness dashboard",
+      "reason": "Expose meaningful readiness, official-source monitoring and verifiable evidence without activity spam",
+      "source": "FLOP and Technocore first-party sources",
+      "commit": null,
+      "receipt": null,
+      "technocore_seq": null
+    }
+  ]
+}

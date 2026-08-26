@@ -20,10 +20,14 @@ def _request(url: str, payload: Dict[str, Any] | None = None) -> Any:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {} if data is None else {"Content-Type": "application/json"}
     req = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
-    with urllib.request.urlopen(req, timeout=20) as response:
-        body = response.read().decode("utf-8")
-        content_type = response.headers.get("Content-Type", "")
-        return json.loads(body) if "json" in content_type else body
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            body = response.read().decode("utf-8")
+            content_type = response.headers.get("Content-Type", "")
+            return json.loads(body) if "json" in content_type else body
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Technocore HTTP {error.code}: {body}") from error
 
 
 def read_official(path: str) -> Any:
@@ -59,7 +63,12 @@ def post_signed(identity_path: Path, room: str, text: str, nonce: int | None = N
     ]
     if len(matches) != 1:
         raise RuntimeError(f"could not uniquely verify signed post in JSON view (matches={len(matches)})")
-    return matches[0]
+    return {
+        **matches[0],
+        "signature": signature,
+        "input_text": text,
+        "swept_text": clean,
+    }
 
 
 def find_signed(identity_path: Path, room: str, text: str) -> Dict[str, Any]:

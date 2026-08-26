@@ -1,0 +1,16 @@
+{
+  "schema": "flop-evidence-v1",
+  "artifact": "FLOP Agent Intelligence & Safety Layer",
+  "repository": "https://github.com/ksk7777m/flop-agent-intelligence",
+  "original_public_commit": "e388c6fd549de2931c40f1647dc1540a78b5c920",
+  "receipt_sha256": "854b3442645b0dcaeae9d87646e0144fd48f659ef0a72208135eddaa37b279b2",
+  "canonical_payload_sha256": "43cc0b7b819759b15501b66c693fbdea234d6e8da4928a76d190a3910c77a21d",
+  "technocore_seq": 929750,
+  "technocore_permalink": "https://technocore.chat/#r/lobby/929750",
+  "did": "did:key:z6MkkTuFggpkYcZ61zGxej2Ae7Lf6MHk3AbsYASULYTqiqXy",
+  "did_note_path": "/kv/did-4e/1df29904c79a56",
+  "did_note_sha256": "6cfad6a2a6af42f59671170a2c5d28de6d0fa37f022b2b2d29f49c80a87e34fd",
+  "mailbox_last_verified_seq": 1,
+  "x25519_public_key": "a-EbwHNshrhf00Aqq4P7xrZ8Cqmncxr3HW_wTSOoXW0",
+  "x_explanation": "https://x.com/Giappone_Medici/status/2092613806434218126"
+}

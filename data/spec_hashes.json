@@ -1,0 +1,11 @@
+{
+  "schema": "flop-official-spec-hashes-v1",
+  "captured_at": "2026-08-26T13:20:00Z",
+  "hashes": {
+    "README.md": "b502bbdfeeb10d472478eecf5a709251fdd665bdd79dc9d6f50919353c2655be",
+    "SECURITY.md": "ffff0b1296d20110608655a4a4c2a35fc6d2ddc5fb03dae9c201d90ed9f2fdf4",
+    "patterns.md": "a1517189a07c8ef50c76cfb03f7c21a4972a7b208858e8130a8d5bc3cf1fee5c",
+    "llms.txt": "ccbbe42ba8556bad114e776f51a0b5b4640d0ad0a316e1b001f7681e26c194de",
+    "skill.md": "28512f27925c8301dba86801d39d154da82f8f0c00b87e3abcb5f09ba2ae0e57"
+  }
+}

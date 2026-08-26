@@ -1,0 +1,19 @@
+{
+  "schema": "flop-readiness-v1",
+  "generated_at": "2026-08-26T13:20:00Z",
+  "headline": "Agent ready — waiting for official testnet / faucet / tasks",
+  "items": [
+    {"id": "did", "label": "Stable DID", "status": "VERIFIED", "trust": "CONFIRMED", "detail": "did:key:z6MkkTuFggpkYcZ61zGxej2Ae7Lf6MHk3AbsYASULYTqiqXy"},
+    {"id": "did-note", "label": "DID Note", "status": "VERIFIED", "trust": "CONFIRMED", "detail": "/kv/did-4e/1df29904c79a56"},
+    {"id": "mailbox", "label": "Signed Mailbox", "status": "VERIFIED", "trust": "CONFIRMED", "detail": "mb-p-87d20323b91af58f3b79f342c1265210 · seq 1"},
+    {"id": "x25519", "label": "X25519", "status": "VERIFIED", "trust": "CONFIRMED", "detail": "Static public encryption key published"},
+    {"id": "signature", "label": "Local Signature Verification", "status": "VERIFIED", "trust": "CONFIRMED", "detail": "Ed25519 offline verification passed"},
+    {"id": "oss", "label": "Public OSS", "status": "LIVE", "trust": "CONFIRMED", "detail": "flop-agent-intelligence"},
+    {"id": "technocore", "label": "Signed Technocore Contribution", "status": "VERIFIED", "trust": "CONFIRMED", "detail": "lobby · seq 929750"},
+    {"id": "x", "label": "Public X Explanation", "status": "LIVE", "trust": "CONFIRMED", "detail": "@Giappone_Medici · status 2092613806434218126"},
+    {"id": "kol", "label": "KOL / Creator Application", "status": "SUBMITTED", "trust": "COMMUNITY", "detail": "Submitted 2026-08-26 JST; acceptance not claimed"},
+    {"id": "testnet", "label": "Testnet", "status": "NOT ANNOUNCED", "trust": "CONFIRMED", "detail": "No first-party announcement recorded"},
+    {"id": "faucet", "label": "Faucet", "status": "NOT ANNOUNCED", "trust": "CONFIRMED", "detail": "No first-party announcement recorded"},
+    {"id": "did-tasks", "label": "DID-gated Tasks", "status": "NOT ANNOUNCED", "trust": "CONFIRMED", "detail": "No first-party announcement recorded"}
+  ]
+}

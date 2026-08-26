@@ -1,0 +1,32 @@
+{
+  "schema": "flop-signals-v1",
+  "signals": [
+    {
+      "timestamp": "2026-08-26T13:20:00Z",
+      "source": "FLOP official site",
+      "source_tier": 1,
+      "classification": "INFO",
+      "title": "Official FLOP launch posture and application routes",
+      "summary": "The official site states no pre-sale, no VCs, a fair launch, and links official miner, validator, and KOL/creator application routes.",
+      "url": "https://flop.finance/",
+      "verification_status": "CONFIRMED"
+    },
+    {
+      "timestamp": "2026-08-26T13:20:00Z",
+      "source": "flop-labs/technocore-chat",
+      "source_tier": 1,
+      "classification": "INFO",
+      "title": "Technocore signed identity and mailbox conventions",
+      "summary": "Official patterns document sharded DID notes, signed mb- mailboxes, mb-p- unlisted mailboxes, and local X25519/HKDF/AES-GCM choreography.",
+      "url": "https://github.com/flop-labs/technocore-chat/blob/main/src/patterns.md",
+      "verification_status": "CONFIRMED"
+    }
+  ],
+  "review_notes": [
+    {
+      "source": "Arthur Hayes",
+      "status": "REVIEW_REQUIRED",
+      "reason": "No exact first-party FLOP/Technocore statement was added without a directly verified canonical post URL."
+    }
+  ]
+}

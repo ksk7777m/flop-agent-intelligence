@@ -22,6 +22,7 @@ def main() -> None:
     commands.add_parser("check-identity")
     commands.add_parser("watch")
     commands.add_parser("status")
+    commands.add_parser("readiness-check")
     commands.add_parser("draft-contribution")
     commands.add_parser("gap-audit")
     demo = commands.add_parser("demo-fixture")
@@ -39,6 +40,17 @@ def main() -> None:
     publish.add_argument("--room", default="lobby")
     publish.add_argument("--confirm", action="store_true")
     publish.add_argument("--approved-signal")
+    publish.add_argument("--contribution")
+    publish.add_argument("--repo")
+    publish.add_argument("--commit")
+    publish.add_argument("--receipt-fingerprint")
+    publish.add_argument("--activity-type")
+    publish.add_argument("--mailbox")
+    publish.add_argument("--note-path")
+    publish.add_argument("--note-value")
+    publish.add_argument("--note-hash")
+    publish.add_argument("--x25519-public-key")
+    publish.add_argument("--x25519-private-key-location")
     args = parser.parse_args()
 
     if args.command == "create-identity":
@@ -54,6 +66,10 @@ def main() -> None:
         key, did = load_identity(IDENTITY)
         del key
         print(json.dumps({"did": did, "identity": "valid", "publish_default": "dry-run"}, indent=2))
+    elif args.command == "readiness-check":
+        from .readiness import run_readiness_check
+
+        print(json.dumps(run_readiness_check(ROOT), indent=2))
     elif args.command == "draft-contribution":
         print("Built an official-signal monitor for FLOP/Technocore that classifies actionable updates, blocks untrusted wallet/claim instructions, and keeps signed activity logs. Designed to extend into testnet workflows when official APIs are published.")
     elif args.command == "gap-audit":
@@ -95,7 +111,23 @@ def main() -> None:
         approved = signal_from_dict(json.loads(Path(args.approved_signal).read_text(encoding="utf-8")))
         validate_publish_approval(approved, args.text)
         message = post_signed(IDENTITY, args.room, args.text)
-        append_activity(ROOT / "data/activity.jsonl", ROOT / "docs/ACTIVITY_LOG.md", args.room, message)
+        append_activity(
+            ROOT / "data/activity.jsonl", ROOT / "docs/ACTIVITY_LOG.md", args.room, message,
+            evidence={
+                "activity_type": args.activity_type or ("contribution" if args.contribution else "signed_message"),
+                "contribution": args.contribution,
+                "repository": args.repo,
+                "git_commit_hash": args.commit,
+                "receipt_fingerprint": args.receipt_fingerprint,
+                "approval_status": approved.approval_status,
+                "mailbox": args.mailbox,
+                "note_path": args.note_path,
+                "note_value": args.note_value,
+                "note_hash": args.note_hash,
+                "x25519_public_key": args.x25519_public_key,
+                "x25519_private_key_location": args.x25519_private_key_location,
+            },
+        )
         print(json.dumps(message, indent=2))
 
 
