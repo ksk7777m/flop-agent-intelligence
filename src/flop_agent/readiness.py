@@ -31,6 +31,7 @@ SCHEMAS = {
     "health.json": "flop-health-v1",
     "evidence.json": "flop-evidence-v1",
     "maintenance.json": "flop-maintenance-v1",
+    "monitor.json": "flop-public-monitor-status-v1",
 }
 
 

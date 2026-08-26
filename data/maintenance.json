@@ -20,6 +20,16 @@
       "commit": null,
       "receipt": null,
       "technocore_seq": null
+    },
+    {
+      "date": "2026-08-26",
+      "type": "health_monitor_v1",
+      "change": "Added a GET-only readiness monitor with drift, evidence, mailbox and signal checks",
+      "reason": "Detect meaningful readiness changes without heartbeat activity or automatic external writes",
+      "source": "FLOP and Technocore first-party public surfaces",
+      "commit": null,
+      "receipt": null,
+      "technocore_seq": null
     }
   ]
 }

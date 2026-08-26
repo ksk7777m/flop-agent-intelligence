@@ -1,4 +1,4 @@
-const DATA = ["readiness", "signals", "health", "evidence", "maintenance"];
+const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance"];
 const safeStatus = value => String(value || "UNKNOWN").toUpperCase();
 const statusClass = value => "status-" + safeStatus(value).toLowerCase().replaceAll(" ", "-").replaceAll("_", "-");
 const text = (tag, value, className) => {
@@ -28,6 +28,27 @@ function renderReadiness(data) {
     card.append(top, text("h3", item.label), text("p", item.detail));
     root.append(card);
   }
+}
+
+function renderMonitor(data) {
+  const root = document.querySelector("#monitor");
+  const values = [
+    ["Overall", data.overall_status],
+    ["Freshness", data.freshness],
+    ["Official specs", data.official_spec_drift],
+    ["Actionable signals", String(data.new_actionable_signals)],
+    ["DID Note", data.did_note_integrity],
+    ["Mailbox", data.mailbox_health],
+    ["Public evidence", data.public_evidence_health],
+    ["External writes", String(data.writes_performed)]
+  ];
+  for (const [label, value] of values) {
+    const item = text("div", "", "monitor-item");
+    item.append(text("small", label), text("strong", value, statusClass(value)));
+    root.append(item);
+  }
+  document.querySelector("#monitor-detail").textContent =
+    `Last verified: ${data.last_checked} · Last fully successful: ${data.last_successful_check || "not established"} · ${data.public_evidence_detail}`;
 }
 
 function renderSignals(data) {
@@ -91,6 +112,7 @@ function renderMaintenance(data) {
 }
 
 loadData().then(data => {
+  renderMonitor(data.monitor);
   renderReadiness(data.readiness);
   renderSignals(data.signals);
   renderHealth(data.health);

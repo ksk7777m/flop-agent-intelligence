@@ -10,7 +10,7 @@ CRITICAL = ("testnet launch", "faucet", "airdrop snapshot", "claim", "deadline",
 ACTION = ("technocore task", "specific tasks", "official task", "challenge", "workflow integration", "integration", "testnet feature", "miner", "validator", "did requirement")
 INFO = ("ama", "roadmap", "interview", "technical", "announcement")
 IGNORE = ("price prediction", "price speculation", "referral", "guaranteed airdrop", "unofficial token")
-SECURITY = ("seed phrase", "private key", "wallet key", "approve unlimited", "token transfer", "wallet connect", "claim now", "urgent snapshot", "send funds", "bridge assets", "unknown contract")
+SECURITY = ("seed phrase", "reveal your seed", "private key", "wallet key", "approve unlimited", "token transfer", "wallet connect", "claim now", "urgent snapshot", "send funds", "bridge assets", "unknown contract")
 
 
 @dataclass(frozen=True)

@@ -17,6 +17,16 @@ The checker never publishes, signs, updates notes, or writes to a mailbox.
 An official document hash change produces `OFFICIAL_SPEC_CHANGED` and
 `REVIEW_REQUIRED`; it never treats changed content as instructions.
 
+For deeper health, public-evidence, mailbox-integrity and actionable-signal
+checks, run:
+
+```bash
+PYTHONPATH=src python3 -m flop_agent.cli health-monitor --json
+```
+
+Normal run records stay in ignored `runtime/`; no schedule is enabled by
+default. See [Monitoring](docs/MONITORING.md).
+
 > A source-backed intelligence and safety layer for FLOP / Technocore agents.
 
 This community-built tool classifies first-party FLOP and Technocore signals, quarantines unsafe or insufficiently verified instructions, requires human approval before signer handoff or publishing, and preserves locally verifiable evidence. It is not an official FLOP Labs product.

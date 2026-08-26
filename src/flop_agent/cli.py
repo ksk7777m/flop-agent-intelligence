@@ -23,6 +23,9 @@ def main() -> None:
     commands.add_parser("watch")
     commands.add_parser("status")
     commands.add_parser("readiness-check")
+    monitor = commands.add_parser("health-monitor")
+    monitor.add_argument("--json", action="store_true")
+    monitor.add_argument("--no-save", action="store_true")
     commands.add_parser("draft-contribution")
     commands.add_parser("gap-audit")
     demo = commands.add_parser("demo-fixture")
@@ -70,6 +73,24 @@ def main() -> None:
         from .readiness import run_readiness_check
 
         print(json.dumps(run_readiness_check(ROOT), indent=2))
+    elif args.command == "health-monitor":
+        from .monitor import exit_code, run_monitor, save_run
+
+        record = run_monitor(ROOT)
+        if not args.no_save:
+            save_run(ROOT, record)
+        if args.json:
+            print(json.dumps(record, indent=2))
+        else:
+            checks = record["checks"]
+            print(f"OVERALL: {record['overall_status']}\n")
+            for key in ("technocore", "did_note", "mailbox", "repo", "dashboard", "official_repo", "receipts"):
+                print(f"{key.replace('_', ' ').title():<22} {checks[key]['status']}")
+            spec_status = "UNCHANGED" if all(v["status"] == "READY" for v in record["official_specs"].values()) else "REVIEW_REQUIRED"
+            print(f"{'Official specs':<22} {spec_status}")
+            print(f"{'Official signals':<22} {record['official_signals']['detail']}")
+            print(f"\nWrites performed ...... {record['external_writes_performed']}")
+        raise SystemExit(exit_code(record))
     elif args.command == "draft-contribution":
         print("Built an official-signal monitor for FLOP/Technocore that classifies actionable updates, blocks untrusted wallet/claim instructions, and keeps signed activity logs. Designed to extend into testnet workflows when official APIs are published.")
     elif args.command == "gap-audit":
