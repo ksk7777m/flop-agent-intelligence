@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/observatory.schema.json",
+  "title": "Technocore Observatory Snapshot",
+  "type": "object",
+  "required": ["schema", "generated_at", "source", "source_status", "rooms", "engagement", "warnings"],
+  "properties": {
+    "schema": {"const": "technocore-observatory-v1"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "source": {"const": "https://technocore.chat"},
+    "source_status": {"const": "official"},
+    "spec_version": {"type": ["string", "null"]},
+    "rooms": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["room", "last_seq", "activity", "derived", "untrusted_text"]}},
+    "engagement": {"type": "object"},
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

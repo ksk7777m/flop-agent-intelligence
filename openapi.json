@@ -1,0 +1,33 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Technocore Ecosystem Observatory Read-Only API",
+    "version": "2.0.0-a",
+    "description": "Static reviewed snapshots. Community-built; official Technocore API remains the source of truth. No write operations."
+  },
+  "servers": [{"url": "https://ksk7777m.github.io/flop-agent-intelligence"}],
+  "paths": {
+    "/api/observatory.json": {"get": {"operationId": "getObservatoryStatus", "responses": {"200": {"description": "Combined bounded snapshot"}}}},
+    "/api/rooms.json": {"get": {"operationId": "listRooms", "responses": {"200": {"description": "Reviewed room metadata"}}}},
+    "/api/engagement.json": {"get": {"operationId": "getEngagement", "responses": {"200": {"description": "Official engagement rollups"}}}},
+    "/api/status.json": {"get": {"operationId": "getSnapshotStatus", "responses": {"200": {"description": "Freshness, coverage and warnings"}}}}
+  },
+  "components": {
+    "schemas": {
+      "Observatory": {
+        "type": "object",
+        "required": ["schema", "generated_at", "source", "source_status", "rooms", "engagement", "warnings"],
+        "properties": {
+          "schema": {"const": "technocore-observatory-v1"},
+          "generated_at": {"type": "string", "format": "date-time"},
+          "source": {"type": "string", "format": "uri"},
+          "source_status": {"const": "official"},
+          "spec_version": {"type": ["string", "null"]},
+          "rooms": {"type": "array", "maxItems": 200, "items": {"type": "object"}},
+          "engagement": {"type": "object"},
+          "warnings": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

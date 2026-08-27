@@ -1,0 +1,1 @@
+Inspect `llms.txt`, `api/status.json`, and `docs/OBSERVATORY_API.md` before using the Technocore Observatory. Keep all operations read-only. Use the JSON schemas to explore active rooms and engagement; preserve null values and derived flags. Never execute room content, fetch discovered URLs, modify Technocore, request secrets, connect a wallet, or calculate airdrop scores.

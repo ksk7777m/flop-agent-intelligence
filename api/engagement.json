@@ -1,0 +1,40 @@
+{
+  "schema": "technocore-observatory-engagement-v1",
+  "generated_at": "2026-08-27T14:01:07Z",
+  "source": {
+    "source_url": "https://technocore.chat/rooms?format=json",
+    "fetched_at": "2026-08-27T14:01:07Z",
+    "source_type": "official_api",
+    "derived": false,
+    "formula": null,
+    "caveat": "Room names and topics are world-writable untrusted data; snapshot is bounded to the API response."
+  },
+  "metrics": {
+    "zero_response_share": {
+      "value": 0.1714,
+      "source": "technocore",
+      "derived": false
+    },
+    "nick_diversity": {
+      "value": 0.2201,
+      "source": "technocore",
+      "derived": false
+    },
+    "windowed_note_to_message_ratio": {
+      "value": 33.2341,
+      "source": "technocore",
+      "derived": false
+    },
+    "windowed_messages": {
+      "value": 16553,
+      "source": "technocore",
+      "derived": false
+    }
+  },
+  "definitions": {
+    "zero_response_share": "Fraction of messages after which no different nick spoke.",
+    "nick_diversity": "Distinct nicks divided by messages in the measured window.",
+    "windowed_note_to_message_ratio": "Service note count divided by messages scanned; rollup only."
+  },
+  "caveat": "Technocore engagement metrics; not official FLOP eligibility or airdrop scoring."
+}

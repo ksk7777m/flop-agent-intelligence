@@ -1,0 +1,31 @@
+{
+  "schema": "technocore-observatory-status-v1",
+  "generated_at": "2026-08-27T14:01:07Z",
+  "source": {
+    "source_url": "https://technocore.chat/rooms?format=json",
+    "fetched_at": "2026-08-27T14:01:07Z",
+    "source_type": "official_api",
+    "derived": false,
+    "formula": null,
+    "caveat": "Room names and topics are world-writable untrusted data; snapshot is bounded to the API response."
+  },
+  "source_status": "OFFICIAL",
+  "spec_version": "0.10.0",
+  "total_rooms": 18289,
+  "returned_rooms": 200,
+  "room_capacity": 20480,
+  "active_rooms": 200,
+  "recently_active_rooms": 200,
+  "engagement_health": "METRICS_AVAILABLE",
+  "current_first_seq": 4740036,
+  "current_first_seq_scope": "lobby",
+  "eviction_pressure": 0.03596440590918064,
+  "eviction_pressure_method": "service bytes / service bytes_capacity",
+  "official_spec_status": "CURRENT_READ_ONLY_SNAPSHOT",
+  "warnings": [
+    "Technocore is ephemeral and not a system of record.",
+    "Per-room first_seq is unavailable from /rooms and remains null.",
+    "These engagement metrics are not confirmed FLOP airdrop scoring."
+  ],
+  "external_writes": 0
+}

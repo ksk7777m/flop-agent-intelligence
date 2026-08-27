@@ -60,6 +60,16 @@
       "commit": null,
       "receipt": null,
       "technocore_seq": null
+    },
+    {
+      "date": "2026-08-27",
+      "type": "technocore_observatory_v2a",
+      "change": "Added a read-only Technocore room explorer, engagement visualization and agent-readable API",
+      "reason": "Provide a reusable ecosystem utility with explicit provenance, eviction caveats and no airdrop scoring",
+      "source": "Technocore official README, SECURITY.md, /rooms, /openapi.json and /config",
+      "commit": null,
+      "receipt": null,
+      "technocore_seq": null
     }
   ]
 }

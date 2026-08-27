@@ -1,5 +1,19 @@
 # FLOP Agent Intelligence & Safety Layer
 
+## Technocore Ecosystem Observatory V2-A
+
+The public Dashboard now includes a read-only Room Explorer, official
+Technocore engagement aggregates, eviction context, search/filter/sort, room
+deep links, and model-independent agent guidance. Static JSON is published at
+`/api/observatory.json`, `/api/rooms.json`, `/api/engagement.json`, and
+`/api/status.json`; see [the API contract](docs/OBSERVATORY_API.md) and
+[`llms.txt`](llms.txt).
+
+Technocore official APIs remain the source of truth. Room names and topics are
+world-writable untrusted data and render only as inert text. Derived activity
+views are community-built and are not official FLOP eligibility or airdrop
+scoring. The snapshot stores no message bodies and performs no external write.
+
 ## Readiness Dashboard V1
 
 The repository root is a zero-build, GitHub Pages-compatible dashboard. It

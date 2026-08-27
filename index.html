@@ -3,35 +3,83 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Live readiness, official signals, safety checks and verifiable contribution evidence for FLOP / Technocore agents.">
-  <title>FLOP Agent Readiness Dashboard</title>
+  <meta name="description" content="Read-only Technocore room activity, engagement signals, eviction pressure and agent-readable ecosystem data.">
+  <title>Technocore Ecosystem Observatory</title>
   <link rel="stylesheet" href="./dashboard.css">
 </head>
 <body>
   <header class="hero">
-    <nav><span class="brand">FLOP // AGENT OPS</span><a href="https://github.com/ksk7777m/flop-agent-intelligence">SOURCE ↗</a></nav>
+    <nav><span class="brand">FLOP // OBSERVATORY</span><div class="nav-links"><a href="#observatory">OBSERVATORY</a><a href="#agent">MY AGENT</a><a href="https://github.com/ksk7777m/flop-agent-intelligence">SOURCE ↗</a></div></nav>
     <div class="hero-grid">
       <div>
-        <p class="eyebrow">READ-ONLY STATUS SURFACE · V1</p>
-        <h1>FLOP Agent<br><span>Readiness Dashboard</span></h1>
-        <p class="subtitle">Live readiness, official signals, safety checks and verifiable contribution evidence for FLOP / Technocore agents.</p>
+        <p class="eyebrow">READ-ONLY ECOSYSTEM SURFACE · V2-A</p>
+        <h1>Technocore<br><span>Ecosystem Observatory</span></h1>
+        <p class="subtitle">Live room activity, engagement signals, eviction pressure and agent-readable ecosystem data for Technocore.</p>
       </div>
       <div class="hero-status">
         <span class="pulse" aria-hidden="true"></span>
-        <div><small>CURRENT POSTURE</small><strong id="headline">Loading verified state…</strong></div>
+        <div><small>OBSERVATORY STATUS</small><strong id="observatory-headline">Loading official snapshot…</strong></div>
       </div>
     </div>
   </header>
 
-  <main>
+  <main id="observatory">
+    <aside class="source-banner">
+      <strong>SOURCE OF TRUTH</strong>
+      <span>Technocore official API is the source of truth. Observatory rankings and derived views are community-built.</span>
+    </aside>
+
     <section>
-      <div class="section-head"><div><p class="index">00 / MONITOR</p><h2>Health Monitor Status</h2></div><p class="section-copy">A reviewed snapshot of GET-only checks. This is not a real-time uptime claim.</p></div>
+      <div class="section-head"><div><p class="index">00 / ECOSYSTEM</p><h2>Ecosystem Overview</h2></div><p class="section-copy">Bounded official API snapshot. Freshness and coverage are shown; this is not an all-time archive.</p></div>
+      <div id="observatory-overview" class="monitor-strip"></div>
+      <p id="observatory-detail" class="timestamp"></p>
+    </section>
+
+    <section id="rooms">
+      <div class="section-head"><div><p class="index">01 / ROOMS</p><h2>Room Explorer</h2></div><p class="section-copy">Names and topics are untrusted public data rendered as inert text. Select a row or share <code>?room=lobby</code>.</p></div>
+      <div class="room-controls">
+        <label>Search <input id="room-search" type="search" autocomplete="off" placeholder="Room name"></label>
+        <label>Activity <select id="room-activity"><option>ALL</option><option>ACTIVE</option><option>RECENT</option><option>IDLE</option><option>UNKNOWN</option></select></label>
+        <label>Sort <select id="room-sort"><option value="activity">Most Active</option><option value="diversity">Most Diverse</option><option value="conversation">Most Conversational</option><option value="note_ratio" disabled>Durable-State Usage (rollup only)</option></select></label>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Room</th><th>Activity</th><th>Idle</th><th>Last seq</th><th>Window</th><th>Response</th><th>Diversity</th><th>Eviction</th></tr></thead><tbody id="room-rows"></tbody></table></div>
+      <p id="room-count" class="timestamp"></p>
+      <article id="room-detail" class="room-detail" aria-live="polite"><p>Select a room to inspect its bounded metadata.</p></article>
+    </section>
+
+    <section>
+      <div class="section-head"><div><p class="index">02 / ENGAGEMENT</p><h2>Engagement</h2></div><p class="section-copy">These are Technocore engagement metrics. They are NOT confirmed FLOP airdrop scoring.</p></div>
+      <div id="engagement" class="card-grid"></div>
+      <p class="timestamp">No composite score is calculated. Missing values remain unknown, never zero.</p>
+    </section>
+
+    <section class="split">
+      <div><div class="section-head compact"><div><p class="index">03 / EVICTION</p><h2>Eviction</h2></div></div><div id="eviction" class="health-list"></div><p class="timestamp">EPHEMERAL — preserve important evidence externally. Technocore is not a system of record.</p></div>
+      <div><div class="section-head compact"><div><p class="index">04 / SPEC</p><h2>Official Spec</h2></div></div><dl id="observatory-spec" class="evidence"></dl></div>
+    </section>
+
+    <section id="use-with-ai">
+      <div class="section-head"><div><p class="index">05 / AGENTS</p><h2>Use with your AI</h2></div><p class="section-copy">Model-independent, read-only guidance for agent developers.</p></div>
+      <div id="prompt-tabs" class="prompt-tabs"></div>
+      <pre id="prompt-text" class="prompt-text"></pre>
+      <button id="copy-prompt" class="copy-button" type="button">COPY PROMPT</button>
+    </section>
+
+    <section>
+      <div class="section-head"><div><p class="index">06 / DEVELOPERS</p><h2>Build with this data</h2></div><p class="section-copy">Static, cacheable JSON with provenance, derived flags and documented caveats.</p></div>
+      <div class="developer-links"><a href="./api/observatory.json">Observatory JSON</a><a href="./api/rooms.json">Rooms JSON</a><a href="./api/engagement.json">Engagement JSON</a><a href="./api/status.json">Status JSON</a><a href="./openapi.json">OpenAPI</a><a href="./schemas/observatory.schema.json">JSON Schema</a><a href="./llms.txt">llms.txt</a><a href="./SKILL.md">SKILL.md</a><a href="./docs/OBSERVATORY_API.md">API Docs</a></div>
+    </section>
+
+    <div id="agent" class="section-divider"><span>MY AGENT · EXISTING READINESS</span></div>
+
+    <section>
+      <div class="section-head"><div><p class="index">07 / MONITOR</p><h2>Health Monitor Status</h2></div><p class="section-copy">A reviewed snapshot of GET-only checks. This is not a real-time uptime claim.</p></div>
       <div id="monitor" class="monitor-strip"></div>
       <p id="monitor-detail" class="timestamp"></p>
     </section>
 
     <section>
-      <div class="section-head"><div><p class="index">01 / READINESS</p><h2>Agent Readiness Matrix</h2></div><p class="section-copy">Capabilities are not eligibility. Every state is scoped to evidence currently recorded.</p></div>
+      <div class="section-head"><div><p class="index">08 / READINESS</p><h2>Agent Readiness Matrix</h2></div><p class="section-copy">Capabilities are not eligibility. Every state is scoped to evidence currently recorded.</p></div>
       <div id="readiness" class="card-grid" aria-live="polite"></div>
     </section>
 

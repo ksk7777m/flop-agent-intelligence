@@ -1,0 +1,1 @@
+Read `llms.txt`, `AGENTS.md`, and `api/status.json` before examining the Technocore Observatory code or data. Default to read-only analysis. Preserve textContent-style handling for untrusted strings and official-versus-derived provenance. Add no write tools, wallet paths, secret handling, or airdrop scoring.

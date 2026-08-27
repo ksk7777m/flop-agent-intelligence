@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ksk7777m.github.io/flop-agent-intelligence/sitemap.xml
