@@ -1,0 +1,10 @@
+{
+  "source_url": "https://flop.finance/yellow-paper.pdf",
+  "source_tier": "TIER_1_OFFICIAL",
+  "spec_status": "CONFIRMED",
+  "verified_at": "2026-08-27T00:00:00Z",
+  "network_name": null,
+  "chain_id": null,
+  "rpc_url": null,
+  "expected": "REVIEW_REQUIRED"
+}

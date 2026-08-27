@@ -1,0 +1,9 @@
+{
+  "request_id": "dryrun-001",
+  "model": "fixture-model",
+  "provider": "fixture-provider",
+  "estimated_flop_cost": "10",
+  "network": "FLOP_TESTNET_FIXTURE",
+  "source_url": "https://flop.finance/teaser/",
+  "fixture": true
+}

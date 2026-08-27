@@ -1,0 +1,17 @@
+{
+  "schema": "flop-testnet-adapter-status-v0",
+  "generated_at": "2026-08-27T13:00:00Z",
+  "source": "https://flop.finance/teaser/",
+  "source_tier": "TIER_1_OFFICIAL",
+  "spec_status": "OFFICIAL_DRAFT",
+  "adapter": "READY",
+  "mode": "DRY RUN",
+  "testnet": "NOT LIVE",
+  "faucet": "NOT AVAILABLE",
+  "inference": "NOT AVAILABLE",
+  "wallet": "NOT CONNECTED",
+  "live_actions": "DISABLED",
+  "activation": "DO_NOT_ACTIVATE",
+  "external_writes": 0,
+  "notice": "No FLOP testnet transactions have been performed. Draft timing and participation descriptions are not operational endpoints or eligibility guarantees."
+}

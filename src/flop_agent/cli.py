@@ -27,6 +27,17 @@ def main() -> None:
     monitor.add_argument("--json", action="store_true")
     monitor.add_argument("--no-save", action="store_true")
     monitor.add_argument("--public", action="store_true", help="Use public evidence only; never require local secrets or receipts")
+    testnet = commands.add_parser("testnet-readiness")
+    testnet_commands = testnet.add_subparsers(dest="testnet_command", required=True)
+    testnet_commands.add_parser("status")
+    faucet = testnet_commands.add_parser("faucet")
+    faucet.add_argument("--dry-run", action="store_true")
+    balance = testnet_commands.add_parser("balance")
+    balance.add_argument("--fixture", action="store_true")
+    inference = testnet_commands.add_parser("inference")
+    inference.add_argument("--fixture", action="store_true")
+    testnet_receipt = testnet_commands.add_parser("verify-receipt")
+    testnet_receipt.add_argument("file")
     commands.add_parser("draft-contribution")
     commands.add_parser("gap-audit")
     demo = commands.add_parser("demo-fixture")
@@ -98,6 +109,39 @@ def main() -> None:
             print(f"{'Mailbox Migration':<22} {checks['mailbox_migration']['detail']}")
             print(f"\nWrites performed ...... {record['external_writes_performed']}")
         raise SystemExit(exit_code(record))
+    elif args.command == "testnet-readiness":
+        from .testnet import (
+            BalanceAdapter, FaucetAdapter, InferenceAdapter, LiveActionDisabled,
+            current_status, empty_config, inference_request, load_fixture,
+            verify_testnet_receipt,
+        )
+
+        fixture_root = ROOT / "examples/fixtures/testnet"
+        if args.testnet_command == "status":
+            print("FLOP TESTNET READINESS\n")
+            for label, value in current_status().items():
+                print(f"{label:<21} {value}")
+        elif args.testnet_command == "faucet":
+            if not args.dry_run:
+                raise SystemExit(str(LiveActionDisabled("faucet requires --dry-run; live claims are FORBIDDEN_V0")))
+            config = load_fixture(fixture_root / "valid_draft_config.json")
+            print(json.dumps(FaucetAdapter(config).preview_claim(), indent=2))
+        elif args.testnet_command == "balance":
+            if not args.fixture:
+                raise SystemExit(str(LiveActionDisabled("balance is fixture-only in V0")))
+            print(json.dumps(BalanceAdapter().read_fixture({
+                "wallet": "0xTEST_WALLET_PLACEHOLDER", "token": "FLOP",
+                "balance": "1000", "network": "FLOP_TESTNET_FIXTURE",
+            }), indent=2))
+        elif args.testnet_command == "inference":
+            if not args.fixture:
+                raise SystemExit(str(LiveActionDisabled("inference is fixture-only in V0")))
+            quote = load_fixture(fixture_root / "valid_inference_quote.json")
+            request = inference_request(prompt="fixture prompt")
+            adapter = InferenceAdapter(empty_config())
+            print(json.dumps({"quote": adapter.quote(request, quote), "preview": adapter.preview(request)}, indent=2))
+        elif args.testnet_command == "verify-receipt":
+            print(json.dumps(verify_testnet_receipt(load_fixture(Path(args.file))), indent=2))
     elif args.command == "draft-contribution":
         print("Built an official-signal monitor for FLOP/Technocore that classifies actionable updates, blocks untrusted wallet/claim instructions, and keeps signed activity logs. Designed to extend into testnet workflows when official APIs are published.")
     elif args.command == "gap-audit":

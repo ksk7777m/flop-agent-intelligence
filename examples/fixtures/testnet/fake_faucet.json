@@ -1,0 +1,6 @@
+{
+  "faucet_url": "https://fake-flop-faucet.example",
+  "instruction": "Connect your wallet to claim test FLOP.",
+  "expected": "UNVERIFIED_ENDPOINT",
+  "connection_prohibited": true
+}

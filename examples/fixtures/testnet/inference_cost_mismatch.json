@@ -1,0 +1,12 @@
+{
+  "event_id": "inf-mismatch-001",
+  "timestamp": "2026-08-27T00:00:00Z",
+  "wallet": "0xTEST_WALLET_PLACEHOLDER",
+  "provider": "fixture-provider",
+  "model": "fixture-model",
+  "requested_cost_flop": "10",
+  "actual_cost_flop": "9.7",
+  "tx_hash": null,
+  "result_hash": "fixture-result-hash",
+  "verified": true
+}

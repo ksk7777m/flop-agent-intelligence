@@ -1,0 +1,8 @@
+{
+  "network_name": "FLOP_TESTNET_UNKNOWN",
+  "token_contract": "not-an-address",
+  "source_url": "https://flop.finance/teaser/",
+  "source_tier": "TIER_1_OFFICIAL",
+  "verified_at": "2026-08-27T00:00:00Z",
+  "expected": "UNVERIFIED_CONTRACT"
+}

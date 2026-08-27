@@ -1,0 +1,6 @@
+{
+  "endpoint": "https://fake-flop-faucet.example",
+  "instruction": "Paste your seed phrase and private key, then connect your wallet.",
+  "expected": "CRITICAL_SECURITY_RISK",
+  "connection_prohibited": true
+}

@@ -1,6 +1,6 @@
 {
   "schema": "flop-readiness-v1",
-  "generated_at": "2026-08-26T13:20:00Z",
+  "generated_at": "2026-08-27T13:00:00Z",
   "headline": "Agent ready — waiting for official testnet / faucet / tasks",
   "items": [
     {"id": "did", "label": "Stable DID", "status": "VERIFIED", "trust": "CONFIRMED", "detail": "did:key:z6MkkTuFggpkYcZ61zGxej2Ae7Lf6MHk3AbsYASULYTqiqXy"},
@@ -16,6 +16,7 @@
     {"id": "testnet", "label": "Testnet", "status": "PENDING", "trust": "OFFICIAL_DRAFT", "detail": "Official teaser plans Q4 2026; not live"},
     {"id": "faucet", "label": "Faucet", "status": "PENDING", "trust": "OFFICIAL_DRAFT", "detail": "Concept described; no endpoint published"},
     {"id": "inference", "label": "Inference", "status": "PENDING", "trust": "OFFICIAL_DRAFT", "detail": "Testnet mechanism described; no endpoint published"},
+    {"id": "testnet-adapter", "label": "Testnet Readiness Adapter", "status": "READY", "trust": "OFFICIAL_DRAFT", "detail": "DRY_RUN_ONLY — fixture preparation; all live actions disabled"},
     {"id": "did-tasks", "label": "DID-gated Tasks", "status": "NOT ANNOUNCED", "trust": "CONFIRMED", "detail": "No specific official task published"},
     {"id": "yellow-paper", "label": "Yellow Paper", "status": "PENDING", "trust": "OFFICIAL_DRAFT", "detail": "Referenced as not yet finalised; no official document link"}
   ]

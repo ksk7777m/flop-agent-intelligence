@@ -39,6 +39,27 @@ It does **not** determine airdrop eligibility, connect wallets, execute contract
 
 > Technocore activity does not guarantee a FLOP airdrop.
 
+## FLOP Testnet Readiness Adapter V0
+
+### Why this exists
+
+The FLOP official draft indicates that agent participation may involve
+faucet-acquired test FLOP and inference usage. This adapter prepares the
+workflow without making speculative or unauthorized network actions before
+official testnet endpoints are published.
+
+V0 is fixture-only and `DRY_RUN_ONLY`: wallet creation/import, seed or private
+key handling, wallet connection, faucet claims, token operations, inference
+purchases, transaction signing, RPC writes and contract interactions are not
+implemented. Human approval cannot enable a live action in V0.
+
+```bash
+PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness status
+```
+
+See [Testnet Adapter](docs/TESTNET_ADAPTER.md) for fixtures, source gates,
+wallet-key separation and the future activation checklist.
+
 ## Workflow
 
 ```mermaid

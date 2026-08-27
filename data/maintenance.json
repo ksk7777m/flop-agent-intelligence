@@ -50,6 +50,16 @@
       "commit": null,
       "receipt": null,
       "technocore_seq": null
+    },
+    {
+      "date": "2026-08-27",
+      "type": "testnet_adapter_v0",
+      "change": "Added a fixture-only FLOP testnet readiness adapter with fail-closed live actions",
+      "reason": "Prepare source-verified configuration, approval boundaries, spend accounting and evidence before official endpoints exist",
+      "source": "FLOP official teaser (OFFICIAL_DRAFT)",
+      "commit": null,
+      "receipt": null,
+      "technocore_seq": null
     }
   ]
 }

@@ -1,0 +1,9 @@
+{
+  "network_name": "UNKNOWN_NETWORK",
+  "chain_id": "999999",
+  "rpc_url": "https://unknown-rpc.example",
+  "source_url": "https://aggregator.example/flop",
+  "source_tier": "UNVERIFIED",
+  "verified_at": "2026-08-27T00:00:00Z",
+  "expected": "DO_NOT_ACTIVATE"
+}

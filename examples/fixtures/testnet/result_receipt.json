@@ -1,0 +1,16 @@
+{
+  "schema": "flop-testnet-activity-receipt-v0",
+  "activity_type": "inference",
+  "network": "fixture",
+  "request_hash": "43d66a07a54bf7716a82915bf50476770656285d1e4dffade9c8d3a9c9197824",
+  "result_hash": "6a97fd5699010e51fafa5fcac8bb200a41c519c475d5fa5d0eb823c11e3be1c9",
+  "cost_flop": "0",
+  "tx_hash": null,
+  "source_url": null,
+  "git_commit": null,
+  "generated_at": "2026-08-27T00:00:00Z",
+  "fixture": true,
+  "live_action": false,
+  "integrity_algorithm": "SHA-256 (integrity only; not authorship)",
+  "integrity_sha256": "fab5e695f3189dad65db93a768fd55f59e4392f42794f06f5d83f6f0b30154c4"
+}
