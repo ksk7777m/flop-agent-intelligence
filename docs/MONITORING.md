@@ -1,4 +1,4 @@
-# FLOP Readiness Health Monitor V1
+# FLOP Continuous Readiness Health Monitor
 
 The health monitor performs GET-only checks against a hard-coded allowlist. It
 does not sign, publish, update notes, write mailboxes, connect wallets, or
@@ -18,6 +18,13 @@ Machine-readable output without a local run record:
 PYTHONPATH=src python3 -m flop_agent.cli health-monitor --json --no-save
 ```
 
+Public-only mode, used by GitHub Actions, does not require ignored receipt files
+or any private key:
+
+```bash
+PYTHONPATH=src python3 -m flop_agent.cli health-monitor --public --no-save
+```
+
 Exit codes:
 
 - `0`: READY
@@ -28,18 +35,36 @@ Exit codes:
 Normal saved runs update ignored files under `runtime/`; they do not create Git
 activity. Public `data/monitor.json` is a reviewed snapshot, not a live claim.
 
-## Scheduling options — not enabled
+## Schedule
 
-Twice daily is the recommended starting frequency, for example 09:00 and 21:00
-local time. A human can later choose either:
+`.github/workflows/flop-health-monitor.yml` runs the public monitor at 09:00 and
+21:00 JST (`00:00` and `12:00` UTC) and supports one-off `workflow_dispatch`.
+It declares only `contents: read`, disables checkout credential persistence,
+uses no repository secrets, and never commits or pushes run output. GitHub's
+run history is the operational record.
 
-- local `launchd`/cron invoking the human-readable command; or
-- GitHub Actions invoking `--json --no-save`.
+Local scheduling remains disabled. Local runs may additionally verify ignored
+offline receipts and local DID signature evidence.
 
-GitHub Actions is feasible without secrets because every monitored input is
-public. A workflow must not commit normal results, open issues, publish signed
-messages, or use any private DID/X25519/wallet material. No scheduler or
-workflow is enabled in V1.
+## Official teaser
+
+`https://flop.finance/teaser/` is allowlisted as a Tier-1 official source. Its
+figures and timing remain `OFFICIAL_DRAFT`. The monitor stores raw, normalized
+text, and heading-section hashes, and compares semantic fields for testnet,
+mainnet, airdrop allocations, faucet, inference, DID tasks, unlocks, prizes,
+snapshot, eligibility, claim, Yellow Paper, and contract address signals.
+
+A content change becomes `OFFICIAL_TEASER_CHANGED / REVIEW_REQUIRED`; a new
+official Yellow Paper link becomes `CRITICAL_NEW_OFFICIAL_SPEC`. URLs discovered
+inside the page are recorded as inert evidence and are never fetched.
+
+Network failure is `UNKNOWN` on the first observation rather than `CRITICAL`.
+Two consecutive observations are the threshold for `REVIEW_REQUIRED`; the
+stateless GitHub workflow keeps the run history as the evidence trail.
+
+Room availability is derived only from existing public summaries. The monitor
+does not create a room as a capacity probe. Engagement aggregates are labelled
+operational health metrics and are not treated as FLOP airdrop scoring.
 
 ## Meaningful maintenance workflow
 

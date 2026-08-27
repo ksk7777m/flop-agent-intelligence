@@ -1,4 +1,4 @@
-const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance"];
+const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance", "teaser"];
 const safeStatus = value => String(value || "UNKNOWN").toUpperCase();
 const statusClass = value => "status-" + safeStatus(value).toLowerCase().replaceAll(" ", "-").replaceAll("_", "-");
 const text = (tag, value, className) => {
@@ -70,6 +70,19 @@ function renderSignals(data) {
   for (const note of data.review_notes || []) reviews.append(text("p", `${note.status} · ${note.source}: ${note.reason}`));
 }
 
+function renderTeaser(data) {
+  const root = document.querySelector("#testnet-readiness");
+  for (const item of data.readiness) {
+    const card = text("article", "", "card");
+    const top = text("div", "", "card-top");
+    top.append(text("span", safeStatus(item.status), `badge ${statusClass(item.status)}`), text("span", data.spec_status, "trust"));
+    card.append(top, text("h3", item.label), text("p", item.detail));
+    root.append(card);
+  }
+  document.querySelector("#teaser-detail").textContent =
+    `Source: ${data.source} · Checked: ${data.checked_at} · Normalized SHA-256: ${data.normalized_text_sha256} · ${data.caveat}`;
+}
+
 function renderHealth(data) {
   const root = document.querySelector("#health");
   for (const item of data.checks) {
@@ -118,6 +131,7 @@ loadData().then(data => {
   renderMonitor(data.monitor);
   renderReadiness(data.readiness);
   renderSignals(data.signals);
+  renderTeaser(data.teaser);
   renderHealth(data.health);
   renderEvidence(data.evidence);
   renderMaintenance(data.maintenance);

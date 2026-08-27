@@ -2,6 +2,16 @@
   "schema": "flop-signals-v1",
   "signals": [
     {
+      "timestamp": "2026-08-27T12:27:42Z",
+      "source": "FLOP official teaser",
+      "source_tier": 1,
+      "classification": "INFO",
+      "title": "Provisional FLOP testnet and tokenomics teaser",
+      "summary": "The official draft plans testnet for Q4 2026 and mainnet for Q1 2027, and describes test-token faucet and inference participation without publishing operational endpoints.",
+      "url": "https://flop.finance/teaser/",
+      "verification_status": "OFFICIAL_DRAFT"
+    },
+    {
       "timestamp": "2026-08-26T13:20:00Z",
       "source": "FLOP official site",
       "source_tier": 1,

@@ -32,6 +32,7 @@ SCHEMAS = {
     "maintenance.json": "flop-maintenance-v1",
     "monitor.json": "flop-public-monitor-status-v1",
     "capacity_evidence.json": "technocore-capacity-evidence-v1",
+    "teaser.json": "flop-teaser-monitor-v1",
 }
 
 

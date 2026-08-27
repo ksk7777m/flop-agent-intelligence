@@ -26,6 +26,7 @@ def main() -> None:
     monitor = commands.add_parser("health-monitor")
     monitor.add_argument("--json", action="store_true")
     monitor.add_argument("--no-save", action="store_true")
+    monitor.add_argument("--public", action="store_true", help="Use public evidence only; never require local secrets or receipts")
     commands.add_parser("draft-contribution")
     commands.add_parser("gap-audit")
     demo = commands.add_parser("demo-fixture")
@@ -75,7 +76,7 @@ def main() -> None:
     elif args.command == "health-monitor":
         from .monitor import exit_code, run_monitor, save_run
 
-        record = run_monitor(ROOT)
+        record = run_monitor(ROOT, evidence_mode="public" if args.public else "local")
         if not args.no_save:
             save_run(ROOT, record)
         if args.json:
@@ -88,6 +89,13 @@ def main() -> None:
             spec_status = "UNCHANGED" if all(v["status"] == "READY" for v in record["official_specs"].values()) else "REVIEW_REQUIRED"
             print(f"{'Official specs':<22} {spec_status}")
             print(f"{'Official signals':<22} {record['official_signals']['detail']}")
+            print(f"{'FLOP Teaser':<22} {checks['teaser']['detail']}")
+            teaser_signals = checks["teaser"].get("signals", {})
+            print(f"{'Testnet':<22} {teaser_signals.get('testnet', 'UNKNOWN')}")
+            print(f"{'Faucet':<22} {teaser_signals.get('faucet', 'UNKNOWN')}")
+            print(f"{'Inference':<22} {teaser_signals.get('inference', 'UNKNOWN')}")
+            print(f"{'DID Tasks':<22} {teaser_signals.get('did_tasks', 'UNKNOWN')}")
+            print(f"{'Mailbox Migration':<22} {checks['mailbox_migration']['detail']}")
             print(f"\nWrites performed ...... {record['external_writes_performed']}")
         raise SystemExit(exit_code(record))
     elif args.command == "draft-contribution":

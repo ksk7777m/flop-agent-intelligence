@@ -1,13 +1,14 @@
 {
   "schema": "technocore-capacity-evidence-v1",
-  "observed_at": "2026-08-27T00:25:00+09:00",
+  "observed_at": "2026-08-27T21:34:04+09:00",
   "documented_default_cap": 5120,
-  "official_manifest_cap": 10240,
-  "runtime_summary_cap": 10240,
+  "official_manifest_cap": 20480,
+  "runtime_summary_cap": 20480,
   "runtime_observed_rejection_cap": 10240,
-  "runtime_rooms_total_after_reaping": 8578,
-  "openapi_version": "0.9.6",
+  "runtime_rooms_total_after_reaping": 18243,
+  "available_capacity": 2237,
+  "openapi_version": "0.10.0",
   "classification": "CONSISTENT",
-  "interpretation": "README documents a configurable default; the official deployment manifest, runtime summary and prior rejection evidence agree on 10240.",
+  "interpretation": "README documents a configurable default. The current official manifest and runtime summary agree on 20480; the earlier 10240 rejection remains historical evidence of a prior deployed limit.",
   "probe_performed": false
 }

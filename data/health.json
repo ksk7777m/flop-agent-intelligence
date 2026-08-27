@@ -1,8 +1,8 @@
 {
   "schema": "flop-health-v1",
-  "last_checked": "2026-08-26T14:45:01Z",
-  "last_successful": "2026-08-26T14:45:01Z",
-  "next_scheduled_check": null,
+  "last_checked": "2026-08-27T12:34:04Z",
+  "last_successful": "2026-08-27T12:34:04Z",
+  "next_scheduled_check": "2026-08-28T09:00:00+09:00",
   "checks": [
     {"id": "technocore", "label": "Technocore reachable", "status": "READY"},
     {"id": "github-official", "label": "Official GitHub reachable", "status": "READY"},
@@ -11,6 +11,9 @@
     {"id": "public-repo", "label": "Public repo reachable", "status": "READY"},
     {"id": "contribution", "label": "Technocore contribution recorded", "status": "VERIFIED"},
     {"id": "receipt", "label": "Local receipt verification", "status": "VERIFIED"},
-    {"id": "official-sources", "label": "Official source check", "status": "READY"}
+    {"id": "official-sources", "label": "Official source check", "status": "READY"},
+    {"id": "official-teaser", "label": "FLOP official teaser", "status": "READY"},
+    {"id": "capacity", "label": "Capacity contract", "status": "READY"},
+    {"id": "engagement", "label": "Engagement aggregates (not airdrop scoring)", "status": "READY"}
   ]
 }

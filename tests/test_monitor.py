@@ -14,6 +14,10 @@ from flop_agent.monitor import (
     OFFICIAL_SPECS,
     assess_freshness,
     detect_signal_delta,
+    evaluate_engagement_aggregates,
+    evaluate_teaser,
+    extract_teaser_snapshot,
+    classify_source_failure,
     evaluate_did_note,
     evaluate_mailbox,
     normalize_official_signal,
@@ -36,11 +40,17 @@ class MonitorTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / "data").mkdir()
         self.flop = b'<a href="https://x.com/flop_labs">official</a>'
+        self.teaser = b'''<html><head><meta name="description" content="Figures are provisional"></head><body>
+        <h2>04 Testnet and Airdrop</h2><p>Flop Testnet is planned for Q4 2026, with mainnet to follow in Q1 2027.</p>
+        <p>Agents claim a test-token faucet and spend it on inference with prizes. Every 3 FLOP spent unlocks 1 airdropped FLOP.</p>
+        <p>Refer to the yet to be finalised Yellow Paper.</p></body></html>'''
+        teaser_baseline = extract_teaser_snapshot(self.teaser)
         self.spec_bodies = {url: name.encode() for name, url in OFFICIAL_SPECS.items()}
         baseline = {
             "official_specs": {name: hashlib.sha256(name.encode()).hexdigest() for name in OFFICIAL_SPECS},
             "flop_site_sha256": hashlib.sha256(normalize_official_signal(self.flop)).hexdigest(),
             "flop_site_terms": [],
+            "teaser": teaser_baseline,
         }
         (self.root / "data/monitor_baseline.json").write_text(json.dumps(baseline))
         self.responses = {
@@ -51,12 +61,17 @@ class MonitorTests(unittest.TestCase):
             ENDPOINTS["original_commit"]: b"{}",
             ENDPOINTS["dashboard_commit"]: b"{}",
             ENDPOINTS["dashboard"]: b"FLOP Agent Readiness Dashboard",
+            ENDPOINTS["public_evidence"]: b"{}",
             ENDPOINTS["official_repo"]: b"{}",
             ENDPOINTS["flop_site"]: self.flop,
+            ENDPOINTS["teaser"]: self.teaser,
             ENDPOINTS["x_official"]: b"X",
             ENDPOINTS["x_evidence"]: b"X",
             ENDPOINTS["capacity_manifest"]: json.dumps({"limits": {"rooms": 10240}}).encode(),
-            ENDPOINTS["rooms_summary"]: json.dumps({"capacity": 10240}).encode(),
+            ENDPOINTS["rooms_summary"]: json.dumps({
+                "capacity": 10240, "total": 9000,
+                "engagement": {"zero_response_share": 0.2, "nick_diversity": 0.4, "windowed_note_to_message_ratio": 0.1},
+            }).encode(),
             **self.spec_bodies,
         }
 
@@ -78,7 +93,10 @@ class MonitorTests(unittest.TestCase):
 
     def test_technocore_unavailable(self):
         del self.responses[ENDPOINTS["technocore"]]
-        self.assertEqual(self.run_fixture()["checks"]["technocore"]["status"], "ERROR")
+        result = self.run_fixture()
+        self.assertEqual(result["checks"]["technocore"]["status"], "UNKNOWN")
+        self.assertEqual(result["overall_status"], "DEGRADED")
+        self.assertFalse(result["meaningful_change"])
 
     def test_did_note_hash_mismatch(self):
         self.responses[ENDPOINTS["did_note"]] = b"tampered"
@@ -124,11 +142,67 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(result["status"], "REVIEW_REQUIRED")
         self.assertIn("snapshot", result["terms"])
 
+    def test_teaser_unchanged_and_draft_wording(self):
+        result = evaluate_teaser(self.teaser, extract_teaser_snapshot(self.teaser))
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(result["spec_status"], "OFFICIAL_DRAFT")
+        self.assertEqual(result["signals"]["testnet"], "q4 2026")
+        self.assertEqual(result["signals"]["faucet"], "OFFICIAL_DRAFT_MENTION")
+
+    def test_teaser_changed_requires_review(self):
+        baseline = extract_teaser_snapshot(self.teaser)
+        changed = self.teaser.replace(b"Q4 2026", b"Q3 2026")
+        result = evaluate_teaser(changed, baseline)
+        self.assertEqual(result["detail"], "OFFICIAL_TEASER_CHANGED")
+        self.assertEqual(result["status"], "REVIEW_REQUIRED")
+
+    def test_testnet_launch_and_faucet_endpoint(self):
+        baseline = extract_teaser_snapshot(self.teaser)
+        live = self.teaser.replace(
+            b"</body>", b'<a href="https://flop.finance/faucet/">Faucet</a><p>Testnet live RPC explorer.</p></body>'
+        )
+        result = evaluate_teaser(live, baseline)
+        self.assertEqual(result["signals"]["faucet"], "CONFIRMED_ENDPOINT")
+        self.assertEqual(result["status"], "REVIEW_REQUIRED")
+
+    def test_inference_endpoint_and_yellow_paper_link(self):
+        baseline = extract_teaser_snapshot(self.teaser)
+        changed = self.teaser.replace(
+            b"</body>",
+            b'<a href="https://flop.finance/inference/">Inference endpoint</a>'
+            b'<a href="https://flop.finance/yellow-paper.pdf">Yellow Paper</a></body>',
+        )
+        result = evaluate_teaser(changed, baseline)
+        self.assertEqual(result["signals"]["inference"], "CONFIRMED_ENDPOINT")
+        self.assertEqual(result["detail"], "CRITICAL_NEW_OFFICIAL_SPEC")
+
+    def test_contract_address_requires_review(self):
+        baseline = extract_teaser_snapshot(self.teaser)
+        changed = self.teaser.replace(b"</body>", b"<p>Contract 0x1111111111111111111111111111111111111111</p></body>")
+        result = evaluate_teaser(changed, baseline)
+        self.assertEqual(result["signals"]["contract_address"], ["0x1111111111111111111111111111111111111111"])
+        self.assertEqual(result["status"], "REVIEW_REQUIRED")
+
+    def test_unofficial_community_claim_is_not_a_teaser_input(self):
+        snapshot = extract_teaser_snapshot(self.teaser)
+        self.assertEqual(snapshot["signals"]["snapshot"], "NOT_ANNOUNCED")
+        self.assertEqual(snapshot["signals"]["eligibility"], "NOT_ANNOUNCED")
+
+    def test_engagement_metrics_are_informational(self):
+        result = evaluate_engagement_aggregates(self.responses[ENDPOINTS["rooms_summary"]])
+        self.assertEqual(result["status"], "READY")
+        self.assertIn("not confirmed FLOP airdrop scoring", result["detail"])
+
+    def test_network_failure_escalates_only_after_two(self):
+        self.assertEqual(classify_source_failure(1)["status"], "UNKNOWN")
+        self.assertEqual(classify_source_failure(2)["status"], "REVIEW_REQUIRED")
+
     def test_public_evidence_unavailable(self):
         del self.responses[ENDPOINTS["dashboard"]]
         result = self.run_fixture()
-        self.assertEqual(result["checks"]["dashboard"]["status"], "ERROR")
-        self.assertTrue(result["meaningful_change"])
+        self.assertEqual(result["checks"]["dashboard"]["status"], "UNKNOWN")
+        self.assertEqual(result["overall_status"], "DEGRADED")
+        self.assertFalse(result["meaningful_change"])
 
     def test_expected_eviction_with_valid_offchain_evidence_is_ready(self):
         self.responses[ENDPOINTS["contribution"]] = json.dumps({"first_seq": 2000000, "messages": []}).encode()

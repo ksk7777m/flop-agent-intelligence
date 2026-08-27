@@ -40,6 +40,16 @@
       "commit": null,
       "receipt": null,
       "technocore_seq": null
+    },
+    {
+      "date": "2026-08-27",
+      "type": "continuous_monitoring",
+      "change": "Enabled twice-daily public readiness monitoring and official FLOP teaser semantic checks",
+      "reason": "Detect meaningful testnet, faucet, inference, DID task and specification changes without automatic external writes",
+      "source": "FLOP official teaser and Technocore first-party public surfaces",
+      "commit": null,
+      "receipt": null,
+      "technocore_seq": null
     }
   ]
 }

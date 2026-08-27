@@ -38,9 +38,10 @@ h2 { margin: 0; font-size: clamp(26px, 4vw, 42px); letter-spacing: -.035em; }
 .card p { margin: 0; color: var(--muted); font: 12px/1.55 var(--mono); overflow-wrap: anywhere; }
 .badge, .trust, .classification { display: inline-block; padding: 5px 7px; border: 1px solid currentColor; font: 700 9px var(--mono); letter-spacing: .08em; }
 .status-ready, .status-verified, .status-live { color: var(--green); }
-.status-pending, .status-submitted, .status-not-announced, .status-retired { color: var(--yellow); }
+.status-pending, .status-submitted, .status-not-announced, .status-retired,
+.status-official-draft, .status-draft-reference { color: var(--yellow); }
 .status-error, .status-review-required { color: var(--red); }
-.status-unknown { color: var(--muted); }
+.status-unknown, .status-none { color: var(--muted); }
 .trust { color: var(--cyan); border-color: var(--line); }
 .legend { display: flex; flex-wrap: wrap; gap: 8px; }
 .legend span { color: var(--muted); font: 10px var(--mono); border: 1px solid var(--line); padding: 6px 8px; }

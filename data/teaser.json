@@ -1,0 +1,18 @@
+{
+  "schema": "flop-teaser-monitor-v1",
+  "source": "https://flop.finance/teaser/",
+  "source_tier": "TIER_1_OFFICIAL",
+  "spec_status": "OFFICIAL_DRAFT",
+  "checked_at": "2026-08-27T12:34:04Z",
+  "status": "UNCHANGED",
+  "raw_sha256": "8cfe6e6b98efd8022b73a190a4e8aaaa45eb7ba6050a627e4ef3b39783bb0176",
+  "normalized_text_sha256": "f93b07c83d71f09926ee536f4e704b52336e4f8c3e6f0a3752d45224a39d3fde",
+  "readiness": [
+    {"id": "testnet", "label": "Testnet", "status": "OFFICIAL_DRAFT", "detail": "Planned for Q4 2026; not live"},
+    {"id": "faucet", "label": "Faucet", "status": "OFFICIAL_DRAFT", "detail": "Concept described; no official endpoint published"},
+    {"id": "inference", "label": "Inference", "status": "OFFICIAL_DRAFT", "detail": "Testnet mechanism described; no endpoint published"},
+    {"id": "did-tasks", "label": "DID Tasks", "status": "NONE", "detail": "No specific DID-gated task published"},
+    {"id": "yellow-paper", "label": "Yellow Paper", "status": "DRAFT_REFERENCE", "detail": "Referenced as not yet finalised; no official document link"}
+  ],
+  "caveat": "Official teaser figures and timings are provisional. No eligibility, claim, contract or airdrop entitlement is inferred."
+}

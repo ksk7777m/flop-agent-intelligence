@@ -13,8 +13,10 @@
     {"id": "technocore", "label": "Historical Technocore Contribution", "status": "VERIFIED", "trust": "CONFIRMED", "detail": "EVICTED_EXPECTED / VERIFIED_OFFCHAIN"},
     {"id": "x", "label": "Public X Explanation", "status": "LIVE", "trust": "CONFIRMED", "detail": "@Giappone_Medici · status 2092613806434218126"},
     {"id": "kol", "label": "KOL / Creator Application", "status": "SUBMITTED", "trust": "COMMUNITY", "detail": "Submitted 2026-08-26 JST; acceptance not claimed"},
-    {"id": "testnet", "label": "Testnet", "status": "NOT ANNOUNCED", "trust": "CONFIRMED", "detail": "No first-party announcement recorded"},
-    {"id": "faucet", "label": "Faucet", "status": "NOT ANNOUNCED", "trust": "CONFIRMED", "detail": "No first-party announcement recorded"},
-    {"id": "did-tasks", "label": "DID-gated Tasks", "status": "NOT ANNOUNCED", "trust": "CONFIRMED", "detail": "No first-party announcement recorded"}
+    {"id": "testnet", "label": "Testnet", "status": "PENDING", "trust": "OFFICIAL_DRAFT", "detail": "Official teaser plans Q4 2026; not live"},
+    {"id": "faucet", "label": "Faucet", "status": "PENDING", "trust": "OFFICIAL_DRAFT", "detail": "Concept described; no endpoint published"},
+    {"id": "inference", "label": "Inference", "status": "PENDING", "trust": "OFFICIAL_DRAFT", "detail": "Testnet mechanism described; no endpoint published"},
+    {"id": "did-tasks", "label": "DID-gated Tasks", "status": "NOT ANNOUNCED", "trust": "CONFIRMED", "detail": "No specific official task published"},
+    {"id": "yellow-paper", "label": "Yellow Paper", "status": "PENDING", "trust": "OFFICIAL_DRAFT", "detail": "Referenced as not yet finalised; no official document link"}
   ]
 }

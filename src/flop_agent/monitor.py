@@ -17,6 +17,7 @@ from .readiness import OFFICIAL_SPECS
 
 
 VERSION = "flop-readiness-health-monitor-v1"
+TEASER_URL = "https://flop.finance/teaser/"
 DID = "did:key:z6MkkTuFggpkYcZ61zGxej2Ae7Lf6MHk3AbsYASULYTqiqXy"
 DID_NOTE_VALUE = (
     f"{DID} x25519:a-EbwHNshrhf00Aqq4P7xrZ8Cqmncxr3HW_wTSOoXW0 "
@@ -36,8 +37,10 @@ ENDPOINTS = {
     "original_commit": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence/commits/e388c6fd549de2931c40f1647dc1540a78b5c920",
     "dashboard_commit": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence/commits/1fdc4b014a24bb7bcaf9ca0c0851959dcdef3bc7",
     "dashboard": "https://ksk7777m.github.io/flop-agent-intelligence/",
+    "public_evidence": "https://ksk7777m.github.io/flop-agent-intelligence/data/evidence.json",
     "official_repo": "https://api.github.com/repos/flop-labs/technocore-chat",
     "flop_site": "https://flop.finance/",
+    "teaser": TEASER_URL,
     "x_official": "https://x.com/flop_labs",
     "x_evidence": "https://x.com/Giappone_Medici/status/2092613806434218126",
     "capacity_manifest": "https://technocore.chat/.well-known/agent.json",
@@ -48,7 +51,6 @@ SENSITIVE_TERMS = {
     "testnet", "faucet", "did task", "did-gated", "reward", "snapshot",
     "eligibility", "claim", "contract", "deadline", "security", "upgrade",
 }
-
 
 class _VisibleText(HTMLParser):
     def __init__(self) -> None:
@@ -69,10 +71,133 @@ class _VisibleText(HTMLParser):
             self.parts.append(data)
 
 
+class _TeaserHTML(HTMLParser):
+    """Collect visible text, heading-scoped text and links without following them."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hidden = 0
+        self.heading_tag: str | None = None
+        self.heading_parts: List[str] = []
+        self.section = "document"
+        self.parts: List[str] = []
+        self.sections: Dict[str, List[str]] = {self.section: []}
+        self.links: List[Dict[str, str]] = []
+        self.current_link: Dict[str, str] | None = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in {"script", "style"}:
+            self.hidden += 1
+        elif tag in {"h1", "h2", "h3", "h4"} and not self.hidden:
+            self.heading_tag = tag
+            self.heading_parts = []
+        elif tag == "a" and not self.hidden:
+            href = dict(attrs).get("href")
+            if href:
+                self.current_link = {"href": href, "text": ""}
+                self.links.append(self.current_link)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self.hidden:
+            self.hidden -= 1
+        elif tag == self.heading_tag:
+            heading = re.sub(r"\s+", " ", " ".join(self.heading_parts)).strip()
+            if heading:
+                self.section = heading
+                self.sections.setdefault(heading, [])
+            self.heading_tag = None
+        elif tag == "a":
+            self.current_link = None
+
+    def handle_data(self, data: str) -> None:
+        if self.hidden:
+            return
+        self.parts.append(data)
+        self.sections.setdefault(self.section, []).append(data)
+        if self.heading_tag:
+            self.heading_parts.append(data)
+        if self.current_link is not None:
+            self.current_link["text"] += data
+
+
 def normalize_official_signal(raw: bytes) -> bytes:
     parser = _VisibleText()
     parser.feed(raw.decode("utf-8", errors="replace"))
     return re.sub(r"\s+", " ", " ".join(parser.parts)).strip().lower().encode()
+
+
+def extract_teaser_snapshot(raw: bytes) -> Dict[str, Any]:
+    parser = _TeaserHTML()
+    parser.feed(raw.decode("utf-8", errors="replace"))
+    normalized = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+    lower = normalized.lower()
+    section_hashes = {
+        name: hashlib.sha256(re.sub(r"\s+", " ", " ".join(parts)).strip().lower().encode()).hexdigest()
+        for name, parts in parser.sections.items()
+        if re.sub(r"\s+", " ", " ".join(parts)).strip()
+    }
+    links = [{"href": item["href"], "text": re.sub(r"\s+", " ", item["text"]).strip()} for item in parser.links]
+    yellow_links = [item for item in links if "yellow paper" in (item["text"] + " " + item["href"]).lower()]
+    faucet_links = [item for item in links if "faucet" in (item["text"] + " " + item["href"]).lower()]
+    inference_links = [item for item in links if "inference" in (item["text"] + " " + item["href"]).lower()]
+    contract_addresses = sorted(set(re.findall(r"\b0x[a-fA-F0-9]{40}\b", normalized)))
+    testnet_match = re.search(r"testnet is planned for (q[1-4] \d{4})", lower)
+    mainnet_match = re.search(r"mainnet to follow in (q[1-4] \d{4})", lower)
+    signals = {
+        "spec_status": "OFFICIAL_DRAFT" if any(term in lower for term in ("figures are provisional", "yet to be finalised", "planned for")) else "CONFIRMED",
+        "testnet": testnet_match.group(1).strip() if testnet_match else ("MENTIONED" if "testnet" in lower else "NOT_ANNOUNCED"),
+        "mainnet": mainnet_match.group(1).strip() if mainnet_match else ("MENTIONED" if "mainnet" in lower else "NOT_ANNOUNCED"),
+        "genesis_airdrop": "DRAFT" if "genesis airdrop" in lower else "NOT_ANNOUNCED",
+        "agent_allocation": "up to 1,200,000,000 (7.0%)" if "up to 1,200,000,000 (7.0%)" in lower else "MENTIONED" if "agents" in lower else "NOT_ANNOUNCED",
+        "miner_allocation": "up to 1,200,000,000 (7.0%)" if "up to 1,200,000,000 (7.0%)" in lower else "MENTIONED" if "miners" in lower else "NOT_ANNOUNCED",
+        "validator_allocation": "305,505,000 (1.8%)" if "305,505,000 (1.8%)" in lower else "MENTIONED" if "validators" in lower else "NOT_ANNOUNCED",
+        "reserve_incentives": "794,495,000 (4.6%)" if "794,495,000 (4.6%)" in lower else "MENTIONED" if "reserve" in lower else "NOT_ANNOUNCED",
+        "faucet": "CONFIRMED_ENDPOINT" if faucet_links else "OFFICIAL_DRAFT_MENTION" if "faucet" in lower else "NOT_ANNOUNCED",
+        "inference": "CONFIRMED_ENDPOINT" if inference_links else "OFFICIAL_DRAFT_MENTION" if "inference" in lower else "NOT_ANNOUNCED",
+        "did_tasks": "MENTIONED" if "did-gated" in lower or "did task" in lower else "NONE",
+        "unlock_mechanics": "DRAFT" if "unlocks 1 airdropped" in lower else "NOT_ANNOUNCED",
+        "prizes": "DRAFT" if "prizes" in lower else "NOT_ANNOUNCED",
+        "snapshot": "MENTIONED" if "snapshot" in lower else "NOT_ANNOUNCED",
+        "eligibility": "MENTIONED" if "eligibility" in lower else "NOT_ANNOUNCED",
+        "claim": "DRAFT_MECHANIC" if "claim a test-token faucet" in lower else "NOT_ANNOUNCED",
+        "yellow_paper": "CONFIRMED_LINK" if yellow_links else "DRAFT_REFERENCE" if "yellow paper" in lower else "NOT_ANNOUNCED",
+        "contract_address": contract_addresses,
+    }
+    return {
+        "source": TEASER_URL,
+        "source_tier": "TIER_1_OFFICIAL",
+        "raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "normalized_text_sha256": hashlib.sha256(normalized.lower().encode()).hexdigest(),
+        "section_hashes": section_hashes,
+        "signals": signals,
+    }
+
+
+def evaluate_teaser(raw: bytes, baseline: Dict[str, Any]) -> Dict[str, Any]:
+    current = extract_teaser_snapshot(raw)
+    if current["normalized_text_sha256"] == baseline.get("normalized_text_sha256"):
+        return _result("READY", "UNCHANGED", classification="INFO", spec_status=current["signals"]["spec_status"], **current)
+    old_signals = baseline.get("signals", {})
+    changed = [
+        {"field": field, "old": old_signals.get(field), "new": value}
+        for field, value in current["signals"].items() if old_signals.get(field) != value
+    ]
+    changed_sections = sorted(
+        name for name, digest in current["section_hashes"].items()
+        if baseline.get("section_hashes", {}).get(name) != digest
+    )
+    detail = "CRITICAL_NEW_OFFICIAL_SPEC" if current["signals"]["yellow_paper"] == "CONFIRMED_LINK" and old_signals.get("yellow_paper") != "CONFIRMED_LINK" else "OFFICIAL_TEASER_CHANGED"
+    return _result(
+        "REVIEW_REQUIRED", detail, classification="CRITICAL" if detail.startswith("CRITICAL") else "REVIEW_REQUIRED",
+        spec_status=current["signals"]["spec_status"], semantic_diff=changed,
+        changed_sections=changed_sections, **current,
+    )
+
+
+def classify_source_failure(consecutive_failures: int) -> Dict[str, Any]:
+    if consecutive_failures >= 2:
+        return _result("REVIEW_REQUIRED", "Official source unavailable for two or more consecutive checks")
+    return _result("UNKNOWN", "Official source temporarily unavailable")
 
 
 def fetch_bytes(url: str) -> bytes:
@@ -149,16 +274,36 @@ def evaluate_capacity_contract(manifest_body: bytes, rooms_body: bytes, observed
         runtime = int(rooms["capacity"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return _result("UNKNOWN", "Capacity contract could not be parsed")
-    if advertised == runtime == observed_rejection_cap:
+    if advertised == runtime:
         return _result(
-            "CONSISTENT", "Configured runtime cap matches manifest and prior rejection evidence",
+            "CONSISTENT", "Configured runtime cap matches the current official manifest",
             documented_default=5120, advertised_cap=advertised, runtime_cap=runtime,
             observed_rejection_cap=observed_rejection_cap,
+            runtime_changed_since_observation=runtime != observed_rejection_cap,
         )
     return _result(
         "DIVERGED", "SPEC_RUNTIME_DIVERGENCE", documented_default=5120,
         advertised_cap=advertised, runtime_cap=runtime,
         observed_rejection_cap=observed_rejection_cap, classification="REVIEW_REQUIRED",
+    )
+
+
+def evaluate_engagement_aggregates(rooms_body: bytes) -> Dict[str, Any]:
+    try:
+        value = json.loads(rooms_body)
+        engagement = value["engagement"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return _result("UNKNOWN", "Engagement aggregates unavailable")
+    metrics = {
+        key: engagement.get(key)
+        for key in ("zero_response_share", "nick_diversity", "windowed_note_to_message_ratio")
+    }
+    if not any(metric is not None for metric in metrics.values()):
+        return _result("UNKNOWN", "Engagement aggregate window is empty", metrics=metrics)
+    return _result(
+        "READY",
+        "Technocore engagement health metrics; not confirmed FLOP airdrop scoring",
+        metrics=metrics,
     )
 
 
@@ -195,7 +340,7 @@ def _safe_fetch(name: str, fetcher: Callable[[str], bytes]) -> tuple[bytes | Non
         body = fetcher(ENDPOINTS[name])
         return body, _result("READY", "Endpoint reachable", bytes=len(body))
     except Exception as error:
-        return None, _result("ERROR", "Endpoint unavailable", error=type(error).__name__)
+        return None, _result("UNKNOWN", "Endpoint temporarily unavailable", error=type(error).__name__)
 
 
 def _local_evidence(root: Path) -> Dict[str, Any]:
@@ -222,7 +367,32 @@ def _local_evidence(root: Path) -> Dict[str, Any]:
     return _result("READY" if all(details.values()) else "ERROR", "Local receipts and contribution signature verified" if all(details.values()) else "Receipt verification failed", receipts=details)
 
 
-def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Dict[str, Any]:
+def _public_evidence(root: Path, bodies: Dict[str, bytes]) -> Dict[str, Any]:
+    details: Dict[str, bool] = {}
+    try:
+        public = json.loads(bodies["public_evidence"])
+        details["repository"] = public.get("repository") == "https://github.com/ksk7777m/flop-agent-intelligence"
+        details["original_commit"] = public.get("original_public_commit") == "e388c6fd549de2931c40f1647dc1540a78b5c920"
+        details["receipt_fingerprint"] = public.get("receipt_sha256") == "854b3442645b0dcaeae9d87646e0144fd48f659ef0a72208135eddaa37b279b2"
+        details["historical_status"] = public.get("historical_evidence_status") == "VERIFIED_OFFCHAIN"
+        details["commit_reachable"] = "original_commit" in bodies
+        from .identity import verify_message
+        records = [json.loads(line) for line in (root / "data/activity.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+        contribution = next(item for item in reversed(records) if item.get("room") == "lobby" and item.get("seq") == 929750)
+        verify_message(contribution["did"], contribution["signature"], "lobby", int(contribution["nonce"]), contribution["text_after_sweep"])
+        details["contribution_signature"] = contribution["did"] == DID
+    except Exception:
+        details["parse_or_signature"] = False
+    valid = bool(details) and all(details.values())
+    return _result(
+        "READY" if valid else "ERROR",
+        "Public commit, receipt metadata and contribution signature verified" if valid else "Public evidence verification failed",
+        evidence=details,
+        mode="public",
+    )
+
+
+def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes, evidence_mode: str = "local") -> Dict[str, Any]:
     checked_at = datetime.now(timezone.utc).isoformat()
     checks: Dict[str, Dict[str, Any]] = {}
     bodies: Dict[str, bytes] = {}
@@ -255,8 +425,24 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Di
         )
     else:
         checks["capacity_contract"] = _result("UNKNOWN", "Capacity sources unavailable", capacity_status="UNKNOWN")
+    if "rooms_summary" in bodies:
+        checks["engagement"] = evaluate_engagement_aggregates(bodies["rooms_summary"])
+        try:
+            room_summary = json.loads(bodies["rooms_summary"])
+            total, capacity = int(room_summary["total"]), int(room_summary["capacity"])
+            checks["mailbox_migration"] = _result(
+                "READY", "MAILBOX_MIGRATION_POSSIBLE" if total < capacity else "MIGRATION_PENDING",
+                room_count=total, room_limit=capacity, available_capacity=max(0, capacity - total), probe_performed=False,
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            checks["mailbox_migration"] = _result("UNKNOWN", "Room availability could not be derived", probe_performed=False)
+    else:
+        checks["engagement"] = _result("UNKNOWN", "Engagement aggregates unavailable")
+        checks["mailbox_migration"] = _result("UNKNOWN", "Room availability unavailable", probe_performed=False)
     live_record = classify_live_record(bodies["contribution"]) if "contribution" in bodies else _result("UNKNOWN", "Contribution endpoint unavailable")
-    evidence = _local_evidence(root)
+    if evidence_mode not in {"local", "public"}:
+        raise ValueError("evidence_mode must be local or public")
+    evidence = _public_evidence(root, bodies) if evidence_mode == "public" else _local_evidence(root)
     checks["receipts"] = evidence
     historical_status = "VERIFIED_OFFCHAIN" if evidence["status"] == "READY" else "INVALID"
     if live_record["status"] == "LIVE" and evidence["status"] == "READY":
@@ -267,6 +453,10 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Di
         checks["contribution"] = _result("REVIEW_REQUIRED", live_record["detail"], live_record_status=live_record["status"], historical_evidence_status=historical_status, first_seq=live_record.get("first_seq"))
 
     baselines = json.loads((root / "data/monitor_baseline.json").read_text(encoding="utf-8"))
+    if "teaser" in bodies:
+        checks["teaser"] = evaluate_teaser(bodies["teaser"], baselines["teaser"])
+    else:
+        checks["teaser"] = classify_source_failure(1)
     spec_results = {}
     for name, url in OFFICIAL_SPECS.items():
         try:
@@ -294,13 +484,18 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Di
         overall = "REVIEW_REQUIRED"
     elif "ERROR" in statuses:
         overall = "ERROR"
+    elif "UNKNOWN" in statuses:
+        overall = "DEGRADED"
     elif "CHANGED" in statuses:
         overall = "CHANGED"
     else:
         overall = "READY"
     meaningful = any(item.get("detail") in {"OFFICIAL_SPEC_CHANGED", "DID Note missing or changed", "Receipt verification failed"} for item in list(checks.values()) + list(spec_results.values()))
-    meaningful = meaningful or any(checks.get(name, {}).get("status") not in {None, "READY"} for name in ("did_note", "mailbox", "repo", "dashboard", "contribution", "receipts", "capacity_contract"))
-    if signals["status"] == "REVIEW_REQUIRED":
+    meaningful = meaningful or any(
+        checks.get(name, {}).get("status") in {"REVIEW_REQUIRED", "ERROR"}
+        for name in ("did_note", "mailbox", "repo", "dashboard", "contribution", "receipts", "capacity_contract")
+    )
+    if signals["status"] == "REVIEW_REQUIRED" or checks["teaser"]["status"] == "REVIEW_REQUIRED":
         meaningful = True
     return {
         "schema": VERSION, "checked_at": checked_at, "monitor_version": "1",
@@ -309,7 +504,7 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Di
         "signal_delta_count": signals.get("delta_count", 0),
         "meaningful_change": meaningful, "errors": [k for k, v in checks.items() if v["status"] == "ERROR"],
         "warnings": [k for k, v in checks.items() if v["status"] in {"CHANGED", "REVIEW_REQUIRED"}],
-        "external_writes_performed": 0,
+        "evidence_mode": evidence_mode, "external_writes_performed": 0,
     }
 
 
@@ -325,4 +520,4 @@ def save_run(root: Path, record: Dict[str, Any]) -> None:
 def exit_code(record: Dict[str, Any]) -> int:
     if record["meaningful_change"]:
         return 3
-    return {"READY": 0, "REVIEW_REQUIRED": 1, "CHANGED": 1, "ERROR": 2}.get(record["overall_status"], 2)
+    return {"READY": 0, "REVIEW_REQUIRED": 1, "CHANGED": 1, "DEGRADED": 1, "ERROR": 2}.get(record["overall_status"], 2)

@@ -44,6 +44,13 @@ class PhaseATests(unittest.TestCase):
         self.assertEqual(result["status"], "DIVERGED")
         self.assertEqual(result["classification"], "REVIEW_REQUIRED")
 
+    def test_capacity_change_is_consistent_when_manifest_matches_runtime(self):
+        manifest = json.dumps({"limits": {"rooms": 20480}}).encode()
+        rooms = json.dumps({"capacity": 20480}).encode()
+        result = evaluate_capacity_contract(manifest, rooms)
+        self.assertEqual(result["status"], "CONSISTENT")
+        self.assertTrue(result["runtime_changed_since_observation"])
+
     def test_no_new_room_probe_or_room_write(self):
         source = (ROOT / "src/flop_agent/monitor.py").read_text(encoding="utf-8")
         self.assertNotIn("post_signed", source)

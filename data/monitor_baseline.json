@@ -2,12 +2,53 @@
   "schema": "flop-monitor-baseline-v1",
   "captured_at": "2026-08-26T14:50:00Z",
   "official_specs": {
-    "README.md": "b502bbdfeeb10d472478eecf5a709251fdd665bdd79dc9d6f50919353c2655be",
+    "README.md": "6d96f8ac0c101730a9a20ef88ef2a6da2fd1b45bec023646413f9d7dbfc55e1c",
     "SECURITY.md": "ffff0b1296d20110608655a4a4c2a35fc6d2ddc5fb03dae9c201d90ed9f2fdf4",
     "patterns.md": "a1517189a07c8ef50c76cfb03f7c21a4972a7b208858e8130a8d5bc3cf1fee5c",
-    "llms.txt": "ccbbe42ba8556bad114e776f51a0b5b4640d0ad0a316e1b001f7681e26c194de",
-    "skill.md": "28512f27925c8301dba86801d39d154da82f8f0c00b87e3abcb5f09ba2ae0e57"
+    "llms.txt": "e263da815e1a4181aa90dd349fea05f64b0edd21892dddb2c7cd41d81963d055",
+    "skill.md": "b130e93a60e2a994385e23afa43182efe6c02e6bd3658c6da41cfe8229532174"
   },
   "flop_site_sha256": "cd6c9d77bd3d78b2c92efcb1e68ecb7e970e0ce2ebf9bbb36185c2b0d8b56b4b",
-  "flop_site_terms": ["eligibility"]
+  "flop_site_terms": ["eligibility"],
+  "teaser": {
+    "source": "https://flop.finance/teaser/",
+    "source_tier": "TIER_1_OFFICIAL",
+    "captured_at": "2026-08-27T12:27:42Z",
+    "raw_sha256": "5ef5137d0f032d7e7779d9f18f5e7286d0ce0acce684ea09be50ebd301a0a9db",
+    "normalized_text_sha256": "f93b07c83d71f09926ee536f4e704b52336e4f8c3e6f0a3752d45224a39d3fde",
+    "section_hashes": {
+      "document": "81c7c8fa94e33c4567b0f38dd3660959aa96f6fb4ce7749b01c2f573584ce7ac",
+      "$FLOP is food for your AI agent .": "498da03485cc9c89d85ed12ba7ca612eb82216da968a6d0e91174fd29b222465",
+      "01 Abstract": "bff0b3d2875f23c2b97ca14a9ad0c7d648dbf7a08718f1d447f426daa13d579e",
+      "02 The Flop Network": "b17a52709722fdccabda9bf52fe00be6ab232ad54cb7fba0dacf1868aab46187",
+      "Network parameters": "eb60e280ababb40a021a385f81a4ace5c5710d4047e4a66f9f3e6dfe2d5ba979",
+      "Recommended hardware": "04ccec4b532cdeafdf0c150623c10578d8ea4dac591603ca7c8ceaeb0d8af3c0",
+      "03 Tokenomics": "780b7dee2344cc80a31988a9872c062aeca07c1b1b3b7c95a4efd78fa74997ac",
+      "04 Testnet and Airdrop": "1905f9217da8b04c59f618da0ae454b20f8e3534d683dd0a6dafa5988758ae6e",
+      "05 Governance": "03a38cc9ebb3bd6469aceff3c12a1110a47cad63ad804ae6bf6f1ad72b834345",
+      "06 Hashlock Timelock (HTLC)": "37ea06997549d1f57a72ab374574fcbee2831b1fc4fa207d70691ff33452f699",
+      "07 Flop Labs LLC": "d9083e90d88f74c9e62c2f395e26713dd0f4ca5fd8649556b985581592e90b3a",
+      "08 Flop Foundation": "ac3a279a608089c69a8a9905ac7b223410e76fe2bc09c7880e7a58ef5de01afa"
+    },
+    "signals": {
+      "spec_status": "OFFICIAL_DRAFT",
+      "testnet": "q4 2026",
+      "mainnet": "q1 2027",
+      "genesis_airdrop": "DRAFT",
+      "agent_allocation": "up to 1,200,000,000 (7.0%)",
+      "miner_allocation": "up to 1,200,000,000 (7.0%)",
+      "validator_allocation": "305,505,000 (1.8%)",
+      "reserve_incentives": "794,495,000 (4.6%)",
+      "faucet": "OFFICIAL_DRAFT_MENTION",
+      "inference": "OFFICIAL_DRAFT_MENTION",
+      "did_tasks": "NONE",
+      "unlock_mechanics": "DRAFT",
+      "prizes": "DRAFT",
+      "snapshot": "NOT_ANNOUNCED",
+      "eligibility": "NOT_ANNOUNCED",
+      "claim": "DRAFT_MECHANIC",
+      "yellow_paper": "DRAFT_REFERENCE",
+      "contract_address": []
+    }
+  }
 }

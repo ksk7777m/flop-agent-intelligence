@@ -24,8 +24,12 @@ checks, run:
 PYTHONPATH=src python3 -m flop_agent.cli health-monitor --json
 ```
 
-Normal run records stay in ignored `runtime/`; no schedule is enabled by
-default. See [Monitoring](docs/MONITORING.md).
+Normal local run records stay in ignored `runtime/`. A public-only monitor runs
+twice daily on GitHub Actions at 09:00 and 21:00 JST with `contents: read`, no
+secrets, and zero external writes. It monitors the official FLOP teaser as
+provisional material and alerts on semantic changes, operational
+testnet/faucet/inference endpoints, DID tasks, token events, and a new official
+Yellow Paper link. See [Monitoring](docs/MONITORING.md).
 
 > A source-backed intelligence and safety layer for FLOP / Technocore agents.
 
