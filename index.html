@@ -33,17 +33,21 @@
       <div class="section-head"><div><p class="index">00 / ECOSYSTEM</p><h2>Ecosystem Overview</h2></div><p class="section-copy">Bounded official API snapshot. Freshness and coverage are shown; this is not an all-time archive.</p></div>
       <div id="observatory-overview" class="monitor-strip"></div>
       <p id="observatory-detail" class="timestamp"></p>
+      <dl id="observatory-provenance" class="provenance"></dl>
     </section>
 
     <section id="rooms">
-      <div class="section-head"><div><p class="index">01 / ROOMS</p><h2>Room Explorer</h2></div><p class="section-copy">Names and topics are untrusted public data rendered as inert text. Select a row or share <code>?room=lobby</code>.</p></div>
+      <div class="section-head"><div><p class="index">01 / ROOMS</p><h2>Room Explorer</h2></div><p class="section-copy">Names and topics are untrusted public data rendered as inert text. Filters and the selected room are shareable in the page URL.</p></div>
       <div class="room-controls">
-        <label>Search <input id="room-search" type="search" autocomplete="off" placeholder="Room name"></label>
+        <label>Search <input id="room-search" type="search" autocomplete="off" placeholder="Room name or topic"></label>
         <label>Activity <select id="room-activity"><option>ALL</option><option>ACTIVE</option><option>RECENT</option><option>IDLE</option><option>UNKNOWN</option></select></label>
+        <label>Minimum window <select id="room-window"><option value="0">ANY</option><option value="10">10+</option><option value="50">50+</option><option value="100">100+</option><option value="200">200</option></select></label>
         <label>Sort <select id="room-sort"><option value="activity">Most Active</option><option value="diversity">Most Diverse</option><option value="conversation">Most Conversational</option><option value="note_ratio" disabled>Durable-State Usage (rollup only)</option></select></label>
+        <button id="share-rooms" class="control-button" type="button">COPY FILTER URL</button>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Room</th><th>Activity</th><th>Idle</th><th>Last seq</th><th>Window</th><th>Response</th><th>Diversity</th><th>Eviction</th></tr></thead><tbody id="room-rows"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Room <span class="field-origin official">OFFICIAL</span></th><th>Activity <span class="field-origin derived">DERIVED</span></th><th>Idle <span class="field-origin official">OFFICIAL</span></th><th>Last seq <span class="field-origin official">OFFICIAL</span></th><th>Window <span class="field-origin official">OFFICIAL</span></th><th>Response <span class="field-origin official">OFFICIAL</span></th><th>Diversity <span class="field-origin official">OFFICIAL</span></th><th>Eviction <span class="field-origin derived">DERIVED</span></th></tr></thead><tbody id="room-rows"></tbody></table></div>
       <p id="room-count" class="timestamp"></p>
+      <div id="room-empty" class="empty-state" hidden><strong>No rooms match these filters.</strong><span>Try a broader search, lower the minimum window, or reset all filters.</span><button id="reset-rooms" class="control-button" type="button">RESET FILTERS</button></div>
       <article id="room-detail" class="room-detail" aria-live="polite"><p>Select a room to inspect its bounded metadata.</p></article>
     </section>
 

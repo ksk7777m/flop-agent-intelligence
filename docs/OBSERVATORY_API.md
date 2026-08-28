@@ -16,6 +16,11 @@ snapshot. It is a bounded snapshot, not a live connection or historical archive.
 The combined snapshot JSON Schema is published at
 `/schemas/observatory.schema.json`; the discovery surface is `/openapi.json`.
 
+The dashboard Room Explorer searches room names and topics locally and supports
+shareable query parameters: `q`, `activity`, `window`, `sort`, and `room`.
+These parameters filter only the reviewed static snapshot; they are not server
+API parameters and never cause a room-provided URL to be fetched.
+
 Every output includes source and freshness information. Official values use
 `derived: false`. Local classifications include `derived: true` and a formula or
 method. Null means unavailable, never zero.

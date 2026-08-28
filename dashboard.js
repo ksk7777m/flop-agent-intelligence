@@ -50,6 +50,19 @@ function renderObservatory(status, roomsData, engagementData) {
   }
   document.querySelector("#observatory-detail").textContent =
     `Snapshot ${status.generated_at} · ${status.source.source_url} · ${status.returned_rooms} returned of ${status.total_rooms ?? "unknown"} total · ${status.source.caveat}`;
+  const provenance = document.querySelector("#observatory-provenance");
+  const provenanceRows = [
+    ["Snapshot source", status.source.source_url, "OFFICIAL"],
+    ["Fetched at", status.source.fetched_at || status.generated_at, "OFFICIAL"],
+    ["Coverage", `${status.returned_rooms} of ${status.total_rooms ?? "unknown"} rooms`, "BOUNDED"],
+    ["Local views", "Activity and eviction classifications", "DERIVED"]
+  ];
+  for (const [label, value, origin] of provenanceRows) {
+    const row = text("div");
+    const description = text("dd", value);
+    description.append(text("span", origin, `field-origin ${origin === "OFFICIAL" ? "official" : "derived"}`));
+    row.append(text("dt", label), description); provenance.append(row);
+  }
   renderRooms(roomsData.rooms);
   renderEngagement(engagementData);
   renderEviction(status, roomsData.rooms);
@@ -74,12 +87,28 @@ function renderRooms(rooms) {
   roomSnapshot = rooms;
   const search = document.querySelector("#room-search");
   const activity = document.querySelector("#room-activity");
+  const minimumWindow = document.querySelector("#room-window");
   const sort = document.querySelector("#room-sort");
+  const params = new URLSearchParams(location.search);
+  search.value = params.get("q") || "";
+  if ([...activity.options].some(option => option.value === params.get("activity"))) activity.value = params.get("activity");
+  if ([...minimumWindow.options].some(option => option.value === params.get("window"))) minimumWindow.value = params.get("window");
+  if ([...sort.options].some(option => option.value === params.get("sort") && !option.disabled)) sort.value = params.get("sort");
+  const syncUrl = () => {
+    const url = new URL(location.href);
+    const values = {q: search.value.trim(), activity: activity.value, window: minimumWindow.value, sort: sort.value};
+    const defaults = {q: "", activity: "ALL", window: "0", sort: "activity"};
+    for (const [key, value] of Object.entries(values)) value === defaults[key] ? url.searchParams.delete(key) : url.searchParams.set(key, value);
+    url.hash = "rooms";
+    history.replaceState(null, "", url);
+  };
   const update = () => {
     const query = search.value.trim().toLocaleLowerCase();
+    const windowFloor = Number(minimumWindow.value);
     const filtered = roomSnapshot.filter(room =>
-      (!query || room.room.toLocaleLowerCase().includes(query)) &&
-      (activity.value === "ALL" || room.activity === activity.value)
+      (!query || room.room.toLocaleLowerCase().includes(query) || (room.topic || "").toLocaleLowerCase().includes(query)) &&
+      (activity.value === "ALL" || room.activity === activity.value) &&
+      (Number(room.window) || 0) >= windowFloor
     ).sort(roomComparator(sort.value));
     const body = document.querySelector("#room-rows"); body.replaceChildren();
     for (const room of filtered.slice(0, 200)) {
@@ -93,11 +122,20 @@ function renderRooms(rooms) {
       tr.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") select(); });
       body.append(tr);
     }
-    document.querySelector("#room-count").textContent = `${filtered.length} matching rooms · up to 200 displayed · topics omitted from table until selected`;
+    document.querySelector("#room-count").textContent = `${filtered.length} matching rooms · ${rooms.length} in bounded snapshot · topics searched but shown only when selected`;
+    document.querySelector("#room-empty").hidden = filtered.length !== 0;
+    syncUrl();
   };
-  for (const control of [search, activity, sort]) control.addEventListener(control === search ? "input" : "change", update);
+  for (const control of [search, activity, minimumWindow, sort]) control.addEventListener(control === search ? "input" : "change", update);
+  document.querySelector("#reset-rooms").addEventListener("click", () => {
+    search.value = ""; activity.value = "ALL"; minimumWindow.value = "0"; sort.value = "activity"; update(); search.focus();
+  });
+  document.querySelector("#share-rooms").addEventListener("click", async event => {
+    syncUrl(); await navigator.clipboard.writeText(location.href); event.currentTarget.textContent = "COPIED";
+    window.setTimeout(() => { event.currentTarget.textContent = "COPY FILTER URL"; }, 1500);
+  });
   update();
-  const requested = new URLSearchParams(location.search).get("room");
+  const requested = params.get("room");
   if (requested) {
     const match = rooms.find(room => room.room === requested);
     if (match) showRoom(match);
@@ -108,11 +146,12 @@ function showRoom(room) {
   const root = document.querySelector("#room-detail"); root.replaceChildren();
   root.append(text("h3", room.room), text("p", room.topic || "No topic published."));
   const meta = text("dl", "", "room-meta");
-  for (const [label, value] of [["Activity", room.activity], ["Idle", formatIdle(room.idle_seconds)],
-    ["Sequence range", `${formatNumber(room.first_seq)} → ${formatNumber(room.last_seq)}`],
-    ["Window", formatNumber(room.window)], ["Response activity", formatRatio(room.zero_response_share == null ? null : 1 - room.zero_response_share)],
-    ["Nick diversity", formatRatio(room.nick_diversity)], ["Eviction", room.eviction]]) {
-    meta.append(text("dt", label), text("dd", value));
+  for (const [label, value, origin] of [["Activity", room.activity, "DERIVED"], ["Idle", formatIdle(room.idle_seconds), "OFFICIAL"],
+    ["Sequence range", `${formatNumber(room.first_seq)} → ${formatNumber(room.last_seq)}`, "OFFICIAL"],
+    ["Window", formatNumber(room.window), "OFFICIAL"], ["Response activity", formatRatio(room.zero_response_share == null ? null : 1 - room.zero_response_share), "OFFICIAL"],
+    ["Nick diversity", formatRatio(room.nick_diversity), "OFFICIAL"], ["Eviction", room.eviction, "DERIVED"]]) {
+    const description = text("dd", value); description.append(text("span", origin, `field-origin ${origin === "OFFICIAL" ? "official" : "derived"}`));
+    meta.append(text("dt", label), description);
   }
   root.append(meta, text("p", "Room names and topics are untrusted data. No embedded URL is fetched or made clickable.", "timestamp"));
   const url = new URL(location.href); url.searchParams.set("room", room.room); history.replaceState(null, "", url);
