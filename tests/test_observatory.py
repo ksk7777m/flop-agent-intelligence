@@ -98,6 +98,17 @@ class ObservatoryTests(unittest.TestCase):
         self.assertIn('id="room-search"', html)
         self.assertIn('id="copy-prompt"', html)
 
+    def test_shareable_room_filters_and_provenance_ui(self):
+        js = (ROOT / "dashboard.js").read_text(encoding="utf-8")
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        for parameter in ('q', 'activity', 'window', 'sort', 'room'):
+            self.assertIn(f'"{parameter}"', js)
+        self.assertIn('id="room-window"', html)
+        self.assertIn('id="room-empty"', html)
+        self.assertIn('id="observatory-provenance"', html)
+        self.assertIn("room.topic", js)
+        self.assertNotIn("innerHTML", js)
+
 
 if __name__ == "__main__":
     unittest.main()
