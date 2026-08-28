@@ -1,5 +1,13 @@
 # FLOP Agent Intelligence & Safety Layer
 
+## Collaboration Readiness V1
+
+The repository includes a transport-neutral, fail-closed collaboration state
+machine for future task discovery, claim, handoff, ACK, completion, provenance,
+human approval, signed evidence, and partial-failure recovery. It is
+`READINESS_ONLY`: it has no network writer, signer, wallet integration, live
+mode, or eligibility logic. See [Collaboration Readiness](docs/COLLABORATION_READINESS.md).
+
 ## Technocore Ecosystem Observatory V2-A
 
 The public Dashboard now includes a read-only Room Explorer, official
