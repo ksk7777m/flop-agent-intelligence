@@ -1,4 +1,4 @@
-const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance", "teaser", "testnet_adapter"];
+const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance", "teaser", "testnet_adapter", "presence_adapter"];
 const OBSERVATORY_DATA = ["status", "rooms", "engagement"];
 const safeStatus = value => String(value || "UNKNOWN").toUpperCase();
 const statusClass = value => "status-" + safeStatus(value).toLowerCase().replaceAll(" ", "-").replaceAll("_", "-");
@@ -255,6 +255,22 @@ function renderTestnetAdapter(data) {
     `${data.notice} · Source: ${data.source} · ${data.spec_status} · Generated: ${data.generated_at}`;
 }
 
+function renderPresenceAdapter(data) {
+  const root = document.querySelector("#presence-adapter");
+  const values = [
+    ["Adapter", data.adapter], ["Mode", data.mode], ["Configured rooms", String(data.configured_rooms)],
+    ["Observation", data.observation], ["Local state", data.state], ["Rate limit", data.rate_limit],
+    ["Kill switch", data.kill_switch], ["Live writes", data.live_writes],
+    ["Capability", data.capability_status], ["Collaboration", data.collaboration_state]
+  ];
+  for (const [label, value] of values) {
+    const item = text("div", "", "monitor-item");
+    item.append(text("small", label), text("strong", value, statusClass(value)));
+    root.append(item);
+  }
+  document.querySelector("#presence-adapter-detail").textContent = `${data.notice} · Snapshot: ${data.generated_at}`;
+}
+
 function renderHealth(data) {
   const root = document.querySelector("#health");
   for (const item of data.checks) {
@@ -307,6 +323,7 @@ loadData().then(data => {
   renderSignals(data.signals);
   renderTeaser(data.teaser);
   renderTestnetAdapter(data.testnet_adapter);
+  renderPresenceAdapter(data.presence_adapter);
   renderHealth(data.health);
   renderEvidence(data.evidence);
   renderMaintenance(data.maintenance);

@@ -1,0 +1,9 @@
+{
+  "schema": "technocore-presence-config-v0",
+  "room": "lobby",
+  "note_path": "/kv/did-4e/REPLACE_WITH_PUBLIC_NOTE_ID",
+  "current_note_value": "REPLACE_WITH_CURRENT_PUBLIC_NOTE_VALUE",
+  "minimum_update_seconds": 3600,
+  "enabled": true,
+  "dry_run": true
+}
