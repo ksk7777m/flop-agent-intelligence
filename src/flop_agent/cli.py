@@ -38,6 +38,9 @@ def main() -> None:
     inference.add_argument("--fixture", action="store_true")
     testnet_receipt = testnet_commands.add_parser("verify-receipt")
     testnet_receipt.add_argument("file")
+    presence = commands.add_parser("presence")
+    presence.add_argument("--config", required=True)
+    presence.add_argument("--state", default=str(ROOT / "runtime" / "presence-state.json"))
     commands.add_parser("draft-contribution")
     commands.add_parser("gap-audit")
     demo = commands.add_parser("demo-fixture")
@@ -142,6 +145,10 @@ def main() -> None:
             print(json.dumps({"quote": adapter.quote(request, quote), "preview": adapter.preview(request)}, indent=2))
         elif args.testnet_command == "verify-receipt":
             print(json.dumps(verify_testnet_receipt(load_fixture(Path(args.file))), indent=2))
+    elif args.command == "presence":
+        from .presence import load_config, observe
+
+        print(json.dumps(observe(load_config(Path(args.config)), Path(args.state)), indent=2))
     elif args.command == "draft-contribution":
         print("Built an official-signal monitor for FLOP/Technocore that classifies actionable updates, blocks untrusted wallet/claim instructions, and keeps signed activity logs. Designed to extend into testnet workflows when official APIs are published.")
     elif args.command == "gap-audit":

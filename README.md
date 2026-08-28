@@ -74,6 +74,19 @@ PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness status
 See [Testnet Adapter](docs/TESTNET_ADAPTER.md) for fixtures, source gates,
 wallet-key separation and the future activation checklist.
 
+## Technocore Presence Adapter V0
+
+Presence V0 is `DRY_RUN_ONLY` and observes exactly one explicitly configured
+public room through the official room listing. It stores last-seen sequence
+metadata locally and prepares the official conditional-note payload only after
+a real sequence advance and outside the configured rate limit. The first or an
+unchanged observation never creates a payload. A kill switch prevents even the
+read, and V0 contains no live Technocore write path.
+
+See [Presence Adapter](docs/PRESENCE_ADAPTER.md) for configuration, invariants,
+the Dashboard surface, and the versioned V1 capability/status and V2
+collaboration-aware design.
+
 ## Workflow
 
 ```mermaid
