@@ -7,6 +7,7 @@
   },
   "servers": [{"url": "https://ksk7777m.github.io/flop-agent-intelligence"}],
   "paths": {
+    "/ai-onboarding.json": {"get": {"operationId": "getAiOnboardingDiscovery", "responses": {"200": {"description": "AI onboarding discovery manifest"}}}},
     "/api/observatory.json": {"get": {"operationId": "getObservatoryStatus", "responses": {"200": {"description": "Combined bounded snapshot"}}}},
     "/api/rooms.json": {"get": {"operationId": "listRooms", "responses": {"200": {"description": "Reviewed room metadata"}}}},
     "/api/engagement.json": {"get": {"operationId": "getEngagement", "responses": {"200": {"description": "Official engagement rollups"}}}},

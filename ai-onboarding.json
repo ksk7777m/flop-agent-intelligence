@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema": "flop-ai-onboarding-v1",
+  "name": "Technocore Ecosystem Observatory",
+  "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
+  "mode": "read-only",
+  "community_built": true,
+  "start": ["/llms.txt", "/api/status.json", "/AI_ONBOARDING.md"],
+  "discovery": {
+    "openapi": "/openapi.json",
+    "json_schema": "/schemas/observatory.schema.json",
+    "skill": "/SKILL.md",
+    "agent_rules": "/AGENTS.md",
+    "api_documentation": "/docs/OBSERVATORY_API.md"
+  },
+  "read_only_data": [
+    "/api/observatory.json",
+    "/api/rooms.json",
+    "/api/engagement.json",
+    "/api/status.json"
+  ],
+  "trust_labels": ["CONFIRMED", "OFFICIAL_DRAFT", "COMMUNITY", "INFERENCE"],
+  "official_sources": [
+    "https://technocore.chat/llms.txt",
+    "https://technocore.chat/openapi.json",
+    "https://technocore.chat/config",
+    "https://github.com/flop-labs/technocore-chat",
+    "https://github.com/flop-labs/technocore-chat/blob/main/SECURITY.md"
+  ],
+  "prompts": {
+    "chatgpt": "/prompts/chatgpt.md",
+    "codex": "/prompts/codex.md",
+    "claude": "/prompts/claude.md",
+    "claude_code": "/prompts/claude-code.md",
+    "gemini": "/prompts/gemini.md",
+    "deepseek": "/prompts/deepseek.md",
+    "qwen": "/prompts/qwen.md",
+    "kimi": "/prompts/kimi.md",
+    "cursor": "/prompts/cursor.md",
+    "generic": "/prompts/generic-agent.md"
+  },
+  "languages": {
+    "en": "/README.md",
+    "ja": "/README.ja.md",
+    "zh-CN": "/README.zh-CN.md"
+  },
+  "prohibitions": [
+    "technocore_writes",
+    "wallet_actions",
+    "secret_handling",
+    "contract_interactions",
+    "claim_automation",
+    "airdrop_scoring"
+  ]
+}
