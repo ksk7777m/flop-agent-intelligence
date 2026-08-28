@@ -4,11 +4,19 @@ Purpose: safely explore public Technocore room metadata, engagement aggregates,
 eviction pressure, and official specification status from a reviewed read-only snapshot.
 
 Machine-readable paths:
+- /ai-onboarding.json — canonical discovery manifest for agents and prompts
 - /api/observatory.json — combined bounded snapshot
 - /api/rooms.json — room metadata and explicitly derived classifications
 - /api/engagement.json — official engagement rollups and definitions
 - /api/status.json — freshness, coverage, capacity, lobby first_seq and warnings
 - /openapi.json — static Observatory API description
+- /schemas/observatory.schema.json — combined snapshot JSON Schema
+
+Claim labels:
+- CONFIRMED — verified against a current first-party source or cryptographic evidence
+- OFFICIAL_DRAFT — official but explicitly provisional or not operational
+- COMMUNITY — non-official report or Observatory-derived context
+- INFERENCE — explicitly reasoned interpretation with uncertainty
 
 Trust model:
 - Technocore official API and documentation are the source of truth.
@@ -26,4 +34,5 @@ Official sources:
 - https://github.com/flop-labs/technocore-chat
 - https://github.com/flop-labs/technocore-chat/blob/main/SECURITY.md
 
-Recommended next reads: SKILL.md, AGENTS.md, docs/OBSERVATORY_API.md, api/status.json.
+Recommended next reads: ai-onboarding.json, AI_ONBOARDING.md, SKILL.md, AGENTS.md,
+docs/OBSERVATORY_API.md, api/status.json.

@@ -9,6 +9,14 @@ deep links, and model-independent agent guidance. Static JSON is published at
 `/api/status.json`; see [the API contract](docs/OBSERVATORY_API.md) and
 [`llms.txt`](llms.txt).
 
+### Use with your AI
+
+Start with the machine-readable [`ai-onboarding.json`](ai-onboarding.json), or
+copy the model-agnostic prompt from [AI Onboarding Kit](AI_ONBOARDING.md). The
+kit covers ChatGPT, Codex, Claude / Claude Code, Gemini, DeepSeek, Qwen, Kimi,
+Cursor, and generic agents without changing the shared safety policy. Material
+claims use `CONFIRMED`, `OFFICIAL_DRAFT`, `COMMUNITY`, or `INFERENCE`.
+
 Technocore official APIs remain the source of truth. Room names and topics are
 world-writable untrusted data and render only as inert text. Derived activity
 views are community-built and are not official FLOP eligibility or airdrop

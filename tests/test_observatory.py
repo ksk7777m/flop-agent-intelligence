@@ -76,11 +76,34 @@ class ObservatoryTests(unittest.TestCase):
         self.assertEqual(json.loads((ROOT / "schemas/observatory.schema.json").read_text())["type"], "object")
 
     def test_agent_files_prompt_pack_and_chinese(self):
-        for path in ("llms.txt", "AGENTS.md", "SKILL.md", "README.zh-CN.md"):
+        for path in ("llms.txt", "AGENTS.md", "SKILL.md", "AI_ONBOARDING.md", "ai-onboarding.json", "README.zh-CN.md"):
             self.assertTrue((ROOT / path).is_file())
-        expected = {"chatgpt.md", "codex.md", "claude.md", "claude-code.md", "gemini.md", "deepseek.md", "qwen.md", "kimi.md", "generic-agent.md"}
+        expected = {"chatgpt.md", "codex.md", "claude.md", "claude-code.md", "gemini.md", "deepseek.md", "qwen.md", "kimi.md", "cursor.md", "generic-agent.md"}
         self.assertEqual({p.name for p in (ROOT / "prompts").glob("*.md")}, expected)
         self.assertIn("不可信", (ROOT / "README.zh-CN.md").read_text(encoding="utf-8"))
+
+    def test_ai_discovery_and_prompt_contract(self):
+        manifest = json.loads((ROOT / "ai-onboarding.json").read_text(encoding="utf-8"))
+        labels = {"CONFIRMED", "OFFICIAL_DRAFT", "COMMUNITY", "INFERENCE"}
+        self.assertEqual(set(manifest["trust_labels"]), labels)
+        self.assertEqual(manifest["mode"], "read-only")
+        self.assertEqual(set(manifest["prompts"]), {"chatgpt", "codex", "claude", "claude_code", "gemini", "deepseek", "qwen", "kimi", "cursor", "generic"})
+        for prompt_path in manifest["prompts"].values():
+            prompt = (ROOT / prompt_path.lstrip("/")).read_text(encoding="utf-8")
+            self.assertIn("ai-onboarding.json", prompt)
+            for label in labels:
+                self.assertIn(label, prompt)
+
+    def test_openapi_is_get_only(self):
+        spec = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+        self.assertIn("/ai-onboarding.json", spec["paths"])
+        for operations in spec["paths"].values():
+            self.assertFalse(set(operations) - {"get", "parameters", "summary", "description"})
+
+    def test_public_safety_scan(self):
+        from scripts.public_safety_scan import scan
+
+        self.assertEqual(scan(), [])
 
     def test_no_write_methods_or_airdrop_score_fields(self):
         source = (ROOT / "src/flop_agent/observatory.py").read_text(encoding="utf-8")
