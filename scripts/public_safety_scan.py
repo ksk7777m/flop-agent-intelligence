@@ -1,4 +1,4 @@
-"""Fail when public onboarding surfaces expose unsafe capabilities or locators."""
+"""Fail when public publication surfaces expose unsafe capabilities or data."""
 
 from __future__ import annotations
 
@@ -6,40 +6,119 @@ import json
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC_FILES = [
-    ROOT / "AI_ONBOARDING.md",
-    ROOT / "ai-onboarding.json",
-    ROOT / "llms.txt",
-    ROOT / "index.html",
-    ROOT / "dashboard.js",
-    ROOT / "openapi.json",
-    *sorted((ROOT / "prompts").glob("*.md")),
-]
+PUBLIC_TOP = {
+    "README.md", "README.ja.md", "README.zh-CN.md", "AI_ONBOARDING.md",
+    "ai-onboarding.json", "llms.txt", "openapi.json", "index.html",
+    "dashboard.js", "sitemap.xml",
+}
+PUBLIC_DIRS = ("docs", "schemas", "api", "examples", "prompts")
 
 FORBIDDEN_PATTERNS = {
-    "local filesystem path": re.compile(r"(?:/Users/|/home/|[A-Za-z]:\\\\Users\\\\)"),
-    "private Technocore locator": re.compile(r"\bmb-p-[A-Za-z0-9_-]+", re.IGNORECASE),
+    "local filesystem path": re.compile(
+        r"(?:file://|/Users/[^/\s]+/|/home/[^/\s]+/|[A-Za-z]:\\Users\\[^\\\s]+\\)",
+        re.IGNORECASE,
+    ),
+    "private Technocore locator": re.compile(
+        r"(?<![A-Za-z0-9_])(?:[a-z0-9]+-)*(?:mb-)?p-[a-z0-9][a-z0-9_-]*",
+        re.IGNORECASE,
+    ),
     "PEM private key": re.compile(r"BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY"),
     "credential-bearing URL": re.compile(r"https?://[^\s/@:]+:[^\s/@]+@"),
-    "Technocore write route": re.compile(r"technocore\.chat/(?:say|say-signed|set|note|claim)(?:/|\b)", re.IGNORECASE),
+    "Technocore write route": re.compile(
+        r"technocore\.chat/(?:say|say-signed|set|set-signed|post|note|claim)(?:/|\b)",
+        re.IGNORECASE,
+    ),
+    "wallet secret material": re.compile(
+        r"(?:seed phrase|wallet private key|wallet_secret|private_key|mnemonic)\s*[:=]\s*[\"']?[^\s\"']+",
+        re.IGNORECASE,
+    ),
 }
+RAW_FIELDS = {
+    "raw_value", "value_raw", "note_value", "response_body",
+    "message_body", "raw_body", "content", "body",
+}
+ALWAYS_RAW_FIELDS = RAW_FIELDS - {"content", "body"}
+
+
+def public_files(root: Path = ROOT) -> list[Path]:
+    files = [root / name for name in PUBLIC_TOP if (root / name).is_file()]
+    for dirname in PUBLIC_DIRS:
+        directory = root / dirname
+        if directory.is_dir():
+            files.extend(path for path in directory.rglob("*") if path.is_file())
+    return sorted(set(files))
+
+
+def scan_text(text: str) -> list[str]:
+    return [label for label, pattern in FORBIDDEN_PATTERNS.items() if pattern.search(text)]
+
+
+def is_database_artifact(name: str) -> bool:
+    return re.search(r"\.(?:sqlite3?|db)(?:-(?:wal|shm))?$|-(?:wal|shm)$", name, re.IGNORECASE) is not None
 
 
 def scan() -> list[str]:
     findings: list[str] = []
-    for path in PUBLIC_FILES:
+    files = public_files()
+    for path in files:
         text = path.read_text(encoding="utf-8")
-        for label, pattern in FORBIDDEN_PATTERNS.items():
-            if pattern.search(text):
-                findings.append(f"{path.relative_to(ROOT)}: {label}")
+        for label in scan_text(text):
+            findings.append(f"{path.relative_to(ROOT)}: {label}")
+        name = str(path.relative_to(ROOT))
+        if is_database_artifact(name):
+            findings.append(f"{name}: database artifact in public publication surface")
 
     openapi = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
     for route, operations in openapi.get("paths", {}).items():
         unsafe = set(operations) - {"get", "parameters", "summary", "description"}
         if unsafe:
             findings.append(f"openapi.json: non-GET operation at {route}: {sorted(unsafe)}")
+
+    for path in sorted((ROOT / "api").rglob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+
+        def visit(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key.lower() in RAW_FIELDS:
+                        findings.append(
+                            f"{path.relative_to(ROOT)}: raw-value-shaped public field {key}"
+                        )
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+            elif (
+                path.parent.name == "kv"
+                and isinstance(value, str)
+                and re.search(r"https?://", value)
+                and value != "https://technocore.chat"
+            ):
+                findings.append(
+                    f"{path.relative_to(ROOT)}: note-derived or unexpected URL in public API"
+                )
+
+        visit(payload)
+
+    for path in (p for p in files if p.suffix == ".json" and "schemas" not in p.parts and "api" not in p.parts):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            findings.append(f"{path.relative_to(ROOT)}: malformed public JSON")
+            continue
+
+        def visit_public_json(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key.lower() in ALWAYS_RAW_FIELDS:
+                        findings.append(f"{path.relative_to(ROOT)}: raw-content public field {key}")
+                    visit_public_json(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit_public_json(child)
+
+        visit_public_json(payload)
 
     manifest = json.loads((ROOT / "ai-onboarding.json").read_text(encoding="utf-8"))
     if manifest.get("mode") != "read-only":
@@ -51,4 +130,4 @@ if __name__ == "__main__":
     failures = scan()
     if failures:
         raise SystemExit("Public-safety scan failed:\n- " + "\n- ".join(failures))
-    print(f"Public-safety scan passed ({len(PUBLIC_FILES)} files, GET-only OpenAPI).")
+    print(f"Public-safety scan passed ({len(public_files())} files, GET-only OpenAPI).")

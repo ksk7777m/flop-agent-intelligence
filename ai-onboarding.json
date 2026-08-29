@@ -15,6 +15,7 @@
     "openapi": "https://ksk7777m.github.io/flop-agent-intelligence/openapi.json",
     "schema_index": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/index.json",
     "json_schema": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/observatory.schema.json",
+    "kv_json_schema": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json",
     "skill": "https://ksk7777m.github.io/flop-agent-intelligence/SKILL.md",
     "agent_rules": "https://ksk7777m.github.io/flop-agent-intelligence/AGENTS.md",
     "api_documentation": "https://ksk7777m.github.io/flop-agent-intelligence/docs/OBSERVATORY_API.md",
@@ -24,7 +25,11 @@
     "https://ksk7777m.github.io/flop-agent-intelligence/api/observatory.json",
     "https://ksk7777m.github.io/flop-agent-intelligence/api/rooms.json",
     "https://ksk7777m.github.io/flop-agent-intelligence/api/engagement.json",
-    "https://ksk7777m.github.io/flop-agent-intelligence/api/status.json"
+    "https://ksk7777m.github.io/flop-agent-intelligence/api/status.json",
+    "https://ksk7777m.github.io/flop-agent-intelligence/api/kv/status.json",
+    "https://ksk7777m.github.io/flop-agent-intelligence/api/kv/namespaces.json",
+    "https://ksk7777m.github.io/flop-agent-intelligence/api/kv/changes.json",
+    "https://ksk7777m.github.io/flop-agent-intelligence/api/kv/presence.json"
   ],
   "trust_labels": ["CONFIRMED", "OFFICIAL_DRAFT", "COMMUNITY", "INFERENCE"],
   "trust_label_definitions": "https://ksk7777m.github.io/flop-agent-intelligence/AI_ONBOARDING.md#trust-labels",

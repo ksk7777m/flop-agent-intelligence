@@ -9,6 +9,13 @@
       "path": "schemas/observatory.schema.json",
       "purpose": "Validates the combined bounded Observatory snapshot.",
       "related_endpoint": "https://ksk7777m.github.io/flop-agent-intelligence/api/observatory.json"
+    },
+    {
+      "name": "Technocore KV Observatory Snapshot Family",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json",
+      "path": "schemas/kv-observatory.schema.json",
+      "purpose": "Validates the four allowlist-only, raw-value-free KV Observatory snapshots.",
+      "related_endpoint": "https://ksk7777m.github.io/flop-agent-intelligence/api/kv/status.json"
     }
   ]
 }

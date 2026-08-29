@@ -1,0 +1,28 @@
+{
+  "snapshot_id": "unobserved-v0-20260829",
+  "generated_at": "2026-08-29T00:00:00Z",
+  "observer_started_at": "2026-08-29T00:00:00Z",
+  "observer_version": "kv-observatory-v0",
+  "official_source": {
+    "derived": false,
+    "url": "https://technocore.chat"
+  },
+  "observer_derived": {
+    "derived": true,
+    "method": "periodic GET observations of an explicit namespace allowlist; no live observation performed for this published generation"
+  },
+  "timestamp_semantics": {
+    "first_seen_at": "FIRST OBSERVED BY THIS OBSERVATORY",
+    "last_changed_at": "LAST OBSERVED CHANGE",
+    "server_write_timestamp_available": false
+  },
+  "schema": "technocore-kv-changes-v1",
+  "changes": [],
+  "room_nonce": {
+    "policy": "KEEP_BUT_AGGREGATE_ONLY",
+    "observed_count": 0,
+    "changed_count": 0,
+    "last_observer_activity_at": null,
+    "trust_class": "SERVER_CONTROLLED"
+  }
+}

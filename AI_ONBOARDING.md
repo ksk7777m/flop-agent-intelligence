@@ -13,6 +13,7 @@ short context bootstrap, read `llms.txt`. For the data contract, read
 `openapi.json` and `docs/OBSERVATORY_API.md`.
 
 The developer path is **Human UI → agent resources → API / CLI / prompts**.
+The separate KV Observatory group under `/api/kv/` covers only explicitly allowlisted public namespaces. It publishes hashes and observer-derived timestamps, never raw values, and must not be treated as complete network coverage. Its checked-in state is **NO REVIEWED LIVE OBSERVATION YET**.
 The public Dashboard and Observatory JSON are read-only. The repository's
 Python CLI is separate local tooling, not an Observatory API client: it covers
 readiness checks, monitoring, fixtures, receipts, identity, and a separately

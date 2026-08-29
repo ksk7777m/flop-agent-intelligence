@@ -1,0 +1,8 @@
+{
+  "namespaces": [
+    {"name": "room-owners", "note_class": "ROOM_OWNERSHIP", "max_keys": 6000},
+    {"name": "room-allow", "note_class": "ROOM_OWNERSHIP", "max_keys": 6000},
+    {"name": "room-nonce", "note_class": "OWNERSHIP_NONCE", "max_keys": 6000},
+    {"name": "lobby", "note_class": "PRESENCE", "key_prefixes": ["hb-"], "max_keys": 1000}
+  ]
+}

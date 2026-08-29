@@ -1,0 +1,635 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json",
+  "title": "Technocore KV Observatory V0 snapshot family",
+  "description": "Strong per-document validation. Observer timestamps are not server timestamps; room-nonce is aggregate-only.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/status"
+    },
+    {
+      "$ref": "#/$defs/namespaces"
+    },
+    {
+      "$ref": "#/$defs/changes"
+    },
+    {
+      "$ref": "#/$defs/presence"
+    }
+  ],
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "official_source": {
+      "type": "object",
+      "required": [
+        "derived",
+        "url"
+      ],
+      "properties": {
+        "derived": {
+          "const": false
+        },
+        "url": {
+          "const": "https://technocore.chat"
+        }
+      },
+      "additionalProperties": false
+    },
+    "observer_derived": {
+      "type": "object",
+      "required": [
+        "derived",
+        "method"
+      ],
+      "properties": {
+        "derived": {
+          "const": true
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "timestamp_semantics": {
+      "type": "object",
+      "required": [
+        "first_seen_at",
+        "last_changed_at",
+        "server_write_timestamp_available"
+      ],
+      "properties": {
+        "first_seen_at": {
+          "const": "FIRST OBSERVED BY THIS OBSERVATORY"
+        },
+        "last_changed_at": {
+          "const": "LAST OBSERVED CHANGE"
+        },
+        "server_write_timestamp_available": {
+          "const": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "trust": {
+      "enum": [
+        "ORDINARY_UNAUTHENTICATED",
+        "OWNERSHIP_CONTROLLED",
+        "SERVER_CONTROLLED",
+        "UNKNOWN"
+      ]
+    },
+    "state": {
+      "enum": [
+        "OBSERVED",
+        "UNCHANGED",
+        "CHANGED",
+        "DISAPPEARED_FROM_OBSERVER_VIEW",
+        "REAPPEARED",
+        "UNKNOWN"
+      ],
+      "description": "DISAPPEARED_FROM_OBSERVER_VIEW means absence observed by this observer; cause unknown."
+    },
+    "poll": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "namespace",
+        "observed_at",
+        "status",
+        "key_count",
+        "status_code",
+        "retry_after",
+        "error_class",
+        "request_path_class",
+        "cycle_id"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "status": {
+          "enum": [
+            "SUCCESS",
+            "FAILED",
+            "RATE_LIMITED",
+            "CONTRACT_CHANGED"
+          ]
+        },
+        "key_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "status_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 100,
+          "maximum": 599
+        },
+        "retry_after": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9]{1,5}$"
+        },
+        "error_class": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 64
+        },
+        "request_path_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cycle_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "namespace",
+        "last_poll",
+        "last_successful_poll",
+        "last_failed_poll"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string"
+        },
+        "last_poll": {
+          "$ref": "#/$defs/poll"
+        },
+        "last_successful_poll": {
+          "$ref": "#/$defs/poll"
+        },
+        "last_failed_poll": {
+          "$ref": "#/$defs/poll"
+        }
+      },
+      "additionalProperties": false
+    },
+    "nonce": {
+      "type": "object",
+      "description": "Aggregate only. Individual room-nonce keys, hashes, timestamps, timeline, and history are invalid.",
+      "required": [
+        "policy",
+        "observed_count",
+        "changed_count",
+        "last_observer_activity_at",
+        "trust_class"
+      ],
+      "properties": {
+        "policy": {
+          "const": "KEEP_BUT_AGGREGATE_ONLY"
+        },
+        "observed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_observer_activity_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "trust_class": {
+          "const": "SERVER_CONTROLLED"
+        }
+      },
+      "additionalProperties": false
+    },
+    "note": {
+      "type": "object",
+      "required": [
+        "namespace",
+        "key",
+        "first_seen_at",
+        "last_observed_at",
+        "last_changed_at",
+        "value_sha256",
+        "previous_value_sha256",
+        "observation_count",
+        "existence_state",
+        "note_class",
+        "trust_class",
+        "observer_version"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "first_seen_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "FIRST OBSERVED BY THIS OBSERVATORY; observer-derived, not note creation time."
+        },
+        "last_observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Most recent successful observation by this Observatory."
+        },
+        "last_changed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "LAST OBSERVED CHANGE; observer-derived, not server write time."
+        },
+        "value_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "previous_value_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "observation_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "existence_state": {
+          "$ref": "#/$defs/state"
+        },
+        "note_class": {
+          "type": "string"
+        },
+        "trust_class": {
+          "$ref": "#/$defs/trust"
+        },
+        "observer_version": {
+          "const": "kv-observatory-v0"
+        }
+      },
+      "additionalProperties": false
+    },
+    "namespace_record": {
+      "type": "object",
+      "required": [
+        "namespace",
+        "note_class",
+        "ever_successfully_observed",
+        "latest_cycle_state",
+        "current_key_count",
+        "room_nonce_aggregate"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string"
+        },
+        "note_class": {
+          "type": "string"
+        },
+        "ever_successfully_observed": {
+          "type": "boolean"
+        },
+        "latest_cycle_state": {
+          "enum": [
+            "CURRENTLY_COVERED",
+            "NOT_CURRENTLY_COVERED",
+            "UNKNOWN"
+          ]
+        },
+        "current_key_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "room_nonce_aggregate": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonce"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "object",
+      "required": [
+        "schema",
+        "snapshot_id",
+        "generated_at",
+        "observer_started_at",
+        "observer_version",
+        "official_source",
+        "observer_derived",
+        "timestamp_semantics",
+        "mode",
+        "coverage_claim",
+        "observation_status",
+        "namespaces_configured",
+        "namespaces_ever_successfully_observed",
+        "namespaces_successfully_observed_in_latest_cycle",
+        "namespaces_currently_covered",
+        "latest_completed_cycle_id",
+        "keys_successfully_observed",
+        "keys_currently_observed",
+        "existence_states",
+        "coverage",
+        "room_nonce",
+        "warnings"
+      ],
+      "properties": {
+        "schema": {
+          "const": "technocore-kv-status-v1"
+        },
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observer_started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observer_version": {
+          "const": "kv-observatory-v0"
+        },
+        "official_source": {
+          "$ref": "#/$defs/official_source"
+        },
+        "observer_derived": {
+          "$ref": "#/$defs/observer_derived"
+        },
+        "timestamp_semantics": {
+          "$ref": "#/$defs/timestamp_semantics"
+        },
+        "mode": {
+          "const": "READ_ONLY"
+        },
+        "coverage_claim": {
+          "const": "OBSERVED COVERAGE ONLY"
+        },
+        "observation_status": {
+          "enum": [
+            "NO REVIEWED LIVE OBSERVATION YET",
+            "REVIEWED LIVE OBSERVATION AVAILABLE"
+          ]
+        },
+        "namespaces_configured": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "namespaces_ever_successfully_observed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "namespaces_successfully_observed_in_latest_cycle": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "namespaces_currently_covered": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latest_completed_cycle_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keys_successfully_observed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "keys_currently_observed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "existence_states": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/state"
+          }
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/coverage"
+          }
+        },
+        "room_nonce": {
+          "$ref": "#/$defs/nonce"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "contains": {
+            "const": "An empty snapshot does not imply zero KV or Presence activity or that no keys exist."
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "namespaces": {
+      "type": "object",
+      "required": [
+        "schema",
+        "snapshot_id",
+        "generated_at",
+        "observer_started_at",
+        "observer_version",
+        "official_source",
+        "observer_derived",
+        "timestamp_semantics",
+        "coverage",
+        "namespaces"
+      ],
+      "properties": {
+        "schema": {
+          "const": "technocore-kv-namespaces-v1"
+        },
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observer_started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observer_version": {
+          "const": "kv-observatory-v0"
+        },
+        "official_source": {
+          "$ref": "#/$defs/official_source"
+        },
+        "observer_derived": {
+          "$ref": "#/$defs/observer_derived"
+        },
+        "timestamp_semantics": {
+          "$ref": "#/$defs/timestamp_semantics"
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/coverage"
+          }
+        },
+        "namespaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/namespace_record"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "changes": {
+      "type": "object",
+      "required": [
+        "schema",
+        "snapshot_id",
+        "generated_at",
+        "observer_started_at",
+        "observer_version",
+        "official_source",
+        "observer_derived",
+        "timestamp_semantics",
+        "changes",
+        "room_nonce"
+      ],
+      "properties": {
+        "schema": {
+          "const": "technocore-kv-changes-v1"
+        },
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observer_started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observer_version": {
+          "const": "kv-observatory-v0"
+        },
+        "official_source": {
+          "$ref": "#/$defs/official_source"
+        },
+        "observer_derived": {
+          "$ref": "#/$defs/observer_derived"
+        },
+        "timestamp_semantics": {
+          "$ref": "#/$defs/timestamp_semantics"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        },
+        "room_nonce": {
+          "$ref": "#/$defs/nonce"
+        }
+      },
+      "additionalProperties": false
+    },
+    "presence": {
+      "type": "object",
+      "required": [
+        "schema",
+        "snapshot_id",
+        "generated_at",
+        "observer_started_at",
+        "observer_version",
+        "official_source",
+        "observer_derived",
+        "timestamp_semantics",
+        "identity_inference",
+        "presence",
+        "warnings"
+      ],
+      "properties": {
+        "schema": {
+          "const": "technocore-kv-presence-v1"
+        },
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observer_started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observer_version": {
+          "const": "kv-observatory-v0"
+        },
+        "official_source": {
+          "$ref": "#/$defs/official_source"
+        },
+        "observer_derived": {
+          "$ref": "#/$defs/observer_derived"
+        },
+        "timestamp_semantics": {
+          "$ref": "#/$defs/timestamp_semantics"
+        },
+        "identity_inference": {
+          "const": false
+        },
+        "presence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/note"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

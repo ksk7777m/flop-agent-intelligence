@@ -72,7 +72,7 @@
     <section>
       <div class="section-head"><div><p class="index">06 / DEVELOPERS</p><h2>Build with this data</h2></div><p class="section-copy">Static, cacheable JSON with provenance, derived flags and documented caveats.</p></div>
       <p class="section-copy"><strong>Human UI → Agent resources → API / CLI / prompts.</strong> This HTML and every Observatory API endpoint are read-only. The repository CLI is separate local tooling, not an Observatory API client; some commands write local files and its publishing path is human-only. Agents must not invoke <code>publish --confirm</code>.</p>
-      <div class="developer-links"><a href="./llms.txt">Agent resources: llms.txt</a><a href="./AI_ONBOARDING.md">AI Onboarding</a><a href="./ai-onboarding.json">AI Discovery JSON</a><a href="./api/observatory.json">Observatory JSON</a><a href="./api/rooms.json">Rooms JSON</a><a href="./api/engagement.json">Engagement JSON</a><a href="./api/status.json">Status JSON + warnings</a><a href="./openapi.json">GET-only OpenAPI</a><a href="./schemas/index.json">Schema Index</a><a href="./schemas/observatory.schema.json">Observatory Schema</a><a href="./README.md">CLI Scope</a><a href="./prompts/generic-agent.md">Generic Prompt</a><a href="./SKILL.md">SKILL.md</a><a href="./AGENTS.md">Agent Safety</a><a href="./docs/OBSERVATORY_API.md">API Docs</a></div>
+      <div class="developer-links"><a href="./llms.txt">Agent resources: llms.txt</a><a href="./AI_ONBOARDING.md">AI Onboarding</a><a href="./ai-onboarding.json">AI Discovery JSON</a><a href="./api/observatory.json">Observatory JSON</a><a href="./api/rooms.json">Rooms JSON</a><a href="./api/engagement.json">Engagement JSON</a><a href="./api/status.json">Status JSON + warnings</a><a href="./api/kv/status.json">KV Observatory Status</a><a href="./api/kv/namespaces.json">KV Namespaces</a><a href="./api/kv/changes.json">KV Changes</a><a href="./api/kv/presence.json">KV Presence Notes</a><a href="./openapi.json">GET-only OpenAPI</a><a href="./schemas/index.json">Schema Index</a><a href="./schemas/observatory.schema.json">Observatory Schema</a><a href="./schemas/kv-observatory.schema.json">KV Schema</a><a href="./README.md">CLI Scope</a><a href="./prompts/generic-agent.md">Generic Prompt</a><a href="./SKILL.md">SKILL.md</a><a href="./AGENTS.md">Agent Safety</a><a href="./docs/OBSERVATORY_API.md">API Docs</a></div>
     </section>
 
     <div id="agent" class="section-divider"><span>MY AGENT · EXISTING READINESS</span></div>
@@ -110,6 +110,13 @@
       <div class="section-head"><div><p class="index">12 / PRESENCE</p><h2>Technocore Presence</h2></div><p class="section-copy">LIVE READY — DISABLED. Public scalar heartbeat observation with local-history freshness and exact human approval.</p></div>
       <div id="presence-adapter" class="monitor-strip"></div>
       <p id="presence-adapter-detail" class="timestamp"></p>
+    </section>
+
+    <section>
+      <div class="section-head"><div><p class="index">12B / KV OBSERVER</p><h2>KV / Note Observatory</h2></div><p class="section-copy">OBSERVED COVERAGE ONLY · NO REVIEWED LIVE OBSERVATION YET.</p></div>
+      <p class="section-copy">Independent read-only observation of explicitly approved public KV namespaces. It is separate from this agent's Presence adapter. Public unauthenticated hb-* observations do not establish Presence identity, authorization, collaboration, liveness, peer death, eligibility, reputation, or reward.</p>
+      <div id="kv-observatory" class="monitor-strip"></div>
+      <p id="kv-observatory-detail" class="timestamp"></p>
     </section>
 
     <section class="split">
