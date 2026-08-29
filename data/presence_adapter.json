@@ -1,16 +1,17 @@
 {
-  "schema": "technocore-presence-dashboard-v0",
-  "adapter": "PRESENCE_V0",
-  "mode": "DRY_RUN_ONLY",
+  "schema": "technocore-presence-dashboard-v0.1",
+  "title": "Technocore Presence",
+  "adapter": "Presence V0.1",
+  "mode": "LIVE READY — DISABLED",
   "configured_rooms": 1,
   "room": "lobby",
-  "observation": "OFFICIAL_ROOM_LISTING",
-  "state": "LOCAL_ONLY",
-  "rate_limit": "ENFORCED",
-  "kill_switch": "AVAILABLE",
+  "path": "/kv/lobby/hb-flop-agent-1df29904c79a56",
+  "state": "NEVER_OBSERVED",
+  "writes": 0,
+  "frequency_guard": "ONE ATTEMPT / HOUR MINIMUM",
+  "kill_switch": "ENGAGED",
   "live_writes": "DISABLED",
-  "capability_status": "V1_DESIGNED",
-  "collaboration_state": "V2_DESIGNED",
-  "generated_at": "2026-08-28T00:00:00Z",
-  "notice": "A baseline or unchanged sequence never prepares an update. V0 cannot submit a Technocore write."
+  "generated_at": "2026-08-29T00:00:00Z",
+  "notice": "Presence is a public, unsigned, mutable Technocore convention. It does not prove identity, authorization, collaboration, FLOP eligibility, reputation or reward.",
+  "boundary": "V0 scalar presence only; V1 capability/health and V2 collaboration are separate future contracts."
 }

@@ -297,17 +297,16 @@ function renderTestnetAdapter(data) {
 function renderPresenceAdapter(data) {
   const root = document.querySelector("#presence-adapter");
   const values = [
-    ["Adapter", data.adapter], ["Mode", data.mode], ["Configured rooms", String(data.configured_rooms)],
-    ["Observation", data.observation], ["Local state", data.state], ["Rate limit", data.rate_limit],
-    ["Kill switch", data.kill_switch], ["Live writes", data.live_writes],
-    ["Capability", data.capability_status], ["Collaboration", data.collaboration_state]
+    ["Adapter", data.adapter], ["Mode", data.mode], ["Room", data.room],
+    ["State", data.state], ["Writes", String(data.writes)], ["Frequency guard", data.frequency_guard],
+    ["Kill switch", data.kill_switch], ["Live writes", data.live_writes]
   ];
   for (const [label, value] of values) {
     const item = text("div", "", "monitor-item");
     item.append(text("small", label), text("strong", value, statusClass(value)));
     root.append(item);
   }
-  document.querySelector("#presence-adapter-detail").textContent = `${data.notice} · Snapshot: ${data.generated_at}`;
+  document.querySelector("#presence-adapter-detail").textContent = `${data.notice} · ${data.boundary} · Snapshot: ${data.generated_at}`;
 }
 
 function renderHealth(data) {

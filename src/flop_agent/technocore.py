@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -13,7 +14,7 @@ from typing import Any, Dict
 from .identity import load_identity, sign_message
 
 BASE_URL = "https://technocore.chat"
-ALLOWED_READ_PATHS = {"/healthz", "/rooms", "/r/lobby?format=json", "/llms.txt", "/skill.md", "/patterns.md", "/.well-known/agent.json"}
+ALLOWED_READ_PATHS = {"/healthz", "/rooms", "/rooms?format=json", "/r/lobby?format=json", "/llms.txt", "/skill.md", "/patterns.md", "/.well-known/agent.json"}
 DID_NOTE_PATH = "/kv/did-4e/1df29904c79a56"
 
 
@@ -35,6 +36,19 @@ def read_official(path: str) -> Any:
     if path not in ALLOWED_READ_PATHS:
         raise ValueError("read path is not in the configured official allowlist")
     return _request(BASE_URL + path)
+
+
+def read_presence_note(path: str) -> Any:
+    """Read only a validated public heartbeat note; 404 is represented as absent."""
+    match = re.fullmatch(r"/kv/([a-z0-9][a-z0-9_-]{0,47})/hb-[a-z0-9][a-z0-9_-]{0,47}", path)
+    if not match or match.group(1).startswith(("p-", "mb-")) or "-p-" in match.group(1):
+        raise ValueError("not a public presence-note path")
+    try:
+        return _request(BASE_URL + path)
+    except RuntimeError as error:
+        if "Technocore HTTP 404:" in str(error):
+            return None
+        raise
 
 
 def healthcheck() -> Dict[str, Any]:

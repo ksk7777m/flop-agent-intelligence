@@ -1,9 +1,11 @@
 {
-  "schema": "technocore-presence-config-v0",
+  "schema": "technocore-presence-config-v0.1",
   "room": "lobby",
-  "note_path": "/kv/did-4e/REPLACE_WITH_PUBLIC_NOTE_ID",
-  "current_note_value": "REPLACE_WITH_CURRENT_PUBLIC_NOTE_VALUE",
+  "nick": "flop-agent-1df29904c79a56",
+  "semantic_spec_anchor": "agent-json-version:0.10.0",
+  "approved_agent_version": "0.10.0",
   "minimum_update_seconds": 3600,
-  "enabled": true,
-  "dry_run": true
+  "operator_enabled": true,
+  "live_write_enabled": false,
+  "semantic_spec_approved": true
 }
