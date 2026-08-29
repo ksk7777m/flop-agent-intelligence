@@ -1,0 +1,6 @@
+{
+  "schema": "engagement-diff-v1", "generated_at": null, "comparison": "NO_PREVIOUS_SAMPLE",
+  "delta_zero_response_share": null, "delta_nick_diversity": null, "delta_notes_total": null,
+  "new_rooms": [], "not_observed_in_latest_snapshot": [], "changed_rooms": [],
+  "evidence_level": "LOCAL_DERIVED", "warnings": ["No reviewed comparison is available."]
+}

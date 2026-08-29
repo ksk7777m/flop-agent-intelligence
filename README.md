@@ -113,6 +113,12 @@ V1/V2 boundaries.
 
 The KV Observatory is an independent, local, GET-only temporal observer for an explicit allowlist of public namespaces. Its public contract is **OBSERVED COVERAGE ONLY** and remains **NO REVIEWED LIVE OBSERVATION YET** until a reviewed poll succeeds. It never persists raw note values or error bodies; `room-nonce` is public only as bounded aggregate metadata. See [KV Observatory](docs/KV_OBSERVATORY.md) and the [KV schema](schemas/kv-observatory.schema.json).
 
+## Engagement & Decay Monitor V1
+
+The independent Engagement Monitor is implemented with collection and scheduling disabled. A future one-shot run reads only the exact public aggregate URL `https://technocore.chat/rooms?format=json&limit=200`, normalizes bounded fields into ignored `runtime/`, discards raw and error bodies, and makes no room, KV, mailbox, wallet, or write request. The intended interval is 15 minutes with a hard five-minute floor; no scheduler is installed or activated. Checked-in APIs honestly report **NO REVIEWED ENGAGEMENT HISTORY YET**.
+
+Low nick diversity does not imply bot activity and high zero-response share does not imply spam. These are observational signals, not FLOP eligibility, reward, reputation, or airdrop scores.
+
 ## Workflow
 
 ```mermaid

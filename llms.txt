@@ -10,11 +10,16 @@ Machine-readable URLs:
 - https://ksk7777m.github.io/flop-agent-intelligence/api/observatory.json — combined bounded snapshot
 - https://ksk7777m.github.io/flop-agent-intelligence/api/rooms.json — room metadata and explicitly derived classifications
 - https://ksk7777m.github.io/flop-agent-intelligence/api/engagement.json — official engagement rollups and definitions
+- https://ksk7777m.github.io/flop-agent-intelligence/api/engagement-status.json — Engagement Monitor state; collection and scheduler remain disabled
+- https://ksk7777m.github.io/flop-agent-intelligence/api/engagement-diff.json — neutral local comparison of reviewed observations
+- https://ksk7777m.github.io/flop-agent-intelligence/api/engagement-series.json — bounded seven-day reviewed history
+- https://ksk7777m.github.io/flop-agent-intelligence/api/capabilities.json — independent observation, readiness, and live-write capability states
 - https://ksk7777m.github.io/flop-agent-intelligence/api/status.json — freshness, coverage, capacity, lobby first_seq and warnings
 - https://ksk7777m.github.io/flop-agent-intelligence/openapi.json — static Observatory API description
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/index.json — public schema index
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/observatory.schema.json — combined snapshot JSON Schema
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json — KV snapshot-family JSON Schema
+- https://ksk7777m.github.io/flop-agent-intelligence/schemas/engagement-sample.v1.json — strict normalized Engagement sample schema
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/status.json — KV allowlist coverage and empty-state status
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/namespaces.json — configured versus successfully observed namespaces
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/changes.json — observer-derived hash changes; no raw values

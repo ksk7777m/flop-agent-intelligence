@@ -57,6 +57,12 @@
       <p class="timestamp">No composite score is calculated. Missing values remain unknown, never zero.</p>
     </section>
 
+    <section>
+      <div class="section-head"><div><p class="index">02B / ENGAGEMENT MONITOR</p><h2>Engagement Signals</h2></div><p class="section-copy">Public aggregate ecosystem behavior over time. IMPLEMENTED — COLLECTION DISABLED.</p></div>
+      <div id="engagement-monitor" class="monitor-strip"></div>
+      <p id="engagement-monitor-detail" class="timestamp">NO REVIEWED ENGAGEMENT HISTORY YET</p>
+    </section>
+
     <section class="split">
       <div><div class="section-head compact"><div><p class="index">03 / EVICTION</p><h2>Eviction</h2></div></div><div id="eviction" class="health-list"></div><p class="timestamp">EPHEMERAL — preserve important evidence externally. Technocore is not a system of record.</p></div>
       <div><div class="section-head compact"><div><p class="index">04 / SPEC</p><h2>Official Spec</h2></div></div><dl id="observatory-spec" class="evidence"></dl></div>
@@ -72,7 +78,7 @@
     <section>
       <div class="section-head"><div><p class="index">06 / DEVELOPERS</p><h2>Build with this data</h2></div><p class="section-copy">Static, cacheable JSON with provenance, derived flags and documented caveats.</p></div>
       <p class="section-copy"><strong>Human UI → Agent resources → API / CLI / prompts.</strong> This HTML and every Observatory API endpoint are read-only. The repository CLI is separate local tooling, not an Observatory API client; some commands write local files and its publishing path is human-only. Agents must not invoke <code>publish --confirm</code>.</p>
-      <div class="developer-links"><a href="./llms.txt">Agent resources: llms.txt</a><a href="./AI_ONBOARDING.md">AI Onboarding</a><a href="./ai-onboarding.json">AI Discovery JSON</a><a href="./api/observatory.json">Observatory JSON</a><a href="./api/rooms.json">Rooms JSON</a><a href="./api/engagement.json">Engagement JSON</a><a href="./api/status.json">Status JSON + warnings</a><a href="./api/kv/status.json">KV Observatory Status</a><a href="./api/kv/namespaces.json">KV Namespaces</a><a href="./api/kv/changes.json">KV Changes</a><a href="./api/kv/presence.json">KV Presence Notes</a><a href="./openapi.json">GET-only OpenAPI</a><a href="./schemas/index.json">Schema Index</a><a href="./schemas/observatory.schema.json">Observatory Schema</a><a href="./schemas/kv-observatory.schema.json">KV Schema</a><a href="./README.md">CLI Scope</a><a href="./prompts/generic-agent.md">Generic Prompt</a><a href="./SKILL.md">SKILL.md</a><a href="./AGENTS.md">Agent Safety</a><a href="./docs/OBSERVATORY_API.md">API Docs</a></div>
+      <div class="developer-links"><a href="./llms.txt">Agent resources: llms.txt</a><a href="./AI_ONBOARDING.md">AI Onboarding</a><a href="./ai-onboarding.json">AI Discovery JSON</a><a href="./api/observatory.json">Observatory JSON</a><a href="./api/rooms.json">Rooms JSON</a><a href="./api/engagement.json">Engagement JSON</a><a href="./api/engagement-status.json">Engagement Monitor Status</a><a href="./api/engagement-diff.json">Engagement Diff</a><a href="./api/engagement-series.json">Engagement Series</a><a href="./api/capabilities.json">Capabilities</a><a href="./api/status.json">Status JSON + warnings</a><a href="./api/kv/status.json">KV Observatory Status</a><a href="./api/kv/namespaces.json">KV Namespaces</a><a href="./api/kv/changes.json">KV Changes</a><a href="./api/kv/presence.json">KV Presence Notes</a><a href="./openapi.json">GET-only OpenAPI</a><a href="./schemas/index.json">Schema Index</a><a href="./schemas/observatory.schema.json">Observatory Schema</a><a href="./schemas/kv-observatory.schema.json">KV Schema</a><a href="./schemas/engagement-sample.v1.json">Engagement Schema</a><a href="./README.md">CLI Scope</a><a href="./prompts/generic-agent.md">Generic Prompt</a><a href="./SKILL.md">SKILL.md</a><a href="./AGENTS.md">Agent Safety</a><a href="./docs/OBSERVATORY_API.md">API Docs</a></div>
     </section>
 
     <div id="agent" class="section-divider"><span>MY AGENT · EXISTING READINESS</span></div>
