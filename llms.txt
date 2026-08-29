@@ -18,7 +18,7 @@ Machine-readable URLs:
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/status.json — KV allowlist coverage and empty-state status
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/namespaces.json — configured versus successfully observed namespaces
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/changes.json — observer-derived hash changes; no raw values
-- https://ksk7777m.github.io/flop-agent-intelligence/api/kv/presence.json — unauthenticated hb-* aggregate observations
+- https://ksk7777m.github.io/flop-agent-intelligence/api/kv/presence.json — observer-derived records for public unauthenticated hb-* notes in approved namespaces; not identity, authorization, peer-liveness, eligibility, reputation, or reward proof
 
 Repository CLI:
 - The local Python CLI provides readiness, monitoring, fixtures, receipts, identity and separately gated publishing workflows; it is not an Observatory API client.

@@ -1,4 +1,4 @@
-const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance", "teaser", "testnet_adapter", "presence_adapter"];
+const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance", "teaser", "testnet_adapter"];
 const OBSERVATORY_DATA = ["status", "rooms", "engagement"];
 const KV_DATA = ["status", "namespaces", "changes", "presence"];
 const safeStatus = value => String(value || "UNKNOWN").toUpperCase();
@@ -21,18 +21,29 @@ async function loadData() {
     if (!response.ok) throw new Error(`api/${name}: HTTP ${response.status}`);
     return [`observatory_${name}`, await response.json()];
   }));
+  return Object.fromEntries([...existing, ...observatory]);
+}
+
+async function loadKvData() {
   const kv = await Promise.all(KV_DATA.map(async name => {
     const response = await fetch(`./api/kv/${name}.json`, {cache: "no-store"});
     if (!response.ok) throw new Error(`api/kv/${name}: HTTP ${response.status}`);
     return [`kv_${name}`, await response.json()];
   }));
-  return Object.fromEntries([...existing, ...observatory, ...kv]);
+  return Object.fromEntries(kv);
+}
+
+async function loadPresenceData() {
+  const response = await fetch("./data/presence_adapter.json", {cache: "no-store"});
+  if (!response.ok) throw new Error(`presence_adapter: HTTP ${response.status}`);
+  return response.json();
 }
 
 function renderKv(status, namespaces, changes, presence) {
   const root = document.querySelector("#kv-observatory");
   const values = [["State", status.observation_status], ["Coverage", status.coverage_claim],
-    ["Configured namespaces", status.namespaces_configured], ["Successfully observed", status.namespaces_successfully_observed],
+    ["Configured namespaces", status.namespaces_configured], ["Ever observed", status.namespaces_ever_successfully_observed],
+    ["Latest cycle", status.namespaces_successfully_observed_in_latest_cycle],
     ["Current keys", status.keys_currently_observed], ["Recent hash records", changes.changes.length],
     ["Presence-note records", presence.presence.length], ["Snapshot", status.snapshot_id]];
   for (const [label, value] of values) {
@@ -42,6 +53,14 @@ function renderKv(status, namespaces, changes, presence) {
   }
   document.querySelector("#kv-observatory-detail").textContent =
     `${status.generated_at} · ${namespaces.namespaces.length} allowlisted namespaces · room-nonce aggregate only · no raw values`;
+}
+
+function renderKvError() {
+  document.querySelector("#kv-observatory").replaceChildren(
+    text("strong", "KV DATA UNAVAILABLE", "status-unknown")
+  );
+  document.querySelector("#kv-observatory-detail").textContent =
+    "The independent KV snapshot could not be loaded. Other dashboard data remains available. No retry was attempted.";
 }
 
 const formatNumber = value => value == null ? "UNKNOWN" : Number(value).toLocaleString();
@@ -331,6 +350,14 @@ function renderPresenceAdapter(data) {
   document.querySelector("#presence-adapter-detail").textContent = `${data.notice} · ${data.boundary} · Snapshot: ${data.generated_at}`;
 }
 
+function renderPresenceError() {
+  document.querySelector("#presence-adapter").replaceChildren(
+    text("strong", "PRESENCE DATA UNAVAILABLE", "status-unknown")
+  );
+  document.querySelector("#presence-adapter-detail").textContent =
+    "Presence readiness data could not be loaded. This does not describe KV Observatory availability.";
+}
+
 function renderHealth(data) {
   const root = document.querySelector("#health");
   for (const item of data.checks) {
@@ -383,8 +410,6 @@ loadData().then(data => {
   renderSignals(data.signals);
   renderTeaser(data.teaser);
   renderTestnetAdapter(data.testnet_adapter);
-  renderPresenceAdapter(data.presence_adapter);
-  renderKv(data.kv_status, data.kv_namespaces, data.kv_changes, data.kv_presence);
   renderHealth(data.health);
   renderEvidence(data.evidence);
   renderMaintenance(data.maintenance);
@@ -392,3 +417,8 @@ loadData().then(data => {
   document.querySelector("main").prepend(text("div", `Dashboard data unavailable: ${error.message}`, "error-box"));
   document.querySelector("#observatory-headline").textContent = "ERROR · DATA REVIEW REQUIRED";
 });
+
+loadPresenceData().then(renderPresenceAdapter).catch(() => renderPresenceError());
+loadKvData().then(kv => {
+  renderKv(kv.kv_status, kv.kv_namespaces, kv.kv_changes, kv.kv_presence);
+}).catch(() => renderKvError());

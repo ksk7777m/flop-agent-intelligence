@@ -47,28 +47,32 @@
     {
       "namespace": "public-presence",
       "note_class": "PRESENCE",
-      "successfully_observed": false,
+      "ever_successfully_observed": false,
+      "latest_cycle_state": "UNKNOWN",
       "current_key_count": 0,
       "room_nonce_aggregate": null
     },
     {
       "namespace": "room-owners",
       "note_class": "ROOM_OWNERSHIP",
-      "successfully_observed": false,
+      "ever_successfully_observed": false,
+      "latest_cycle_state": "UNKNOWN",
       "current_key_count": 0,
       "room_nonce_aggregate": null
     },
     {
       "namespace": "room-allow",
       "note_class": "ROOM_OWNERSHIP",
-      "successfully_observed": false,
+      "ever_successfully_observed": false,
+      "latest_cycle_state": "UNKNOWN",
       "current_key_count": 0,
       "room_nonce_aggregate": null
     },
     {
       "namespace": "room-nonce",
       "note_class": "OWNERSHIP_NONCE",
-      "successfully_observed": false,
+      "ever_successfully_observed": false,
+      "latest_cycle_state": "UNKNOWN",
       "current_key_count": null,
       "room_nonce_aggregate": {
         "policy": "KEEP_BUT_AGGREGATE_ONLY",

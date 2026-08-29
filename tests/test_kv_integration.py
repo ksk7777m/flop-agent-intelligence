@@ -1,8 +1,11 @@
 import json
+import copy
+import importlib.util
 import re
 import unittest
 from pathlib import Path
 from flop_agent.presence import load_semantic_contract
+import jsonschema
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,12 +43,14 @@ class KVIntegrationTests(unittest.TestCase):
         self.assertEqual(len({p["snapshot_id"] for p in payloads}), 1)
         self.assertEqual(len({p["generated_at"] for p in payloads}), 1)
         self.assertEqual(payloads[0]["observation_status"], "NO REVIEWED LIVE OBSERVATION YET")
-        self.assertEqual(payloads[0]["namespaces_successfully_observed"], 0)
+        self.assertEqual(payloads[0]["namespaces_ever_successfully_observed"], 0)
+        self.assertEqual(payloads[0]["namespaces_successfully_observed_in_latest_cycle"], 0)
 
     def test_gitignore_database_artifacts(self):
         text = (ROOT / ".gitignore").read_text()
-        for pattern in ("*.sqlite", "*.sqlite3", "*.db", "*.db-wal", "*.db-shm", "*.sqlite-wal", "*.sqlite-shm", "*-wal", "*-shm"):
+        for pattern in ("/runtime/**/*.sqlite", "/runtime/**/*.sqlite3", "/runtime/**/*.db", "/runtime/**/*-wal", "/runtime/**/*-shm"):
             self.assertIn(pattern, text)
+        self.assertNotIn("\n*.db\n", text)
 
     def test_dashboard_separates_presence_and_kv_and_uses_inert_text(self):
         html = (ROOT / "index.html").read_text()
@@ -56,6 +61,53 @@ class KVIntegrationTests(unittest.TestCase):
         self.assertNotIn("innerHTML", js)
         ids = re.findall(r'\bid="([^"]+)"', html)
         self.assertEqual(len(ids), len(set(ids)))
+        self.assertRegex(js, r"loadData\(\)\.then[\s\S]+loadKvData\(\)\.then")
+        self.assertIn(".catch(() => renderKvError())", js)
+        self.assertIn("KV DATA UNAVAILABLE", js)
+        self.assertIn("loadPresenceData().then(renderPresenceAdapter).catch(() => renderPresenceError())", js)
+        self.assertLess(js.index("loadPresenceData().then"), js.index("loadKvData().then"))
+
+    def test_kv_schema_strict_shapes_and_negative_cases(self):
+        schema = json.loads((ROOT / "schemas/kv-observatory.schema.json").read_text())
+        validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+        payloads = {p.stem: json.loads(p.read_text()) for p in (ROOT / "api/kv").glob("*.json")}
+        for payload in payloads.values():
+            validator.validate(payload)
+        for name, field in (("status", "coverage_claim"), ("namespaces", "namespaces"),
+                            ("changes", "changes"), ("presence", "presence")):
+            bad = copy.deepcopy(payloads[name]); bad.pop(field)
+            self.assertFalse(validator.is_valid(bad))
+        for forbidden in ("raw_value", "value_raw", "note_value", "response_body",
+                          "message_body", "raw_body", "content", "body"):
+            bad = copy.deepcopy(payloads["changes"]); bad[forbidden] = "secret"
+            self.assertFalse(validator.is_valid(bad))
+        bad = copy.deepcopy(payloads["changes"]); bad["unexpected"] = True
+        self.assertFalse(validator.is_valid(bad))
+        nonce = copy.deepcopy(payloads["changes"]); nonce["room_nonce"]["key"] = "forbidden"
+        self.assertFalse(validator.is_valid(nonce))
+        invalid_hash = copy.deepcopy(payloads["changes"])
+        invalid_hash["changes"] = [{"namespace":"lobby","key":"hb-x","first_seen_at":"2026-01-01T00:00:00Z","last_observed_at":"2026-01-01T00:00:00Z","last_changed_at":"2026-01-01T00:00:00Z","value_sha256":"bad","previous_value_sha256":None,"observation_count":1,"existence_state":"OBSERVED","note_class":"PRESENCE","trust_class":"ORDINARY_UNAUTHENTICATED","observer_version":"kv-observatory-v0"}]
+        self.assertFalse(validator.is_valid(invalid_hash))
+        invalid_hash["changes"][0]["value_sha256"] = "a" * 64
+        validator.validate(invalid_hash)
+
+    def test_public_scanner_precision_and_surface_coverage(self):
+        spec = importlib.util.spec_from_file_location("public_safety_scan", ROOT / "scripts/public_safety_scan.py")
+        scanner = importlib.util.module_from_spec(spec); spec.loader.exec_module(scanner)
+        names = {p.relative_to(ROOT).as_posix() for p in scanner.public_files()}
+        for expected in ("README.md", "README.ja.md", "README.zh-CN.md", "docs/KV_OBSERVATORY.md",
+                         "schemas/kv-observatory.schema.json", "api/kv/status.json",
+                         "examples/kv-observer.example.json"):
+            self.assertIn(expected, names)
+        positives = ["/Users/alice/secret", "file:///tmp/key", "https://u:p@example.invalid/x",
+                     "mb-p-secret", "prefix-mb-p-secret", "https://technocore.chat/set-signed/x",
+                     "wallet_secret=abcd"]
+        for value in positives:
+            self.assertTrue(scanner.scan_text(value), value)
+        for harmless in ("keep-private-key material out", "step-by-step", "https://technocore.chat/openapi.json", "value_sha256"):
+            self.assertFalse(scanner.scan_text(harmless), harmless)
+        for name in ("state.sqlite", "state.sqlite3", "state.db", "state.db-wal", "state.sqlite-shm"):
+            self.assertTrue(scanner.is_database_artifact(name))
 
 
 if __name__ == "__main__":

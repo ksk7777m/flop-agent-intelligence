@@ -21,8 +21,10 @@
   "coverage_claim": "OBSERVED COVERAGE ONLY",
   "observation_status": "NO REVIEWED LIVE OBSERVATION YET",
   "namespaces_configured": 4,
-  "namespaces_successfully_observed": 0,
+  "namespaces_ever_successfully_observed": 0,
+  "namespaces_successfully_observed_in_latest_cycle": 0,
   "namespaces_currently_covered": 0,
+  "latest_completed_cycle_id": null,
   "keys_successfully_observed": 0,
   "keys_currently_observed": 0,
   "existence_states": [

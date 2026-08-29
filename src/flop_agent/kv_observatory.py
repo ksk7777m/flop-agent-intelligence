@@ -6,8 +6,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
-import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -155,8 +155,15 @@ class Store:
         CREATE TABLE IF NOT EXISTS polls (
           id INTEGER PRIMARY KEY, namespace TEXT NOT NULL, observed_at TEXT NOT NULL,
           status TEXT NOT NULL, key_count INTEGER, status_code INTEGER,
-          retry_after TEXT, error_class TEXT, request_path_class TEXT);
+          retry_after TEXT, error_class TEXT, request_path_class TEXT,
+          cycle_id TEXT);
+        CREATE TABLE IF NOT EXISTS poll_cycles (
+          cycle_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
+          completed_at TEXT, status TEXT NOT NULL);
         """)
+        poll_columns = {r[1] for r in self.db.execute("PRAGMA table_info(polls)")}
+        if "cycle_id" not in poll_columns:
+            self.db.execute("ALTER TABLE polls ADD COLUMN cycle_id TEXT")
         version = self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         if version and int(version[0]) != SCHEMA_VERSION:
             raise ApiContractError("unsupported observer database schema")
@@ -164,7 +171,21 @@ class Store:
         self.db.execute("INSERT OR IGNORE INTO meta VALUES('observer_started_at', ?)", (utc_now(),))
         self.db.commit()
 
-    def observe(self, config: NamespaceConfig, hashes: Mapping[str, str], observed_at: str) -> None:
+    def begin_cycle(self, observed_at: str) -> str:
+        cycle_id = str(uuid.uuid4())
+        with self.db:
+            self.db.execute("INSERT INTO poll_cycles VALUES(?,?,NULL,'IN_PROGRESS')", (cycle_id, observed_at))
+        return cycle_id
+
+    def complete_cycle(self, cycle_id: str, completed_at: str) -> None:
+        with self.db:
+            changed = self.db.execute("""UPDATE poll_cycles SET completed_at=?, status='COMPLETED'
+                WHERE cycle_id=? AND status='IN_PROGRESS'""", (completed_at, cycle_id)).rowcount
+            if changed != 1:
+                raise ApiContractError("poll cycle is missing or already completed")
+
+    def observe(self, config: NamespaceConfig, hashes: Mapping[str, str], observed_at: str,
+                cycle_id: str | None = None) -> None:
         with self.db:
             current = {r["key"]: r for r in self.db.execute("SELECT * FROM notes WHERE namespace=?", (config.name,))}
             for key, digest in hashes.items():
@@ -190,21 +211,27 @@ class Store:
                     existence_state='DISAPPEARED_FROM_OBSERVER_VIEW', observer_version=?
                     WHERE namespace=? AND key=?""", (observed_at, OBSERVER_VERSION, config.name, key))
             self.db.execute("""INSERT INTO polls(namespace,observed_at,status,key_count,status_code,
-                retry_after,error_class,request_path_class) VALUES(?,?,?,?,?,?,?,?)""",
-                (config.name, observed_at, "SUCCESS", len(hashes), 200, None, None, "NAMESPACE_AND_KEYS"))
+                retry_after,error_class,request_path_class,cycle_id) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (config.name, observed_at, "SUCCESS", len(hashes), 200, None, None, "NAMESPACE_AND_KEYS", cycle_id))
 
     def failed_poll(self, namespace: str, observed_at: str, status: str, status_code: int | None,
-                    retry_after: str | None, error_class: str, request_path_class: str) -> None:
+                    retry_after: str | None, error_class: str, request_path_class: str,
+                    cycle_id: str | None = None) -> None:
         with self.db:
             self.db.execute("""INSERT INTO polls(namespace,observed_at,status,key_count,status_code,
-                retry_after,error_class,request_path_class) VALUES(?,?,?,NULL,?,?,?,?)""",
-                (namespace, observed_at, status, status_code, retry_after, error_class[:64], request_path_class))
+                retry_after,error_class,request_path_class,cycle_id) VALUES(?,?,?,NULL,?,?,?,?,?)""",
+                (namespace, observed_at, status, status_code, retry_after, error_class[:64], request_path_class, cycle_id))
 
     def snapshot(self, namespaces: list[NamespaceConfig], generated_at: str | None = None) -> dict[str, dict]:
         generated_at = generated_at or utc_now()
         rows = [dict(r) for r in self.db.execute("SELECT * FROM notes ORDER BY namespace,key")]
         polls = [dict(r) for r in self.db.execute("""SELECT namespace,observed_at,status,key_count,
-            status_code,retry_after,error_class,request_path_class FROM polls ORDER BY id DESC""")]
+            status_code,retry_after,error_class,request_path_class,cycle_id FROM polls ORDER BY id DESC""")]
+        latest_completed = self.db.execute("""SELECT cycle_id,completed_at FROM poll_cycles
+            WHERE status='COMPLETED' ORDER BY rowid DESC LIMIT 1""").fetchone()
+        latest_cycle_id = latest_completed["cycle_id"] if latest_completed else None
+        latest_cycle_polls = [p for p in polls if p["cycle_id"] == latest_cycle_id]
+        latest_cycle_by_namespace = {p["namespace"]: p for p in latest_cycle_polls}
         started = self.db.execute("SELECT value FROM meta WHERE key='observer_started_at'").fetchone()[0]
         latest = {}
         for poll in polls:
@@ -218,8 +245,9 @@ class Store:
                 "last_successful_poll": next((p for p in namespace_polls if p["status"] == "SUCCESS"), None),
                 "last_failed_poll": next((p for p in namespace_polls if p["status"] != "SUCCESS"), None),
             })
-        successful_namespaces = {p["namespace"] for p in polls if p["status"] == "SUCCESS"}
-        reviewed = bool(successful_namespaces)
+        ever_successful = {p["namespace"] for p in polls if p["status"] == "SUCCESS"}
+        latest_successful = {p["namespace"] for p in latest_cycle_polls if p["status"] == "SUCCESS"}
+        reviewed = bool(ever_successful)
         common = {
             "snapshot_id": str(uuid.uuid4()), "generated_at": generated_at, "observer_started_at": started,
             "observer_version": OBSERVER_VERSION, "official_source": {"derived": False, "url": OFFICIAL_ORIGIN},
@@ -238,8 +266,12 @@ class Store:
         status = {**common, "schema": "technocore-kv-status-v1", "mode": "READ_ONLY",
                   "coverage_claim": "OBSERVED COVERAGE ONLY",
                   "observation_status": "REVIEWED LIVE OBSERVATION AVAILABLE" if reviewed else "NO REVIEWED LIVE OBSERVATION YET",
-                  "namespaces_configured": len(namespaces), "namespaces_successfully_observed": len(successful_namespaces),
-                  "namespaces_currently_covered": len(successful_namespaces), "keys_successfully_observed": len(rows),
+                  "namespaces_configured": len(namespaces),
+                  "namespaces_ever_successfully_observed": len(ever_successful),
+                  "namespaces_successfully_observed_in_latest_cycle": len(latest_successful),
+                  "namespaces_currently_covered": len(latest_successful),
+                  "latest_completed_cycle_id": latest_cycle_id,
+                  "keys_successfully_observed": len(rows),
                   "keys_currently_observed": len(visible),
                   "existence_states": ["OBSERVED", "UNCHANGED", "CHANGED",
                     "DISAPPEARED_FROM_OBSERVER_VIEW", "REAPPEARED", "UNKNOWN"],
@@ -250,7 +282,9 @@ class Store:
                     "Disappearance cause is not observable.", "Observer timestamps are not creation or server write timestamps."]}
         namespace_payload = {**common, "schema": "technocore-kv-namespaces-v1", "coverage": coverage,
             "namespaces": [{"namespace": n.name, "note_class": n.note_class,
-                "successfully_observed": n.name in successful_namespaces,
+                "ever_successfully_observed": n.name in ever_successful,
+                "latest_cycle_state": ("CURRENTLY_COVERED" if n.name in latest_successful else
+                    "NOT_CURRENTLY_COVERED" if n.name in latest_cycle_by_namespace else "UNKNOWN"),
                 "current_key_count": None if n.name == "room-nonce" else sum(r["namespace"] == n.name for r in visible),
                 "room_nonce_aggregate": nonce_aggregate if n.name == "room-nonce" else None} for n in namespaces]}
         changes = {**common, "schema": "technocore-kv-changes-v1", "changes": public_rows, "room_nonce": nonce_aggregate}
@@ -313,16 +347,17 @@ class Observer:
 
     def poll(self, observed_at: str | None = None) -> dict:
         observed_at = observed_at or utc_now()
+        cycle_id = self.store.begin_cycle(observed_at)
         result = {"successful": 0, "failed": 0, "rate_limited": 0, "writes": 0}
         for config in self.configs:
             listing_url = f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}?format=json"
             status, body, headers = self._get(listing_url)
             if status == 429:
-                self.store.failed_poll(config.name, observed_at, "RATE_LIMITED", status, sanitize_retry_after(headers.get("Retry-After")), "HTTP_RATE_LIMIT", "NAMESPACE_LIST")
+                self.store.failed_poll(config.name, observed_at, "RATE_LIMITED", status, sanitize_retry_after(headers.get("Retry-After")), "HTTP_RATE_LIMIT", "NAMESPACE_LIST", cycle_id)
                 result["rate_limited"] += 1
                 continue
             if status != 200:
-                self.store.failed_poll(config.name, observed_at, "FAILED", status, None, "HTTP_ERROR", "NAMESPACE_LIST")
+                self.store.failed_poll(config.name, observed_at, "FAILED", status, None, "HTTP_ERROR", "NAMESPACE_LIST", cycle_id)
                 result["failed"] += 1
                 continue
             try:
@@ -341,38 +376,115 @@ class Observer:
                     raw = note_value(value_body)
                     hashes[key] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
                     del raw
-                self.store.observe(config, hashes, observed_at)
+                self.store.observe(config, hashes, observed_at, cycle_id)
                 result["successful"] += 1
             except RateLimited as exc:
-                self.store.failed_poll(config.name, observed_at, "RATE_LIMITED", 429, exc.retry_after, "HTTP_RATE_LIMIT", "NOTE_READ")
+                self.store.failed_poll(config.name, observed_at, "RATE_LIMITED", 429, exc.retry_after, "HTTP_RATE_LIMIT", "NOTE_READ", cycle_id)
                 result["rate_limited"] += 1
             except ApiContractError as exc:
-                self.store.failed_poll(config.name, observed_at, "CONTRACT_CHANGED", None, None, exc.__class__.__name__, "NAMESPACE_OR_NOTE_READ")
+                self.store.failed_poll(config.name, observed_at, "CONTRACT_CHANGED", None, None, exc.__class__.__name__, "NAMESPACE_OR_NOTE_READ", cycle_id)
                 result["failed"] += 1
+        self.store.complete_cycle(cycle_id, observed_at)
         return result
 
 
-def write_snapshots(store: Store, configs: list[NamespaceConfig], output: Path, generated_at: str | None = None) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    generation = store.snapshot(configs, generated_at)
-    if len({p["snapshot_id"] for p in generation.values()}) != 1 or len({p["generated_at"] for p in generation.values()}) != 1:
+SNAPSHOT_FILES = ("status.json", "namespaces.json", "changes.json", "presence.json")
+
+
+def _validate_generation(directory: Path) -> tuple[str, str]:
+    if not directory.is_dir():
+        raise ApiContractError("snapshot generation is not a directory")
+    payloads = []
+    for name in SNAPSHOT_FILES:
+        path = directory / name
+        if not path.is_file():
+            raise ApiContractError(f"incomplete snapshot generation: {name}")
+        payloads.append(json.loads(path.read_text(encoding="utf-8")))
+    snapshot_ids = {p.get("snapshot_id") for p in payloads}
+    generated_values = {p.get("generated_at") for p in payloads}
+    if len(snapshot_ids) != 1 or None in snapshot_ids or len(generated_values) != 1 or None in generated_values:
         raise ApiContractError("inconsistent snapshot generation")
-    temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=output.parent))
+    return snapshot_ids.pop(), generated_values.pop()
+
+
+def _atomic_pointer(output: Path, generation: Path,
+                    fault: Callable[[str], None] | None = None) -> None:
+    fault = fault or (lambda _step: None)
+    pointer = output.with_name(f".{output.name}-pointer-{uuid.uuid4().hex}")
+    pointer.symlink_to(os.path.relpath(generation, output.parent), target_is_directory=True)
+    try:
+        fault("pointer_created")
+        fault("before_pointer_swap")
+        os.replace(pointer, output)
+        fault("pointer_swapped")
+    finally:
+        if pointer.is_symlink():
+            pointer.unlink()
+
+
+def recover_snapshot_output(output: Path) -> Path | None:
+    """Recover a missing/dangling current pointer from the latest complete generation."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    generations = output.with_name(f"{output.name}-generations")
+    if generations.exists():
+        for partial in generations.glob(".tmp-*"):
+            if partial.is_dir():
+                shutil.rmtree(partial)
+    if output.is_symlink():
+        try:
+            _validate_generation(output.resolve(strict=True))
+            return output.resolve()
+        except (FileNotFoundError, ApiContractError, json.JSONDecodeError):
+            output.unlink()
+    elif output.exists():
+        # A legacy real directory remains readable, but cannot be atomically replaced.
+        _validate_generation(output)
+        return output
+    if not generations.is_dir():
+        return None
+    candidates = sorted((p for p in generations.iterdir() if p.is_dir() and not p.name.startswith(".")),
+                        key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    for candidate in candidates:
+        try:
+            _validate_generation(candidate)
+        except (ApiContractError, json.JSONDecodeError):
+            continue
+        _atomic_pointer(output, candidate)
+        return candidate
+    return None
+
+
+def write_snapshots(store: Store, configs: list[NamespaceConfig], output: Path,
+                    generated_at: str | None = None,
+                    fault: Callable[[str], None] | None = None) -> None:
+    """Publish by atomically swapping a symlink; completed generations remain immutable."""
+    fault = fault or (lambda _step: None)
+    recover_snapshot_output(output)
+    if output.exists() and not output.is_symlink():
+        raise ApiContractError("atomic publication requires a symlink-managed output path")
+    generation = store.snapshot(configs, generated_at)
+    snapshot_id = next(iter(generation.values()))["snapshot_id"]
+    generations = output.with_name(f"{output.name}-generations")
+    generations.mkdir(parents=True, exist_ok=True)
+    temporary = generations / f".tmp-{snapshot_id}"
+    final = generations / snapshot_id
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    fault("before_temporary_create")
+    temporary.mkdir()
+    fault("temporary_created")
     try:
         for name, payload in generation.items():
-            path = temporary / f"{name}.json"
-            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-            json.loads(path.read_text(encoding="utf-8"))
-        previous = output.with_name(f".{output.name}-previous")
-        if previous.exists():
-            for child in previous.iterdir(): child.unlink()
-            previous.rmdir()
-        if output.exists(): os.replace(output, previous)
-        os.replace(temporary, output)
-        if previous.exists():
-            for child in previous.iterdir(): child.unlink()
-            previous.rmdir()
+            (temporary / f"{name}.json").write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        fault("before_validation")
+        _validate_generation(temporary)
+        fault("validated")
+        fault("before_generation_promotion")
+        os.replace(temporary, final)
+        fault("generation_promoted")
+        _atomic_pointer(output, final, fault)
+        _validate_generation(output.resolve(strict=True))
     finally:
         if temporary.exists():
-            for child in temporary.iterdir(): child.unlink()
-            temporary.rmdir()
+            shutil.rmtree(temporary)

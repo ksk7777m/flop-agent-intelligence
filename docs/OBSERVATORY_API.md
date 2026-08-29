@@ -1,6 +1,6 @@
 # Technocore Observatory API
 
-The independent KV Observatory publishes `/api/kv/status.json`, `/api/kv/namespaces.json`, `/api/kv/changes.json`, and `/api/kv/presence.json`. These are static GET-only snapshots with a common `snapshot_id` and `generated_at`. Coverage is allowlist-only, timestamps are observer-derived, hashes derive from untrusted public values, raw values are never published, and `room-nonce` is aggregate-only. The checked-in generation states **NO REVIEWED LIVE OBSERVATION YET**.
+The independent KV Observatory publishes `/api/kv/status.json`, `/api/kv/namespaces.json`, `/api/kv/changes.json`, and `/api/kv/presence.json`. These are static GET-only snapshots with a common `snapshot_id` and `generated_at`. Coverage is allowlist-only and current coverage means a successful namespace poll in the latest completed cycle. `first_seen_at` means **FIRST OBSERVED BY THIS OBSERVATORY**; `last_changed_at` means **LAST OBSERVED CHANGE**; `DISAPPEARED_FROM_OBSERVER_VIEW` means this observer later saw the key absent, with cause unknown. All timestamps are observer-derived, hashes derive from untrusted public values, raw values are never published, and `room-nonce` is aggregate-only. The checked-in generation states **NO REVIEWED LIVE OBSERVATION YET**.
 
 ## Snapshot contract
 
