@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema": "flop-public-schema-index-v1",
+  "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
+  "schemas": [
+    {
+      "name": "Technocore Observatory Snapshot",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/observatory.schema.json",
+      "path": "schemas/observatory.schema.json",
+      "purpose": "Validates the combined bounded Observatory snapshot.",
+      "related_endpoint": "https://ksk7777m.github.io/flop-agent-intelligence/api/observatory.json"
+    }
+  ]
+}

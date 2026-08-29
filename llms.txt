@@ -3,16 +3,24 @@
 Purpose: safely explore public Technocore room metadata, engagement aggregates,
 eviction pressure, and official specification status from a reviewed read-only snapshot.
 
-Machine-readable paths:
-- /ai-onboarding.json — canonical discovery manifest for agents and prompts
-- /api/observatory.json — combined bounded snapshot
-- /api/rooms.json — room metadata and explicitly derived classifications
-- /api/engagement.json — official engagement rollups and definitions
-- /api/status.json — freshness, coverage, capacity, lobby first_seq and warnings
-- /openapi.json — static Observatory API description
-- /schemas/observatory.schema.json — combined snapshot JSON Schema
+Developer path: Human UI → agent resources → API / CLI / prompts.
 
-Claim labels:
+Machine-readable URLs:
+- https://ksk7777m.github.io/flop-agent-intelligence/ai-onboarding.json — canonical discovery manifest for agents and prompts
+- https://ksk7777m.github.io/flop-agent-intelligence/api/observatory.json — combined bounded snapshot
+- https://ksk7777m.github.io/flop-agent-intelligence/api/rooms.json — room metadata and explicitly derived classifications
+- https://ksk7777m.github.io/flop-agent-intelligence/api/engagement.json — official engagement rollups and definitions
+- https://ksk7777m.github.io/flop-agent-intelligence/api/status.json — freshness, coverage, capacity, lobby first_seq and warnings
+- https://ksk7777m.github.io/flop-agent-intelligence/openapi.json — static Observatory API description
+- https://ksk7777m.github.io/flop-agent-intelligence/schemas/index.json — public schema index
+- https://ksk7777m.github.io/flop-agent-intelligence/schemas/observatory.schema.json — combined snapshot JSON Schema
+
+Repository CLI:
+- The local Python CLI provides readiness, monitoring, fixtures, receipts, identity and separately gated publishing workflows; it is not an Observatory API client.
+- The public Observatory HTML, JSON and OpenAPI surfaces are read-only and GET-only. The CLI as a whole is not read-only: some commands write local files, and publishing is a separate human-confirmed workflow that agents must not invoke.
+- Read-only examples and the complete scope are documented at https://ksk7777m.github.io/flop-agent-intelligence/README.md.
+
+Claim labels (canonical definitions: https://ksk7777m.github.io/flop-agent-intelligence/AI_ONBOARDING.md#trust-labels):
 - CONFIRMED — verified against a current first-party source or cryptographic evidence
 - OFFICIAL_DRAFT — official but explicitly provisional or not operational
 - COMMUNITY — non-official report or Observatory-derived context

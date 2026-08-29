@@ -1,6 +1,8 @@
 import json
+import re
 import unittest
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flop_agent.observatory import (
     build_snapshot,
@@ -13,6 +15,19 @@ from flop_agent.observatory import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_BASE_PATH = "/flop-agent-intelligence/"
+
+
+def local_path(public_url: str) -> Path:
+    parsed = urlparse(public_url)
+    if parsed.scheme or parsed.netloc:
+        assert parsed.scheme == "https"
+        assert parsed.netloc == "ksk7777m.github.io"
+        assert parsed.path.startswith(PUBLIC_BASE_PATH)
+        path = parsed.path.removeprefix(PUBLIC_BASE_PATH)
+    else:
+        path = public_url.lstrip("/")
+    return ROOT / path
 
 
 class ObservatoryTests(unittest.TestCase):
@@ -87,16 +102,99 @@ class ObservatoryTests(unittest.TestCase):
         labels = {"CONFIRMED", "OFFICIAL_DRAFT", "COMMUNITY", "INFERENCE"}
         self.assertEqual(set(manifest["trust_labels"]), labels)
         self.assertEqual(manifest["mode"], "read-only")
+        self.assertEqual(manifest["paths_relative_to"], "base_url")
         self.assertEqual(set(manifest["prompts"]), {"chatgpt", "codex", "claude", "claude_code", "gemini", "deepseek", "qwen", "kimi", "cursor", "generic"})
         for prompt_path in manifest["prompts"].values():
-            prompt = (ROOT / prompt_path.lstrip("/")).read_text(encoding="utf-8")
+            prompt = local_path(prompt_path).read_text(encoding="utf-8")
             self.assertIn("ai-onboarding.json", prompt)
             for label in labels:
                 self.assertIn(label, prompt)
 
+    def test_no_cross_vendor_identity_contamination(self):
+        manifest = json.loads((ROOT / "ai-onboarding.json").read_text(encoding="utf-8"))
+        identity_claim = re.compile(
+            r"\byou are (?:a|an) (?:claude|chatgpt|codex|gemini|deepseek|qwen|kimi|cursor)(?:\s+agent)?\b",
+            re.IGNORECASE,
+        )
+        for target, prompt_url in manifest["prompts"].items():
+            prompt = local_path(prompt_url).read_text(encoding="utf-8")
+            match = identity_claim.search(prompt)
+            if match:
+                self.assertIn(target.replace("_", " "), match.group(0).lower())
+        generic = local_path(manifest["prompts"]["generic"]).read_text(encoding="utf-8").lower()
+        self.assertNotRegex(generic, identity_claim)
+        self.assertNotIn("anthropic's claude agent sdk", "\n".join(p.read_text(encoding="utf-8").lower() for p in (ROOT / "prompts").glob("*.md")))
+
+    def test_all_advertised_public_resources_exist(self):
+        manifest = json.loads((ROOT / "ai-onboarding.json").read_text(encoding="utf-8"))
+        advertised = [
+            *manifest["start"],
+            *manifest["discovery"].values(),
+            *manifest["read_only_data"],
+            *manifest["prompts"].values(),
+            *manifest["languages"].values(),
+        ]
+        for public_url in advertised:
+            path = local_path(public_url.split("#", 1)[0])
+            self.assertTrue(path.is_file(), f"advertised resource is missing: {public_url}")
+
+        spec = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+        for route in spec["paths"]:
+            self.assertTrue((ROOT / route.lstrip("/")).is_file(), f"OpenAPI path is missing: {route}")
+
+    def test_all_advertised_schemas_exist(self):
+        index = json.loads((ROOT / "schemas/index.json").read_text(encoding="utf-8"))
+        self.assertEqual(index["schema"], "flop-public-schema-index-v1")
+        self.assertGreaterEqual(len(index["schemas"]), 1)
+        for entry in index["schemas"]:
+            self.assertTrue((ROOT / entry["path"]).is_file())
+            self.assertEqual(local_path(entry["url"]), ROOT / entry["path"])
+            self.assertTrue(local_path(entry["related_endpoint"]).is_file())
+
+    def test_derived_fields_schema_and_documentation(self):
+        schema = json.loads((ROOT / "schemas/observatory.schema.json").read_text(encoding="utf-8"))
+        room_schema = schema["$defs"]["room"]
+        self.assertIn("derived_fields", room_schema["required"])
+        methods = room_schema["properties"]["derived_fields"]["properties"]
+        room = json.loads((ROOT / "api/rooms.json").read_text(encoding="utf-8"))["rooms"][0]
+        self.assertEqual({name: value["const"] for name, value in methods.items()}, room["derived_fields"])
+        docs = (ROOT / "docs/OBSERVATORY_API.md").read_text(encoding="utf-8")
+        self.assertIn("derived_fields.activity", docs)
+        self.assertIn("not official Technocore semantics", docs)
+
+    def test_warnings_contract_matches_generated_data(self):
+        schema = json.loads((ROOT / "schemas/observatory.schema.json").read_text(encoding="utf-8"))
+        observatory = json.loads((ROOT / "api/observatory.json").read_text(encoding="utf-8"))
+        status = json.loads((ROOT / "api/status.json").read_text(encoding="utf-8"))
+        self.assertIn("warnings", schema["required"])
+        self.assertEqual(observatory["warnings"], status["warnings"])
+        docs = (ROOT / "docs/OBSERVATORY_API.md").read_text(encoding="utf-8")
+        self.assertIn("intentionally absent", docs)
+
+    def test_static_html_non_javascript_discovery_and_cli_scope(self):
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        for resource in ("llms.txt", "AI_ONBOARDING.md", "ai-onboarding.json", "openapi.json", "schemas/index.json", "api/status.json", "README.md", "prompts/generic-agent.md"):
+            self.assertIn(resource, html)
+        self.assertIn("Human UI → Agent resources → API / CLI / prompts", html)
+        self.assertIn("publish --confirm", html)
+
+    def test_trust_labels_and_localizations_are_consistent(self):
+        manifest = json.loads((ROOT / "ai-onboarding.json").read_text(encoding="utf-8"))
+        labels = set(manifest["trust_labels"])
+        for path in (ROOT / "llms.txt", ROOT / "AI_ONBOARDING.md"):
+            text = path.read_text(encoding="utf-8")
+            for label in labels:
+                self.assertIn(label, text)
+        for language, public_url in manifest["languages"].items():
+            text = local_path(public_url).read_text(encoding="utf-8")
+            self.assertTrue(text.strip(), language)
+            for label in labels:
+                self.assertIn(label, text)
+
     def test_openapi_is_get_only(self):
         spec = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
         self.assertIn("/ai-onboarding.json", spec["paths"])
+        self.assertIn("/schemas/index.json", spec["paths"])
         for operations in spec["paths"].values():
             self.assertFalse(set(operations) - {"get", "parameters", "summary", "description"})
 
