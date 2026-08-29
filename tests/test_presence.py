@@ -5,19 +5,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flop_agent.presence import (
-    AGENT_PATH, CONFIG_PATH, LOCAL_SEMANTIC_CONTRACT, ROOMS_PATH,
+    AGENT_PATH, CONFIG_PATH, ROOMS_PATH, SEMANTIC_CONTRACT_PATH,
     SEMANTIC_CONTRACT_ANCHOR, LiveWriteDisabled, PresenceConfig, PresenceError,
     approval_digest, apply_payload, canonical_sha256, classify_note,
     execute_approved_write, observe, presence_path, preview_first_write,
-    runtime_context, scalar_value, validate_approval, verify_local_semantic_contract,
+    load_semantic_contract, runtime_context, scalar_value, validate_approval,
 )
 
 NOW = datetime(2026, 8, 29, 0, 0, tzinfo=timezone.utc)
 NICK = "flop-agent-1df29904c79a56"
+CONTRACT, CONTRACT_SHA256 = load_semantic_contract()
 
 
 def config(**changes):
     values = dict(room="lobby", nick=NICK, semantic_spec_anchor=SEMANTIC_CONTRACT_ANCHOR,
+                  approved_semantic_contract_sha256=CONTRACT_SHA256,
                   approved_agent_version="0.10.0", operator_enabled=True,
                   live_write_enabled=False, semantic_spec_approved=True,
                   minimum_update_seconds=3600)
@@ -138,15 +140,62 @@ class PresenceAdapterTests(unittest.TestCase):
         self.assertEqual(result["status"], "SPEC_CHANGED")
 
     def test_local_contract_provenance_and_anchor(self):
-        self.assertTrue(verify_local_semantic_contract(config()))
+        contract, digest = load_semantic_contract(expected_sha256=CONTRACT_SHA256)
+        self.assertEqual(digest, CONTRACT_SHA256)
         with self.assertRaises(PresenceError):
             config(semantic_spec_anchor="unreviewed")
-        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["classification"],
+        self.assertEqual(contract["classification"],
                          "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT")
-        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["path_template"], "/kv/<room>/hb-<nick>")
-        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["conditional_create"], "if_absent")
-        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["conditional_update"], "exact_value_cas_if")
-        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["conflict"], "http_409_returns_current_value")
+        self.assertEqual(contract["path_template"], "/kv/<room>/hb-<nick>")
+        self.assertEqual(contract["conditional_create"], "if_absent")
+        self.assertEqual(contract["conditional_update"], "exact_value_cas_if")
+        self.assertEqual(contract["conflict"], "http_409_returns_current_value")
+
+    def test_contract_digest_is_canonical_and_semantic_changes_alter_it(self):
+        reversed_contract = dict(reversed(list(CONTRACT.items())))
+        self.assertEqual(canonical_sha256(CONTRACT), canonical_sha256(reversed_contract))
+        compact = self.state.parent / "compact.json"
+        pretty = self.state.parent / "pretty.json"
+        compact.write_text(json.dumps(reversed_contract, separators=(",", ":")))
+        pretty.write_text(json.dumps(CONTRACT, indent=4))
+        self.assertEqual(load_semantic_contract(compact)[1], load_semantic_contract(pretty)[1])
+        changed = dict(CONTRACT, conditional_update="different")
+        self.assertNotEqual(canonical_sha256(CONTRACT), canonical_sha256(changed))
+
+    def test_missing_malformed_and_hash_mismatch_fail_closed(self):
+        missing = self.state.parent / "missing.json"
+        malformed = self.state.parent / "malformed.json"
+        malformed.write_text("{")
+        for path in (missing, malformed):
+            with self.subTest(path=path):
+                if self.state.exists():
+                    self.state.unlink()
+                result = preview_first_write(config(), self.state, reader=self.reader(),
+                    application_commit="a" * 40, now=NOW, semantic_contract_path=path)
+                self.assertEqual(result["status"], "SPEC_CHANGED")
+        if self.state.exists():
+            self.state.unlink()
+        mismatch = config(approved_semantic_contract_sha256="0" * 64)
+        result = preview_first_write(mismatch, self.state, reader=self.reader(),
+            application_commit="a" * 40, now=NOW)
+        self.assertEqual(result["status"], "SPEC_CHANGED")
+
+    def test_approval_is_bound_to_contract_digest(self):
+        preview = self.preview()
+        self.assertEqual(preview["approval_metadata"]["semantic_contract_sha256"], CONTRACT_SHA256)
+        approval = self.approve(preview)
+        changed = dict(preview["approval_metadata"], semantic_contract_sha256="0" * 64)
+        self.assertFalse(validate_approval(changed, approval))
+
+    def test_contract_change_after_approval_fails_closed(self):
+        cfg, preview, approval = self.enabled_preview()
+        changed = dict(CONTRACT, reviewed_at="2026-08-30T00:00:00Z")
+        path = self.state.parent / "changed-contract.json"
+        path.write_text(json.dumps(changed))
+        with self.assertRaises(LiveWriteDisabled):
+            execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+                writer=lambda *_: self.fail("writer called"), reader=lambda _: None,
+                now=NOW, semantic_contract_path=path)
 
     def test_manifest_hash_change_triggers_review(self):
         good = config(approved_agent_manifest_sha256=canonical_sha256(DISCOVERY))
@@ -292,8 +341,7 @@ class PresenceAdapterTests(unittest.TestCase):
         self.assertIn("CLI has no live-write command", readme)
         self.assertNotIn("Presence V0 is `DRY_RUN_ONLY`", readme)
         contract = json.loads((root / "data/presence_semantic_contract.json").read_text())
-        for key, value in LOCAL_SEMANTIC_CONTRACT.items():
-            self.assertEqual(contract[key], value)
+        self.assertEqual(contract, CONTRACT)
 
     def test_live_unknown_never_observed_and_disabled(self):
         disabled = observe(config(operator_enabled=False), self.state, reader=lambda _: self.fail("read"), now=NOW)

@@ -24,25 +24,7 @@ CONFIG_PATH = "/config"
 MINIMUM_LIVE_WRITE_SECONDS = 3600
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 SEMANTIC_CONTRACT_ANCHOR = "technocore-presence-semantic-v0.1-reviewed-2026-08-29"
-LOCAL_SEMANTIC_CONTRACT = {
-    "classification": "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT",
-    "semantic_contract_version": "0.1",
-    "anchor": SEMANTIC_CONTRACT_ANCHOR,
-    "reviewed_at": "2026-08-29T00:00:00Z",
-    "reviewed_source_version": "Technocore agent 0.10.0",
-    "official_sources": [
-        "https://technocore.chat/llms.txt",
-        "https://technocore.chat/openapi.json",
-        "https://github.com/flop-labs/technocore-chat/blob/main/SECURITY.md",
-    ],
-    "path_template": "/kv/<room>/hb-<nick>",
-    "value": "scalar_decimal_room_sequence",
-    "conditional_create": "if_absent",
-    "conditional_update": "exact_value_cas_if",
-    "conflict": "http_409_returns_current_value",
-    "authentication": "public_unsigned_unauthenticated_mutable_last_write_wins_note",
-    "name_pattern": NAME_RE.pattern,
-}
+SEMANTIC_CONTRACT_PATH = Path(__file__).resolve().parents[2] / "data" / "presence_semantic_contract.json"
 STATES = {"LIVE", "UNKNOWN", "NEVER_OBSERVED", "DISABLED", "SPEC_CHANGED", "CONFLICT",
           "READBACK_MISMATCH", "REAPPROVAL_REQUIRED"}
 
@@ -67,6 +49,7 @@ class PresenceConfig:
     room: str
     nick: str
     semantic_spec_anchor: str
+    approved_semantic_contract_sha256: str
     approved_agent_version: str
     approved_agent_manifest_sha256: str | None = None
     operator_enabled: bool = False
@@ -79,6 +62,9 @@ class PresenceConfig:
         validate_name(self.nick, "nick")
         if self.semantic_spec_anchor != SEMANTIC_CONTRACT_ANCHOR:
             raise PresenceError("semantic_spec_anchor is not the reviewed Presence contract")
+        if (not isinstance(self.approved_semantic_contract_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", self.approved_semantic_contract_sha256) is None):
+            raise PresenceError("approved_semantic_contract_sha256 must be a lowercase SHA-256")
         if not isinstance(self.approved_agent_version, str) or not self.approved_agent_version:
             raise PresenceError("approved_agent_version is required as a re-review detector")
         if self.approved_agent_manifest_sha256 is not None and re.fullmatch(
@@ -100,7 +86,9 @@ class PresenceConfig:
         room, nick = raw.get("room"), raw.get("nick")
         validate_public_room(room)
         validate_name(nick, "nick")
-        anchor, version = raw.get("semantic_spec_anchor"), raw.get("approved_agent_version")
+        anchor = raw.get("semantic_spec_anchor")
+        contract_hash = raw.get("approved_semantic_contract_sha256")
+        version = raw.get("approved_agent_version")
         if not isinstance(anchor, str) or not anchor:
             raise PresenceError("semantic_spec_anchor is required")
         if not isinstance(version, str) or not version:
@@ -112,7 +100,7 @@ class PresenceConfig:
         if manifest_hash is not None and (not isinstance(manifest_hash, str)
                                           or re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is None):
             raise PresenceError("approved_agent_manifest_sha256 must be a lowercase SHA-256")
-        return cls(room, nick, anchor, version, manifest_hash, raw.get("operator_enabled") is True,
+        return cls(room, nick, anchor, contract_hash, version, manifest_hash, raw.get("operator_enabled") is True,
                    raw.get("live_write_enabled") is True, raw.get("semantic_spec_approved") is True, interval)
 
 
@@ -197,9 +185,19 @@ def canonical_sha256(value: Any) -> str:
     return _sha(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
-def verify_local_semantic_contract(config: PresenceConfig) -> bool:
-    """Validate reviewed semantics; these are not server-advertised metadata."""
+def load_semantic_contract(path: Path = SEMANTIC_CONTRACT_PATH,
+                           expected_sha256: str | None = None) -> tuple[Dict[str, Any], str]:
+    """Load, validate and canonically bind the one reviewed semantic source."""
+    try:
+        contract = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise PresenceError(f"semantic contract unavailable or malformed: {error}") from error
+    if not isinstance(contract, dict):
+        raise PresenceError("semantic contract must be a JSON object")
     expected = {
+        "schema": "technocore-presence-semantic-contract-v0.1",
+        "classification": "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT",
+        "semantic_contract_version": "0.1",
         "anchor": SEMANTIC_CONTRACT_ANCHOR,
         "path_template": "/kv/<room>/hb-<nick>",
         "value": "scalar_decimal_room_sequence",
@@ -209,9 +207,20 @@ def verify_local_semantic_contract(config: PresenceConfig) -> bool:
         "authentication": "public_unsigned_unauthenticated_mutable_last_write_wins_note",
         "name_pattern": NAME_RE.pattern,
     }
-    return config.semantic_spec_anchor == SEMANTIC_CONTRACT_ANCHOR and all(
-        LOCAL_SEMANTIC_CONTRACT.get(key) == value for key, value in expected.items()
-    )
+    if not all(contract.get(key) == value for key, value in expected.items()):
+        raise PresenceError("semantic contract contains unreviewed semantics")
+    if not isinstance(contract.get("reviewed_at"), str) or not contract["reviewed_at"]:
+        raise PresenceError("semantic contract reviewed_at is required")
+    if not isinstance(contract.get("reviewed_source_version"), str) or not contract["reviewed_source_version"]:
+        raise PresenceError("semantic contract reviewed_source_version is required")
+    sources = contract.get("official_sources")
+    if not isinstance(sources, list) or not sources or not all(
+            isinstance(source, str) and source.startswith("https://") for source in sources):
+        raise PresenceError("semantic contract official_sources are required")
+    digest = canonical_sha256(contract)
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise PresenceError("semantic contract SHA-256 does not match approved review")
+    return contract, digest
 
 
 def detect_server_spec_change(config: PresenceConfig, discovery: Any) -> bool:
@@ -303,7 +312,8 @@ def _note_request(config: PresenceConfig, seq: int, note_state: str, previous_se
 
 
 def approval_metadata(config: PresenceConfig, request: Mapping[str, Any], observed_seq: int,
-                      observed_at: str, note_state: str, application_commit: str) -> Dict[str, Any]:
+                      observed_at: str, note_state: str, application_commit: str,
+                      semantic_contract_sha256: str) -> Dict[str, Any]:
     if re.fullmatch(r"[0-9a-f]{40}", application_commit) is None:
         raise PresenceError("application_commit must be an exact lowercase Git commit")
     body = json.dumps(request["body"], sort_keys=True, separators=(",", ":"))
@@ -311,7 +321,8 @@ def approval_metadata(config: PresenceConfig, request: Mapping[str, Any], observ
             "body": request["body"], "observed_seq": observed_seq, "observed_at": observed_at,
             "expected_note_state": note_state, "payload_sha256": _sha(body),
             "application_commit": application_commit, "adapter_version": ADAPTER_VERSION,
-            "semantic_spec_anchor": config.semantic_spec_anchor}
+            "semantic_spec_anchor": config.semantic_spec_anchor,
+            "semantic_contract_sha256": semantic_contract_sha256}
 
 
 def approval_digest(metadata: Mapping[str, Any]) -> str:
@@ -323,12 +334,19 @@ def validate_approval(metadata: Mapping[str, Any], approval: Mapping[str, Any]) 
 
 
 def preview_first_write(config: PresenceConfig, state_path: Path, *, reader: Callable[[str], Any],
-                        application_commit: str, now: datetime | None = None) -> Dict[str, Any]:
+                        application_commit: str, now: datetime | None = None,
+                        semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH) -> Dict[str, Any]:
     """Fresh reads, exact request and approval binding; guaranteed zero-write."""
     observed = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state = _load_state(state_path) or _blank_state(config)
     discovery = reader(AGENT_PATH)
-    if not verify_local_semantic_contract(config) or detect_server_spec_change(config, discovery):
+    try:
+        contract, contract_digest = load_semantic_contract(
+            semantic_contract_path, config.approved_semantic_contract_sha256)
+    except PresenceError:
+        state.update({"state": "SPEC_CHANGED", "live_write_ready": False}); _save_state(state_path, state)
+        return {"status": "SPEC_CHANGED", "write_performed": False, "request": None}
+    if config.semantic_spec_anchor != contract["anchor"] or detect_server_spec_change(config, discovery):
         state.update({"state": "SPEC_CHANGED", "live_write_ready": False}); _save_state(state_path, state)
         return {"status": "SPEC_CHANGED", "write_performed": False, "request": None}
     try:
@@ -360,14 +378,16 @@ def preview_first_write(config: PresenceConfig, state_path: Path, *, reader: Cal
                       "live_write_ready": False}); _save_state(state_path, state)
         return {"status": "RATE_LIMITED", "note_state": note_state, "write_performed": False, "request": None}
     request = _note_request(config, latest_seq, note_state, previous_success)
-    metadata = approval_metadata(config, request, latest_seq, observed_at, note_state, application_commit)
+    metadata = approval_metadata(config, request, latest_seq, observed_at, note_state,
+                                 application_commit, contract_digest)
     state.update({"state": "LIVE" if previous_observed is not None and latest_seq > previous_observed else "UNKNOWN",
                   "live_write_ready": True}); _save_state(state_path, state)
     return {"status": "PREVIEW_READY", "mode": "ZERO_WRITE", "write_performed": False,
             "note_state": note_state, "request": request, "approval_metadata": metadata,
             "approval_binding_sha256": approval_digest(metadata),
-            "semantic_contract": {"classification": LOCAL_SEMANTIC_CONTRACT["classification"],
-                                  "anchor": SEMANTIC_CONTRACT_ANCHOR},
+            "semantic_contract": {"classification": contract["classification"],
+                                  "version": contract["semantic_contract_version"],
+                                  "semantic_contract_sha256": contract_digest},
             "server_advertised": {"classification": "SERVER_ADVERTISED",
                                   "agent_version": discovery.get("version")},
             "runtime_context": deployment, "runtime_context_required_for_write": False}
@@ -382,13 +402,21 @@ def _append_audit(path: Path, entry: Mapping[str, Any]) -> None:
 def execute_approved_write(config: PresenceConfig, state_path: Path, audit_path: Path, *,
                            preview: Mapping[str, Any], approval: Mapping[str, Any],
                            writer: Callable[[str, Mapping[str, Any]], Any],
-                           reader: Callable[[str], Any], now: datetime | None = None) -> Dict[str, Any]:
+                           reader: Callable[[str], Any], now: datetime | None = None,
+                           semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH) -> Dict[str, Any]:
     """Execute via an explicitly injected writer after every gate passes."""
     attempted = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state = _load_state(state_path) or _blank_state(config)
     metadata, request = preview.get("approval_metadata"), preview.get("request")
+    try:
+        _, current_contract_digest = load_semantic_contract(
+            semantic_contract_path, config.approved_semantic_contract_sha256)
+    except PresenceError:
+        current_contract_digest = None
     gates = {"operator_enabled": config.operator_enabled, "live_write_enabled": config.live_write_enabled,
              "semantic_spec_approved": config.semantic_spec_approved, "source_data_valid": preview.get("status") == "PREVIEW_READY",
+             "semantic_contract_current": current_contract_digest is not None
+                 and current_contract_digest == (metadata or {}).get("semantic_contract_sha256"),
              "frequency_guard_healthy": True, "note_reconciled": preview.get("note_state") in {"ABSENT", "EXPECTED"},
              "no_conflict": state.get("state") not in {"CONFLICT", "READBACK_MISMATCH", "REAPPROVAL_REQUIRED", "SPEC_CHANGED"},
              "no_sequence_regression": state.get("last_observed_seq") == (metadata or {}).get("observed_seq"),
@@ -436,7 +464,9 @@ def execute_approved_write(config: PresenceConfig, state_path: Path, audit_path:
             "previous_successful_seq": request["body"].get("if"), "expected_note_state": metadata["expected_note_state"],
             "payload_sha256": metadata["payload_sha256"], "http_status": response_status,
             "response_body_sha256": _sha(response_body), "adapter_version": ADAPTER_VERSION,
-            "semantic_spec_anchor": config.semantic_spec_anchor, "application_commit": metadata["application_commit"],
+            "semantic_spec_anchor": config.semantic_spec_anchor,
+            "semantic_contract_sha256": metadata["semantic_contract_sha256"],
+            "application_commit": metadata["application_commit"],
             "decision": "ATTEMPTED", "result": result})
     return {"status": result, "write_performed": result == "SUCCESS", "state": state}
 

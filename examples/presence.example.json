@@ -3,6 +3,7 @@
   "room": "lobby",
   "nick": "flop-agent-1df29904c79a56",
   "semantic_spec_anchor": "technocore-presence-semantic-v0.1-reviewed-2026-08-29",
+  "approved_semantic_contract_sha256": "1d89199c57008083bef24cc2f62a4275a8b77ab470c0a163f0e037c14e872778",
   "approved_agent_version": "0.10.0",
   "minimum_update_seconds": 3600,
   "operator_enabled": true,

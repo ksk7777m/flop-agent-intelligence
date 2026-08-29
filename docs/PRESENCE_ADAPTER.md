@@ -55,7 +55,12 @@ review time/version, and a stable anchor for the path, scalar value, `if_absent`
 exact-value CAS, HTTP 409 current-value behavior, name grammar, and ordinary
 unauthenticated-note trust model. These rules are explicitly
 `LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT`; they are not misrepresented as
-server-advertised metadata.
+server-advertised metadata. The JSON artifact is the single source of truth. It
+is parsed, validated, canonically serialized with sorted keys and compact
+separators, UTF-8 encoded, and SHA-256 checked against the reviewed configuration.
+Missing, malformed, semantically changed, or hash-mismatched contracts produce
+`SPEC_CHANGED`. The digest detects local artifact changes; it is not an official
+Technocore signature or proof of current server behavior.
 
 The name, name grammar, version and optional approved manifest SHA-256 read from
 `/.well-known/agent.json` are `SERVER_ADVERTISED` change detectors. A change
@@ -68,7 +73,8 @@ safety floor cannot be reduced by configuration or a more permissive server.
 
 Approval binds the exact room, path, method, body, observed sequence/time, note
 state, payload hash, application commit, adapter version, and semantic anchor.
-Changing any field invalidates it. Generic `confirm=true` is rejected.
+It also binds `semantic_contract_sha256`, so any reviewed-contract content
+change invalidates prior approval. Generic `confirm=true` is rejected.
 
 ## Zero-write preview
 
