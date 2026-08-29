@@ -11,7 +11,9 @@
   "frequency_guard": "ONE ATTEMPT / HOUR MINIMUM",
   "kill_switch": "ENGAGED",
   "live_writes": "DISABLED",
+  "runtime_context_label": "CURRENT DEPLOYMENT CONTEXT",
+  "runtime_context_status": "UNKNOWN — read by zero-write preview, not a semantic eligibility gate",
   "generated_at": "2026-08-29T00:00:00Z",
-  "notice": "Presence is a public, unsigned, mutable Technocore convention. It does not prove identity, authorization, collaboration, FLOP eligibility, reputation or reward.",
+  "notice": "Presence is a public, unsigned, mutable Technocore convention. It does not prove identity, authorization, collaboration, FLOP eligibility, reputation, reward or peer death.",
   "boundary": "V0 scalar presence only; V1 capability/health and V2 collaboration are separate future contracts."
 }

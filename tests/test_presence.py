@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flop_agent.presence import (
-    AGENT_PATH, ROOMS_PATH, LiveWriteDisabled, PresenceConfig, PresenceError,
-    approval_digest, apply_payload, classify_note, execute_approved_write,
-    observe, presence_path, preview_first_write, scalar_value, validate_approval,
+    AGENT_PATH, CONFIG_PATH, LOCAL_SEMANTIC_CONTRACT, ROOMS_PATH,
+    SEMANTIC_CONTRACT_ANCHOR, LiveWriteDisabled, PresenceConfig, PresenceError,
+    approval_digest, apply_payload, canonical_sha256, classify_note,
+    execute_approved_write, observe, presence_path, preview_first_write,
+    runtime_context, scalar_value, validate_approval, verify_local_semantic_contract,
 )
 
 NOW = datetime(2026, 8, 29, 0, 0, tzinfo=timezone.utc)
@@ -15,7 +17,7 @@ NICK = "flop-agent-1df29904c79a56"
 
 
 def config(**changes):
-    values = dict(room="lobby", nick=NICK, semantic_spec_anchor="agent-json-version:0.10.0",
+    values = dict(room="lobby", nick=NICK, semantic_spec_anchor=SEMANTIC_CONTRACT_ANCHOR,
                   approved_agent_version="0.10.0", operator_enabled=True,
                   live_write_enabled=False, semantic_spec_approved=True,
                   minimum_update_seconds=3600)
@@ -25,6 +27,8 @@ def config(**changes):
 
 DISCOVERY = {"name": "technocore-chat", "version": "0.10.0",
              "conventions": {"name_pattern": "^[a-z0-9][a-z0-9_-]{0,47}$"}}
+DEPLOYMENT = {"version": "2026.08", "limits": {"reads": 120, "writes": 60,
+              "rooms": 20480, "notes": 4096}, "retention": {"idle_seconds": 86400}}
 
 
 class PresenceAdapterTests(unittest.TestCase):
@@ -36,12 +40,16 @@ class PresenceAdapterTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def reader(self, seq=10, note=None, agent=DISCOVERY):
+    def reader(self, seq=10, note=None, agent=DISCOVERY, deployment=DEPLOYMENT):
         def read(path):
             if path == ROOMS_PATH:
                 return {"rooms": [{"room": "lobby", "last_seq": seq}]}
             if path == AGENT_PATH:
                 return agent
+            if path == CONFIG_PATH:
+                if isinstance(deployment, Exception):
+                    raise deployment
+                return deployment
             if path == config().note_path:
                 return note
             raise AssertionError(path)
@@ -129,6 +137,48 @@ class PresenceAdapterTests(unittest.TestCase):
                                      application_commit="a" * 40, now=NOW)
         self.assertEqual(result["status"], "SPEC_CHANGED")
 
+    def test_local_contract_provenance_and_anchor(self):
+        self.assertTrue(verify_local_semantic_contract(config()))
+        with self.assertRaises(PresenceError):
+            config(semantic_spec_anchor="unreviewed")
+        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["classification"],
+                         "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT")
+        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["path_template"], "/kv/<room>/hb-<nick>")
+        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["conditional_create"], "if_absent")
+        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["conditional_update"], "exact_value_cas_if")
+        self.assertEqual(LOCAL_SEMANTIC_CONTRACT["conflict"], "http_409_returns_current_value")
+
+    def test_manifest_hash_change_triggers_review(self):
+        good = config(approved_agent_manifest_sha256=canonical_sha256(DISCOVERY))
+        self.assertEqual(self.preview(cfg=good)["status"], "PREVIEW_READY")
+        self.state.unlink()
+        changed = dict(DISCOVERY, extra="changed")
+        result = preview_first_write(good, self.state, reader=self.reader(agent=changed),
+                                     application_commit="a" * 40, now=NOW)
+        self.assertEqual(result["status"], "SPEC_CHANGED")
+
+    def test_runtime_context_is_informational(self):
+        result = self.preview()
+        self.assertEqual(result["runtime_context"]["classification"], "RUNTIME_CONTEXT")
+        self.assertEqual(result["runtime_context"]["write_rate_limit"], 60)
+        self.assertFalse(result["runtime_context_required_for_write"])
+
+    def test_runtime_context_unavailable_malformed_and_missing(self):
+        for raw in (RuntimeError("offline"), "bad", {}):
+            with self.subTest(raw=raw):
+                if self.state.exists():
+                    self.state.unlink()
+                result = preview_first_write(config(), self.state, reader=self.reader(deployment=raw),
+                                             application_commit="a" * 40, now=NOW)
+                self.assertEqual(result["status"], "PREVIEW_READY")
+                self.assertIn(result["runtime_context"]["status"], {"UNKNOWN", "PARTIAL"})
+                self.assertTrue(result["runtime_context"]["warnings"])
+
+    def test_server_limit_cannot_weaken_local_floor(self):
+        self.assertEqual(runtime_context({"limits": {"writes": 100000}})["write_rate_limit"], 100000)
+        with self.assertRaises(PresenceError):
+            config(minimum_update_seconds=3599)
+
     def test_kill_switch_prevents_write(self):
         preview = self.preview()
         with self.assertRaises(LiveWriteDisabled):
@@ -170,6 +220,36 @@ class PresenceAdapterTests(unittest.TestCase):
         self.assertIn('"result":"SUCCESS"', audit)
         self.assertNotIn('"body":"ok"', audit)
 
+    def test_alternate_2xx_performs_readback(self):
+        cfg, preview, approval = self.enabled_preview()
+        reads = iter((None, "10"))
+        result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+            writer=lambda *_: {"status": 204}, reader=lambda _: next(reads), now=NOW)
+        self.assertEqual(result["status"], "SUCCESS")
+
+    def test_non_2xx_fails_closed_without_readback(self):
+        for status in (300, 400, 403, 404, 429, 500, 799):
+            with self.subTest(status=status):
+                if self.state.exists():
+                    self.state.unlink()
+                if self.audit.exists():
+                    self.audit.unlink()
+                cfg, preview, approval = self.enabled_preview()
+                calls = []
+                result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+                    writer=lambda *_: {"status": status},
+                    reader=lambda _: calls.append("prewrite") or None, now=NOW)
+                self.assertEqual(result["status"], "RATE_LIMITED" if status == 429 else "HTTP_ERROR")
+                self.assertEqual(calls, ["prewrite"])
+
+    def test_missing_status_fails_closed_without_readback(self):
+        cfg, preview, approval = self.enabled_preview()
+        calls = []
+        result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+            writer=lambda *_: {}, reader=lambda _: calls.append("prewrite") or None, now=NOW)
+        self.assertEqual(result["status"], "HTTP_ERROR")
+        self.assertEqual(calls, ["prewrite"])
+
     def test_readback_mismatch_kill_switches(self):
         cfg, preview, approval = self.enabled_preview()
         reads = iter((None, "11"))
@@ -201,6 +281,19 @@ class PresenceAdapterTests(unittest.TestCase):
         with self.assertRaises(LiveWriteDisabled):
             execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
                 writer=lambda *_: self.fail("writer called"), reader=lambda _: "10", now=NOW)
+        self.assertEqual(json.loads(self.state.read_text())["frequency_guard_status"],
+                         "FREQUENCY_GUARD_TRIPPED")
+
+    def test_readme_and_public_contract_are_current(self):
+        root = Path(__file__).resolve().parents[1]
+        readme = (root / "README.md").read_text()
+        self.assertIn("LIVE READY — DISABLED", readme)
+        self.assertIn("No production HTTP writer", readme)
+        self.assertIn("CLI has no live-write command", readme)
+        self.assertNotIn("Presence V0 is `DRY_RUN_ONLY`", readme)
+        contract = json.loads((root / "data/presence_semantic_contract.json").read_text())
+        for key, value in LOCAL_SEMANTIC_CONTRACT.items():
+            self.assertEqual(contract[key], value)
 
     def test_live_unknown_never_observed_and_disabled(self):
         disabled = observe(config(operator_enabled=False), self.state, reader=lambda _: self.fail("read"), now=NOW)

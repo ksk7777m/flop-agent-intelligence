@@ -14,7 +14,7 @@ from typing import Any, Dict
 from .identity import load_identity, sign_message
 
 BASE_URL = "https://technocore.chat"
-ALLOWED_READ_PATHS = {"/healthz", "/rooms", "/rooms?format=json", "/r/lobby?format=json", "/llms.txt", "/skill.md", "/patterns.md", "/.well-known/agent.json"}
+ALLOWED_READ_PATHS = {"/healthz", "/rooms", "/rooms?format=json", "/r/lobby?format=json", "/llms.txt", "/skill.md", "/patterns.md", "/.well-known/agent.json", "/config"}
 DID_NOTE_PATH = "/kv/did-4e/1df29904c79a56"
 
 

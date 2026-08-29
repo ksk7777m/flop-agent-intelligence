@@ -20,8 +20,29 @@ CONFIG_SCHEMA = "technocore-presence-config-v0.1"
 STATE_SCHEMA = "technocore-presence-state-v0.1"
 ROOMS_PATH = "/rooms?format=json"
 AGENT_PATH = "/.well-known/agent.json"
+CONFIG_PATH = "/config"
 MINIMUM_LIVE_WRITE_SECONDS = 3600
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
+SEMANTIC_CONTRACT_ANCHOR = "technocore-presence-semantic-v0.1-reviewed-2026-08-29"
+LOCAL_SEMANTIC_CONTRACT = {
+    "classification": "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT",
+    "semantic_contract_version": "0.1",
+    "anchor": SEMANTIC_CONTRACT_ANCHOR,
+    "reviewed_at": "2026-08-29T00:00:00Z",
+    "reviewed_source_version": "Technocore agent 0.10.0",
+    "official_sources": [
+        "https://technocore.chat/llms.txt",
+        "https://technocore.chat/openapi.json",
+        "https://github.com/flop-labs/technocore-chat/blob/main/SECURITY.md",
+    ],
+    "path_template": "/kv/<room>/hb-<nick>",
+    "value": "scalar_decimal_room_sequence",
+    "conditional_create": "if_absent",
+    "conditional_update": "exact_value_cas_if",
+    "conflict": "http_409_returns_current_value",
+    "authentication": "public_unsigned_unauthenticated_mutable_last_write_wins_note",
+    "name_pattern": NAME_RE.pattern,
+}
 STATES = {"LIVE", "UNKNOWN", "NEVER_OBSERVED", "DISABLED", "SPEC_CHANGED", "CONFLICT",
           "READBACK_MISMATCH", "REAPPROVAL_REQUIRED"}
 
@@ -47,10 +68,26 @@ class PresenceConfig:
     nick: str
     semantic_spec_anchor: str
     approved_agent_version: str
+    approved_agent_manifest_sha256: str | None = None
     operator_enabled: bool = False
     live_write_enabled: bool = False
     semantic_spec_approved: bool = False
     minimum_update_seconds: int = MINIMUM_LIVE_WRITE_SECONDS
+
+    def __post_init__(self) -> None:
+        validate_public_room(self.room)
+        validate_name(self.nick, "nick")
+        if self.semantic_spec_anchor != SEMANTIC_CONTRACT_ANCHOR:
+            raise PresenceError("semantic_spec_anchor is not the reviewed Presence contract")
+        if not isinstance(self.approved_agent_version, str) or not self.approved_agent_version:
+            raise PresenceError("approved_agent_version is required as a re-review detector")
+        if self.approved_agent_manifest_sha256 is not None and re.fullmatch(
+                r"[0-9a-f]{64}", self.approved_agent_manifest_sha256) is None:
+            raise PresenceError("approved_agent_manifest_sha256 must be a lowercase SHA-256")
+        if (isinstance(self.minimum_update_seconds, bool)
+                or not isinstance(self.minimum_update_seconds, int)
+                or self.minimum_update_seconds < MINIMUM_LIVE_WRITE_SECONDS):
+            raise PresenceError("minimum_update_seconds cannot be below the one-hour safety floor")
 
     @property
     def note_path(self) -> str:
@@ -71,7 +108,11 @@ class PresenceConfig:
         interval = raw.get("minimum_update_seconds", MINIMUM_LIVE_WRITE_SECONDS)
         if isinstance(interval, bool) or not isinstance(interval, int) or interval < MINIMUM_LIVE_WRITE_SECONDS:
             raise PresenceError("minimum_update_seconds cannot be below the one-hour safety floor")
-        return cls(room, nick, anchor, version, raw.get("operator_enabled") is True,
+        manifest_hash = raw.get("approved_agent_manifest_sha256")
+        if manifest_hash is not None and (not isinstance(manifest_hash, str)
+                                          or re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is None):
+            raise PresenceError("approved_agent_manifest_sha256 must be a lowercase SHA-256")
+        return cls(room, nick, anchor, version, manifest_hash, raw.get("operator_enabled") is True,
                    raw.get("live_write_enabled") is True, raw.get("semantic_spec_approved") is True, interval)
 
 
@@ -152,11 +193,61 @@ def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def verify_semantic_spec(config: PresenceConfig, discovery: Any) -> bool:
-    return (isinstance(discovery, Mapping) and discovery.get("name") == "technocore-chat"
-            and discovery.get("version") == config.approved_agent_version
-            and isinstance(discovery.get("conventions"), Mapping)
-            and discovery["conventions"].get("name_pattern") == NAME_RE.pattern)
+def canonical_sha256(value: Any) -> str:
+    return _sha(json.dumps(value, sort_keys=True, separators=(",", ":")))
+
+
+def verify_local_semantic_contract(config: PresenceConfig) -> bool:
+    """Validate reviewed semantics; these are not server-advertised metadata."""
+    expected = {
+        "anchor": SEMANTIC_CONTRACT_ANCHOR,
+        "path_template": "/kv/<room>/hb-<nick>",
+        "value": "scalar_decimal_room_sequence",
+        "conditional_create": "if_absent",
+        "conditional_update": "exact_value_cas_if",
+        "conflict": "http_409_returns_current_value",
+        "authentication": "public_unsigned_unauthenticated_mutable_last_write_wins_note",
+        "name_pattern": NAME_RE.pattern,
+    }
+    return config.semantic_spec_anchor == SEMANTIC_CONTRACT_ANCHOR and all(
+        LOCAL_SEMANTIC_CONTRACT.get(key) == value for key, value in expected.items()
+    )
+
+
+def detect_server_spec_change(config: PresenceConfig, discovery: Any) -> bool:
+    """Use server version/manifest identity only as fail-closed re-review triggers."""
+    if not isinstance(discovery, Mapping) or discovery.get("name") != "technocore-chat":
+        return True
+    conventions = discovery.get("conventions")
+    if not isinstance(conventions, Mapping) or conventions.get("name_pattern") != NAME_RE.pattern:
+        return True
+    if discovery.get("version") != config.approved_agent_version:
+        return True
+    return (config.approved_agent_manifest_sha256 is not None
+            and canonical_sha256(discovery) != config.approved_agent_manifest_sha256)
+
+
+def runtime_context(raw: Any) -> Dict[str, Any]:
+    """Extract informational mutable deployment values without eligibility claims."""
+    keys = ("read_rate_limit", "write_rate_limit", "retention", "room_capacity",
+            "note_capacity", "deployment_version")
+    if not isinstance(raw, Mapping):
+        return {"classification": "RUNTIME_CONTEXT", "status": "UNKNOWN",
+                **{key: "UNKNOWN" for key in keys},
+                "warnings": ["/config unavailable or malformed; no values fabricated"]}
+    limits = raw.get("limits") if isinstance(raw.get("limits"), Mapping) else {}
+    retention = raw.get("retention") if isinstance(raw.get("retention"), Mapping) else {}
+    values = {
+        "read_rate_limit": limits.get("reads", raw.get("read_rate_limit", "UNKNOWN")),
+        "write_rate_limit": limits.get("writes", raw.get("write_rate_limit", "UNKNOWN")),
+        "retention": retention or raw.get("retention_seconds", "UNKNOWN"),
+        "room_capacity": limits.get("rooms", raw.get("room_capacity", "UNKNOWN")),
+        "note_capacity": limits.get("notes", raw.get("note_capacity", "UNKNOWN")),
+        "deployment_version": raw.get("version", "UNKNOWN"),
+    }
+    missing = [key for key, value in values.items() if value == "UNKNOWN"]
+    return {"classification": "RUNTIME_CONTEXT", "status": "PARTIAL" if missing else "AVAILABLE",
+            **values, "warnings": [f"missing informational /config fields: {', '.join(missing)}"] if missing else []}
 
 
 def classify_note(current_value: Any, last_successful_seq: int | None) -> str:
@@ -236,9 +327,14 @@ def preview_first_write(config: PresenceConfig, state_path: Path, *, reader: Cal
     """Fresh reads, exact request and approval binding; guaranteed zero-write."""
     observed = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state = _load_state(state_path) or _blank_state(config)
-    if not verify_semantic_spec(config, reader(AGENT_PATH)):
+    discovery = reader(AGENT_PATH)
+    if not verify_local_semantic_contract(config) or detect_server_spec_change(config, discovery):
         state.update({"state": "SPEC_CHANGED", "live_write_ready": False}); _save_state(state_path, state)
         return {"status": "SPEC_CHANGED", "write_performed": False, "request": None}
+    try:
+        deployment = runtime_context(reader(CONFIG_PATH))
+    except Exception:
+        deployment = runtime_context(None)
     latest_seq, observed_at = _latest_seq(reader(ROOMS_PATH), config.room), _iso(observed)
     previous_observed = state.get("last_observed_seq")
     state.update({"last_observed_seq": latest_seq, "last_observed_at": observed_at})
@@ -269,7 +365,12 @@ def preview_first_write(config: PresenceConfig, state_path: Path, *, reader: Cal
                   "live_write_ready": True}); _save_state(state_path, state)
     return {"status": "PREVIEW_READY", "mode": "ZERO_WRITE", "write_performed": False,
             "note_state": note_state, "request": request, "approval_metadata": metadata,
-            "approval_binding_sha256": approval_digest(metadata)}
+            "approval_binding_sha256": approval_digest(metadata),
+            "semantic_contract": {"classification": LOCAL_SEMANTIC_CONTRACT["classification"],
+                                  "anchor": SEMANTIC_CONTRACT_ANCHOR},
+            "server_advertised": {"classification": "SERVER_ADVERTISED",
+                                  "agent_version": discovery.get("version")},
+            "runtime_context": deployment, "runtime_context_required_for_write": False}
 
 
 def _append_audit(path: Path, entry: Mapping[str, Any]) -> None:
@@ -296,6 +397,10 @@ def execute_approved_write(config: PresenceConfig, state_path: Path, audit_path:
     if last_attempt and (attempted - last_attempt).total_seconds() < MINIMUM_LIVE_WRITE_SECONDS:
         gates["frequency_guard_healthy"] = False
     if not all(gates.values()) or not isinstance(request, Mapping) or not isinstance(metadata, Mapping):
+        if not gates["frequency_guard_healthy"]:
+            state.update({"state": "DISABLED", "live_write_ready": False,
+                          "frequency_guard_status": "FREQUENCY_GUARD_TRIPPED"})
+            _save_state(state_path, state)
         raise LiveWriteDisabled("live presence write gates are not all satisfied")
     current = reader(str(request["path"]))
     actual_note_state = classify_note(current, state.get("last_successfully_published_seq"))
@@ -308,11 +413,14 @@ def execute_approved_write(config: PresenceConfig, state_path: Path, audit_path:
     response_status, response_body, result = None, "", "ERROR"
     try:
         response = writer(str(request["path"]), request["body"])
-        response_status = int(response.get("status", 200)) if isinstance(response, Mapping) else 200
-        response_body = str(response.get("body", "")) if isinstance(response, Mapping) else str(response)
+        response_status = int(response.get("status")) if isinstance(response, Mapping) and isinstance(response.get("status"), int) else None
+        response_body = str(response.get("body", "")) if isinstance(response, Mapping) else ""
         if response_status == 409:
             raise ConflictError(response_body)
-        if reader(str(request["path"])) != request["body"]["value"]:
+        if response_status is None or not 200 <= response_status <= 299:
+            result = "RATE_LIMITED" if response_status == 429 else "HTTP_ERROR"
+            state.update({"state": "DISABLED", "last_http_result": result, "live_write_ready": False})
+        elif reader(str(request["path"])) != request["body"]["value"]:
             state.update({"state": "READBACK_MISMATCH", "live_write_ready": False}); result = "READBACK_MISMATCH"
         else:
             state.update({"state": "LIVE", "last_successfully_published_seq": metadata["observed_seq"],

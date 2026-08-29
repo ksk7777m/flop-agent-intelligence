@@ -37,6 +37,11 @@ recreated automatically. A 409 enters `CONFLICT`. A successful future CAS must
 be followed by a bounded exact read-back; mismatch enters
 `READBACK_MISMATCH`. All these states disengage readiness.
 
+The future injected writer accepts only an explicit 2xx before read-back. 3xx,
+other 4xx, 429, 5xx, missing, and nonstandard statuses fail closed without
+read-back or retry. HTTP 409 follows the conflict path and hashes rather than
+stores the untrusted current value. There are no retry loops.
+
 ## Frequency, drift, and approval
 
 Observations may run every 5–10 minutes. A candidate requires an advanced
@@ -44,10 +49,22 @@ sequence and at least one hour since the last successful write. The executor
 also enforces a hard one-attempt-per-hour floor that configuration cannot lower.
 Rate-limited observations are still persisted.
 
-Semantic compatibility is checked against the official agent discovery name,
-version, and name grammar. Deployment limits come from current discovery and
-`/config`; they are not application constants. A relevant semantic mismatch is
-`SPEC_CHANGED`.
+Semantic compatibility is gated by the versioned local contract in
+`data/presence_semantic_contract.json`. It records reviewed official sources,
+review time/version, and a stable anchor for the path, scalar value, `if_absent`,
+exact-value CAS, HTTP 409 current-value behavior, name grammar, and ordinary
+unauthenticated-note trust model. These rules are explicitly
+`LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT`; they are not misrepresented as
+server-advertised metadata.
+
+The name, name grammar, version and optional approved manifest SHA-256 read from
+`/.well-known/agent.json` are `SERVER_ADVERTISED` change detectors. A change
+causes `SPEC_CHANGED` and re-review; a particular agent version is not permanent
+eligibility. Mutable `/config` capacity, rate, retention and deployment values
+are `RUNTIME_CONTEXT`, never semantic eligibility gates. All are informational
+in V0.1: unavailable, malformed, or missing fields remain `UNKNOWN` with a
+warning and are never fabricated. The independent local one-attempt-per-hour
+safety floor cannot be reduced by configuration or a more permissive server.
 
 Approval binds the exact room, path, method, body, observed sequence/time, note
 state, payload hash, application commit, adapter version, and semantic anchor.

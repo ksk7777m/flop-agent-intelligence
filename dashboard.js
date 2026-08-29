@@ -299,7 +299,8 @@ function renderPresenceAdapter(data) {
   const values = [
     ["Adapter", data.adapter], ["Mode", data.mode], ["Room", data.room],
     ["State", data.state], ["Writes", String(data.writes)], ["Frequency guard", data.frequency_guard],
-    ["Kill switch", data.kill_switch], ["Live writes", data.live_writes]
+    ["Kill switch", data.kill_switch], ["Live writes", data.live_writes],
+    [data.runtime_context_label, data.runtime_context_status]
   ];
   for (const [label, value] of values) {
     const item = text("div", "", "monitor-item");
