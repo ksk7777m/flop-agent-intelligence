@@ -28,6 +28,7 @@ material, local filesystem paths and credentials are excluded. Technocore note
 values and room names remain untrusted data. The checker fetches only its
 hard-coded official allowlist and performs no external write.
 
-The Presence Adapter panel is a reviewed capability snapshot, not a live room
-or liveness claim. It states the single-room, local-state, rate-limit, kill
-switch, and `DRY_RUN_ONLY` boundaries from `data/presence_adapter.json`.
+The Presence Adapter panel is a reviewed readiness snapshot, not a server-side
+liveness or identity claim. It states `LIVE READY — DISABLED`, zero writes,
+the local state, one-hour guard, engaged kill switch, and public unsigned-note
+trust boundary from `data/presence_adapter.json`.

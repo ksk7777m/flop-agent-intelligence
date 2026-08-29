@@ -1,9 +1,12 @@
 {
-  "schema": "technocore-presence-config-v0",
+  "schema": "technocore-presence-config-v0.1",
   "room": "lobby",
-  "note_path": "/kv/did-4e/REPLACE_WITH_PUBLIC_NOTE_ID",
-  "current_note_value": "REPLACE_WITH_CURRENT_PUBLIC_NOTE_VALUE",
+  "nick": "flop-agent-1df29904c79a56",
+  "semantic_spec_anchor": "technocore-presence-semantic-v0.1-reviewed-2026-08-29",
+  "approved_semantic_contract_sha256": "1d89199c57008083bef24cc2f62a4275a8b77ab470c0a163f0e037c14e872778",
+  "approved_agent_version": "0.10.0",
   "minimum_update_seconds": 3600,
-  "enabled": true,
-  "dry_run": true
+  "operator_enabled": true,
+  "live_write_enabled": false,
+  "semantic_spec_approved": true
 }

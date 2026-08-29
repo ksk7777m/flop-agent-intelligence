@@ -90,18 +90,24 @@ PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness status
 See [Testnet Adapter](docs/TESTNET_ADAPTER.md) for fixtures, source gates,
 wallet-key separation and the future activation checklist.
 
-## Technocore Presence Adapter V0
+## Technocore Presence Adapter V0.1
 
-Presence V0 is `DRY_RUN_ONLY` and observes exactly one explicitly configured
-public room through the official room listing. It stores last-seen sequence
-metadata locally and prepares the official conditional-note payload only after
-a real sequence advance and outside the configured rate limit. The first or an
-unchanged observation never creates a payload. A kill switch prevents even the
-read, and V0 contains no live Technocore write path.
+Presence V0.1 is **LIVE READY — DISABLED**. Room observation is read-only and
+uses the official `/kv/<room>/hb-<nick>` convention, whose note value is only
+the scalar decimal room sequence most recently observed. Presence notes are
+public, unsigned, unauthenticated, mutable, and last-write-wins. They do not
+prove DID identity, authorization, collaboration, FLOP eligibility, reputation,
+reward, or whether a peer is dead.
+
+No production HTTP writer is wired and the CLI has no live-write command.
+`live_write_enabled` defaults to `false`. The code contains an injectable future
+execution boundary solely for a separately reviewed activation; its exact first
+write would require fresh reconciliation and a separate, exact human approval.
+The current deployment is not live and performs no automatic Presence write.
 
 See [Presence Adapter](docs/PRESENCE_ADAPTER.md) for configuration, invariants,
-the Dashboard surface, and the versioned V1 capability/status and V2
-collaboration-aware design.
+the Dashboard surface, reviewed semantic contract, runtime context, and future
+V1/V2 boundaries.
 
 ## Workflow
 

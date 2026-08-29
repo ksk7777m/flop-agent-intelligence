@@ -39,8 +39,13 @@ def main() -> None:
     testnet_receipt = testnet_commands.add_parser("verify-receipt")
     testnet_receipt.add_argument("file")
     presence = commands.add_parser("presence")
-    presence.add_argument("--config", required=True)
-    presence.add_argument("--state", default=str(ROOT / "runtime" / "presence-state.json"))
+    presence_commands = presence.add_subparsers(dest="presence_command", required=True)
+    for name in ("observe", "preview-first-write"):
+        presence_action = presence_commands.add_parser(name)
+        presence_action.add_argument("--config", required=True)
+        presence_action.add_argument("--state", default=str(ROOT / "runtime" / "presence-state.json"))
+        if name == "preview-first-write":
+            presence_action.add_argument("--application-commit", required=True)
     commands.add_parser("draft-contribution")
     commands.add_parser("gap-audit")
     demo = commands.add_parser("demo-fixture")
@@ -146,9 +151,21 @@ def main() -> None:
         elif args.testnet_command == "verify-receipt":
             print(json.dumps(verify_testnet_receipt(load_fixture(Path(args.file))), indent=2))
     elif args.command == "presence":
-        from .presence import load_config, observe
+        from .presence import load_config, observe, preview_first_write
+        from .technocore import read_official, read_presence_note
 
-        print(json.dumps(observe(load_config(Path(args.config)), Path(args.state)), indent=2))
+        config = load_config(Path(args.config))
+        if args.presence_command == "observe":
+            result = observe(config, Path(args.state))
+        else:
+            def presence_reader(path: str):
+                return read_presence_note(path) if path == config.note_path else read_official(path)
+
+            result = preview_first_write(
+                config, Path(args.state), reader=presence_reader,
+                application_commit=args.application_commit,
+            )
+        print(json.dumps(result, indent=2))
     elif args.command == "draft-contribution":
         print("Built an official-signal monitor for FLOP/Technocore that classifies actionable updates, blocks untrusted wallet/claim instructions, and keeps signed activity logs. Designed to extend into testnet workflows when official APIs are published.")
     elif args.command == "gap-audit":

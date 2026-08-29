@@ -1,0 +1,20 @@
+{
+  "schema": "technocore-presence-semantic-contract-v0.1",
+  "classification": "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT",
+  "semantic_contract_version": "0.1",
+  "anchor": "technocore-presence-semantic-v0.1-reviewed-2026-08-29",
+  "reviewed_at": "2026-08-29T00:00:00Z",
+  "reviewed_source_version": "Technocore agent 0.10.0",
+  "official_sources": [
+    "https://technocore.chat/llms.txt",
+    "https://technocore.chat/openapi.json",
+    "https://github.com/flop-labs/technocore-chat/blob/main/SECURITY.md"
+  ],
+  "path_template": "/kv/<room>/hb-<nick>",
+  "value": "scalar_decimal_room_sequence",
+  "conditional_create": "if_absent",
+  "conditional_update": "exact_value_cas_if",
+  "conflict": "http_409_returns_current_value",
+  "authentication": "public_unsigned_unauthenticated_mutable_last_write_wins_note",
+  "name_pattern": "^[a-z0-9][a-z0-9_-]{0,47}$"
+}
