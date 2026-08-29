@@ -1,0 +1,76 @@
+{
+  "snapshot_id": "unobserved-v0-20260829",
+  "generated_at": "2026-08-29T00:00:00Z",
+  "observer_started_at": "2026-08-29T00:00:00Z",
+  "observer_version": "kv-observatory-v0",
+  "official_source": {
+    "derived": false,
+    "url": "https://technocore.chat"
+  },
+  "observer_derived": {
+    "derived": true,
+    "method": "periodic GET observations of an explicit namespace allowlist; no live observation performed for this published generation"
+  },
+  "timestamp_semantics": {
+    "first_seen_at": "FIRST OBSERVED BY THIS OBSERVATORY",
+    "last_changed_at": "LAST OBSERVED CHANGE",
+    "server_write_timestamp_available": false
+  },
+  "schema": "technocore-kv-status-v1",
+  "mode": "READ_ONLY",
+  "coverage_claim": "OBSERVED COVERAGE ONLY",
+  "observation_status": "NO REVIEWED LIVE OBSERVATION YET",
+  "namespaces_configured": 4,
+  "namespaces_successfully_observed": 0,
+  "namespaces_currently_covered": 0,
+  "keys_successfully_observed": 0,
+  "keys_currently_observed": 0,
+  "existence_states": [
+    "OBSERVED",
+    "UNCHANGED",
+    "CHANGED",
+    "DISAPPEARED_FROM_OBSERVER_VIEW",
+    "REAPPEARED",
+    "UNKNOWN"
+  ],
+  "coverage": [
+    {
+      "namespace": "public-presence",
+      "last_poll": null,
+      "last_successful_poll": null,
+      "last_failed_poll": null
+    },
+    {
+      "namespace": "room-owners",
+      "last_poll": null,
+      "last_successful_poll": null,
+      "last_failed_poll": null
+    },
+    {
+      "namespace": "room-allow",
+      "last_poll": null,
+      "last_successful_poll": null,
+      "last_failed_poll": null
+    },
+    {
+      "namespace": "room-nonce",
+      "last_poll": null,
+      "last_successful_poll": null,
+      "last_failed_poll": null
+    }
+  ],
+  "room_nonce": {
+    "policy": "KEEP_BUT_AGGREGATE_ONLY",
+    "observed_count": 0,
+    "changed_count": 0,
+    "last_observer_activity_at": null,
+    "trust_class": "SERVER_CONTROLLED"
+  },
+  "warnings": [
+    "This is observed allowlist coverage only; it is not a global namespace scan.",
+    "An empty snapshot does not imply zero KV or Presence activity or that no keys exist.",
+    "Missing and empty namespaces are indistinguishable through listing.",
+    "Disappearance does not imply deletion, reclamation, or eviction.",
+    "Observer timestamps are not note creation or server write timestamps."
+  ]
+}

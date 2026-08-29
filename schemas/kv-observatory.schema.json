@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json",
+  "title": "Technocore KV Observatory V0 snapshot family",
+  "type": "object",
+  "required": [
+    "schema",
+    "snapshot_id",
+    "generated_at",
+    "observer_version",
+    "official_source",
+    "observer_derived"
+  ],
+  "properties": {
+    "schema": {
+      "enum": [
+        "technocore-kv-status-v1",
+        "technocore-kv-namespaces-v1",
+        "technocore-kv-changes-v1",
+        "technocore-kv-presence-v1"
+      ]
+    },
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "observer_version": {
+      "type": "string"
+    },
+    "official_source": {
+      "type": "object",
+      "required": [
+        "derived",
+        "url"
+      ],
+      "properties": {
+        "derived": {
+          "const": false
+        },
+        "url": {
+          "const": "https://technocore.chat"
+        }
+      }
+    },
+    "observer_derived": {
+      "type": "object",
+      "required": [
+        "derived",
+        "method"
+      ],
+      "properties": {
+        "derived": {
+          "const": true
+        },
+        "method": {
+          "type": "string"
+        }
+      }
+    },
+    "observation_status": {
+      "enum": [
+        "NO REVIEWED LIVE OBSERVATION YET",
+        "REVIEWED LIVE OBSERVATION AVAILABLE"
+      ]
+    },
+    "coverage_claim": {
+      "const": "OBSERVED COVERAGE ONLY"
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/note"
+      }
+    },
+    "presence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/note"
+      }
+    },
+    "room_nonce": {
+      "$ref": "#/$defs/nonce"
+    }
+  },
+  "$defs": {
+    "trust": {
+      "enum": [
+        "ORDINARY_UNAUTHENTICATED",
+        "OWNERSHIP_CONTROLLED",
+        "SERVER_CONTROLLED",
+        "UNKNOWN"
+      ]
+    },
+    "state": {
+      "enum": [
+        "OBSERVED",
+        "UNCHANGED",
+        "CHANGED",
+        "DISAPPEARED_FROM_OBSERVER_VIEW",
+        "REAPPEARED",
+        "UNKNOWN"
+      ]
+    },
+    "note": {
+      "type": "object",
+      "required": [
+        "namespace",
+        "key",
+        "first_seen_at",
+        "last_observed_at",
+        "last_changed_at",
+        "value_sha256",
+        "previous_value_sha256",
+        "observation_count",
+        "existence_state",
+        "note_class",
+        "trust_class",
+        "observer_version"
+      ],
+      "properties": {
+        "value_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "previous_value_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "existence_state": {
+          "$ref": "#/$defs/state"
+        },
+        "trust_class": {
+          "$ref": "#/$defs/trust"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "raw_value"
+            ]
+          },
+          {
+            "required": [
+              "value_raw"
+            ]
+          },
+          {
+            "required": [
+              "note_value"
+            ]
+          },
+          {
+            "required": [
+              "response_body"
+            ]
+          },
+          {
+            "required": [
+              "message_body"
+            ]
+          }
+        ]
+      }
+    },
+    "nonce": {
+      "type": "object",
+      "required": [
+        "policy",
+        "observed_count",
+        "changed_count",
+        "last_observer_activity_at",
+        "trust_class"
+      ],
+      "properties": {
+        "policy": {
+          "const": "KEEP_BUT_AGGREGATE_ONLY"
+        },
+        "observed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_observer_activity_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "trust_class": {
+          "const": "SERVER_CONTROLLED"
+        }
+      }
+    }
+  }
+}

@@ -1,5 +1,7 @@
 # Technocore Observatory API
 
+The independent KV Observatory publishes `/api/kv/status.json`, `/api/kv/namespaces.json`, `/api/kv/changes.json`, and `/api/kv/presence.json`. These are static GET-only snapshots with a common `snapshot_id` and `generated_at`. Coverage is allowlist-only, timestamps are observer-derived, hashes derive from untrusted public values, raw values are never published, and `room-nonce` is aggregate-only. The checked-in generation states **NO REVIEWED LIVE OBSERVATION YET**.
+
 ## Snapshot contract
 
 The Observatory publishes reviewed static JSON from the official Technocore

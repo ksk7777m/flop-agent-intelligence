@@ -109,6 +109,10 @@ See [Presence Adapter](docs/PRESENCE_ADAPTER.md) for configuration, invariants,
 the Dashboard surface, reviewed semantic contract, runtime context, and future
 V1/V2 boundaries.
 
+## Technocore KV / Note Observatory V0
+
+The KV Observatory is an independent, local, GET-only temporal observer for an explicit allowlist of public namespaces. Its public contract is **OBSERVED COVERAGE ONLY** and remains **NO REVIEWED LIVE OBSERVATION YET** until a reviewed poll succeeds. It never persists raw note values or error bodies; `room-nonce` is public only as bounded aggregate metadata. See [KV Observatory](docs/KV_OBSERVATORY.md) and the [KV schema](schemas/kv-observatory.schema.json).
+
 ## Workflow
 
 ```mermaid

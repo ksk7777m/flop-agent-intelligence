@@ -13,3 +13,12 @@ build/
 receipts/
 *.receipt.json
 runtime/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*-wal
+*-shm

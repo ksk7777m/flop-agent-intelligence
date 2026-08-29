@@ -1,5 +1,6 @@
 const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance", "teaser", "testnet_adapter", "presence_adapter"];
 const OBSERVATORY_DATA = ["status", "rooms", "engagement"];
+const KV_DATA = ["status", "namespaces", "changes", "presence"];
 const safeStatus = value => String(value || "UNKNOWN").toUpperCase();
 const statusClass = value => "status-" + safeStatus(value).toLowerCase().replaceAll(" ", "-").replaceAll("_", "-");
 const text = (tag, value, className) => {
@@ -20,7 +21,27 @@ async function loadData() {
     if (!response.ok) throw new Error(`api/${name}: HTTP ${response.status}`);
     return [`observatory_${name}`, await response.json()];
   }));
-  return Object.fromEntries([...existing, ...observatory]);
+  const kv = await Promise.all(KV_DATA.map(async name => {
+    const response = await fetch(`./api/kv/${name}.json`, {cache: "no-store"});
+    if (!response.ok) throw new Error(`api/kv/${name}: HTTP ${response.status}`);
+    return [`kv_${name}`, await response.json()];
+  }));
+  return Object.fromEntries([...existing, ...observatory, ...kv]);
+}
+
+function renderKv(status, namespaces, changes, presence) {
+  const root = document.querySelector("#kv-observatory");
+  const values = [["State", status.observation_status], ["Coverage", status.coverage_claim],
+    ["Configured namespaces", status.namespaces_configured], ["Successfully observed", status.namespaces_successfully_observed],
+    ["Current keys", status.keys_currently_observed], ["Recent hash records", changes.changes.length],
+    ["Presence-note records", presence.presence.length], ["Snapshot", status.snapshot_id]];
+  for (const [label, value] of values) {
+    const item = text("div", "", "monitor-item");
+    item.append(text("small", label), text("strong", String(value), statusClass(value)));
+    root.append(item);
+  }
+  document.querySelector("#kv-observatory-detail").textContent =
+    `${status.generated_at} · ${namespaces.namespaces.length} allowlisted namespaces · room-nonce aggregate only · no raw values`;
 }
 
 const formatNumber = value => value == null ? "UNKNOWN" : Number(value).toLocaleString();
@@ -363,6 +384,7 @@ loadData().then(data => {
   renderTeaser(data.teaser);
   renderTestnetAdapter(data.testnet_adapter);
   renderPresenceAdapter(data.presence_adapter);
+  renderKv(data.kv_status, data.kv_namespaces, data.kv_changes, data.kv_presence);
   renderHealth(data.health);
   renderEvidence(data.evidence);
   renderMaintenance(data.maintenance);

@@ -10,10 +10,15 @@
     "/ai-onboarding.json": {"get": {"operationId": "getAiOnboardingDiscovery", "responses": {"200": {"description": "AI onboarding discovery manifest"}}}},
     "/schemas/index.json": {"get": {"operationId": "getSchemaIndex", "responses": {"200": {"description": "Index of every published JSON Schema and its related endpoint"}}}},
     "/schemas/observatory.schema.json": {"get": {"operationId": "getObservatorySchema", "responses": {"200": {"description": "JSON Schema for the combined bounded snapshot"}}}},
+    "/schemas/kv-observatory.schema.json": {"get": {"operationId": "getKvObservatorySchema", "responses": {"200": {"description": "JSON Schema for the KV snapshot family"}}}},
     "/api/observatory.json": {"get": {"operationId": "getObservatoryStatus", "responses": {"200": {"description": "Combined bounded snapshot", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Observatory"}}}}}}},
     "/api/rooms.json": {"get": {"operationId": "listRooms", "responses": {"200": {"description": "Reviewed room metadata"}}}},
     "/api/engagement.json": {"get": {"operationId": "getEngagement", "responses": {"200": {"description": "Official engagement rollups"}}}},
-    "/api/status.json": {"get": {"operationId": "getSnapshotStatus", "responses": {"200": {"description": "Freshness, coverage and warnings"}}}}
+    "/api/status.json": {"get": {"operationId": "getSnapshotStatus", "responses": {"200": {"description": "Freshness, coverage and warnings"}}}},
+    "/api/kv/status.json": {"get": {"operationId": "getKvStatus", "description": "OBSERVED COVERAGE ONLY; allowlist coverage, observer-derived timestamps, no raw values.", "responses": {"200": {"description": "KV observer status", "content": {"application/json": {"schema": {"$ref": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json"}}}}}}},
+    "/api/kv/namespaces.json": {"get": {"operationId": "getKvNamespaces", "description": "Configured and successfully observed namespaces; no global completeness claim.", "responses": {"200": {"description": "KV namespace coverage", "content": {"application/json": {"schema": {"$ref": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json"}}}}}}},
+    "/api/kv/changes.json": {"get": {"operationId": "getKvChanges", "description": "Observer-derived hash history without raw values; room-nonce is aggregate-only.", "responses": {"200": {"description": "KV temporal changes", "content": {"application/json": {"schema": {"$ref": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json"}}}}}}},
+    "/api/kv/presence.json": {"get": {"operationId": "getKvPresence", "description": "Unauthenticated hb-* observations; not an identity or liveness proof.", "responses": {"200": {"description": "KV presence-note observations", "content": {"application/json": {"schema": {"$ref": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/kv-observatory.schema.json"}}}}}}}
   },
   "components": {
     "schemas": {

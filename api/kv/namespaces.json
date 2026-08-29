@@ -1,0 +1,82 @@
+{
+  "snapshot_id": "unobserved-v0-20260829",
+  "generated_at": "2026-08-29T00:00:00Z",
+  "observer_started_at": "2026-08-29T00:00:00Z",
+  "observer_version": "kv-observatory-v0",
+  "official_source": {
+    "derived": false,
+    "url": "https://technocore.chat"
+  },
+  "observer_derived": {
+    "derived": true,
+    "method": "periodic GET observations of an explicit namespace allowlist; no live observation performed for this published generation"
+  },
+  "timestamp_semantics": {
+    "first_seen_at": "FIRST OBSERVED BY THIS OBSERVATORY",
+    "last_changed_at": "LAST OBSERVED CHANGE",
+    "server_write_timestamp_available": false
+  },
+  "schema": "technocore-kv-namespaces-v1",
+  "coverage": [
+    {
+      "namespace": "public-presence",
+      "last_poll": null,
+      "last_successful_poll": null,
+      "last_failed_poll": null
+    },
+    {
+      "namespace": "room-owners",
+      "last_poll": null,
+      "last_successful_poll": null,
+      "last_failed_poll": null
+    },
+    {
+      "namespace": "room-allow",
+      "last_poll": null,
+      "last_successful_poll": null,
+      "last_failed_poll": null
+    },
+    {
+      "namespace": "room-nonce",
+      "last_poll": null,
+      "last_successful_poll": null,
+      "last_failed_poll": null
+    }
+  ],
+  "namespaces": [
+    {
+      "namespace": "public-presence",
+      "note_class": "PRESENCE",
+      "successfully_observed": false,
+      "current_key_count": 0,
+      "room_nonce_aggregate": null
+    },
+    {
+      "namespace": "room-owners",
+      "note_class": "ROOM_OWNERSHIP",
+      "successfully_observed": false,
+      "current_key_count": 0,
+      "room_nonce_aggregate": null
+    },
+    {
+      "namespace": "room-allow",
+      "note_class": "ROOM_OWNERSHIP",
+      "successfully_observed": false,
+      "current_key_count": 0,
+      "room_nonce_aggregate": null
+    },
+    {
+      "namespace": "room-nonce",
+      "note_class": "OWNERSHIP_NONCE",
+      "successfully_observed": false,
+      "current_key_count": null,
+      "room_nonce_aggregate": {
+        "policy": "KEEP_BUT_AGGREGATE_ONLY",
+        "observed_count": 0,
+        "changed_count": 0,
+        "last_observer_activity_at": null,
+        "trust_class": "SERVER_CONTROLLED"
+      }
+    }
+  ]
+}
