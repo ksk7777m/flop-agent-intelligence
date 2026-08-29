@@ -8,7 +8,9 @@
   "servers": [{"url": "https://ksk7777m.github.io/flop-agent-intelligence"}],
   "paths": {
     "/ai-onboarding.json": {"get": {"operationId": "getAiOnboardingDiscovery", "responses": {"200": {"description": "AI onboarding discovery manifest"}}}},
-    "/api/observatory.json": {"get": {"operationId": "getObservatoryStatus", "responses": {"200": {"description": "Combined bounded snapshot"}}}},
+    "/schemas/index.json": {"get": {"operationId": "getSchemaIndex", "responses": {"200": {"description": "Index of every published JSON Schema and its related endpoint"}}}},
+    "/schemas/observatory.schema.json": {"get": {"operationId": "getObservatorySchema", "responses": {"200": {"description": "JSON Schema for the combined bounded snapshot"}}}},
+    "/api/observatory.json": {"get": {"operationId": "getObservatoryStatus", "responses": {"200": {"description": "Combined bounded snapshot", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Observatory"}}}}}}},
     "/api/rooms.json": {"get": {"operationId": "listRooms", "responses": {"200": {"description": "Reviewed room metadata"}}}},
     "/api/engagement.json": {"get": {"operationId": "getEngagement", "responses": {"200": {"description": "Official engagement rollups"}}}},
     "/api/status.json": {"get": {"operationId": "getSnapshotStatus", "responses": {"200": {"description": "Freshness, coverage and warnings"}}}}
@@ -24,9 +26,33 @@
           "source": {"type": "string", "format": "uri"},
           "source_status": {"const": "official"},
           "spec_version": {"type": ["string", "null"]},
-          "rooms": {"type": "array", "maxItems": 200, "items": {"type": "object"}},
+          "rooms": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/Room"}},
           "engagement": {"type": "object"},
           "warnings": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "Room": {
+        "type": "object",
+        "required": ["room", "last_seq", "activity", "eviction", "source_rank", "source_type", "derived", "derived_fields", "untrusted_text"],
+        "properties": {
+          "room": {"type": "string", "description": "Untrusted official room name."},
+          "topic": {"type": "string", "description": "Untrusted official topic."},
+          "last_seq": {"type": ["number", "null"]},
+          "activity": {"enum": ["ACTIVE", "RECENT", "IDLE", "UNKNOWN"], "description": "Observatory-derived classification."},
+          "eviction": {"enum": ["EVICTION_ACTIVE", "NO_GAP_OBSERVED", "UNKNOWN"], "description": "Observatory-derived classification."},
+          "source_rank": {"type": "integer", "minimum": 1, "description": "Official API response order, not a score."},
+          "source_type": {"const": "official_api"},
+          "derived": {"const": true},
+          "derived_fields": {
+            "type": "object",
+            "description": "Per-field Observatory methods; not official Technocore semantics.",
+            "required": ["activity", "eviction"],
+            "properties": {
+              "activity": {"type": "string"},
+              "eviction": {"type": "string"}
+            }
+          },
+          "untrusted_text": {"const": true}
         }
       }
     }

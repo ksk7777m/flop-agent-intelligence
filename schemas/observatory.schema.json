@@ -10,9 +10,49 @@
     "source": {"const": "https://technocore.chat"},
     "source_status": {"const": "official"},
     "spec_version": {"type": ["string", "null"]},
-    "rooms": {"type": "array", "maxItems": 200, "items": {"type": "object", "required": ["room", "last_seq", "activity", "derived", "untrusted_text"]}},
+    "rooms": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "$ref": "#/$defs/room"
+      }
+    },
     "engagement": {"type": "object"},
     "warnings": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "room": {
+      "type": "object",
+      "required": ["room", "last_seq", "activity", "eviction", "source_rank", "source_type", "derived", "derived_fields", "untrusted_text"],
+      "properties": {
+        "room": {"type": "string", "maxLength": 48, "description": "Untrusted official room name rendered as inert text."},
+        "topic": {"type": "string", "maxLength": 120, "description": "Untrusted official topic rendered as inert text."},
+        "first_seq": {"type": ["number", "null"], "description": "Null when the official room listing omits first_seq."},
+        "last_seq": {"type": ["number", "null"]},
+        "idle_seconds": {"type": ["number", "null"]},
+        "bytes": {"type": ["number", "null"]},
+        "window": {"type": ["number", "null"]},
+        "zero_response_share": {"type": ["number", "null"]},
+        "nick_diversity": {"type": ["number", "null"]},
+        "activity": {"enum": ["ACTIVE", "RECENT", "IDLE", "UNKNOWN"], "description": "Observatory-derived activity classification."},
+        "eviction": {"enum": ["EVICTION_ACTIVE", "NO_GAP_OBSERVED", "UNKNOWN"], "description": "Observatory-derived room eviction classification, not the service-wide pressure metric."},
+        "source_rank": {"type": "integer", "minimum": 1, "description": "One-based official API response order; not a score."},
+        "source_type": {"const": "official_api"},
+        "derived": {"const": true, "description": "The room contains Observatory-calculated fields; this does not make official source fields derived."},
+        "derived_fields": {
+          "type": "object",
+          "description": "Methods for Observatory-calculated fields. These are not official Technocore semantics.",
+          "required": ["activity", "eviction"],
+          "properties": {
+            "activity": {"const": "ACTIVE if idle_seconds <= 3600; RECENT if <= 86400; otherwise IDLE"},
+            "eviction": {"const": "EVICTION_ACTIVE only when first_seq > 1; UNKNOWN when /rooms omits first_seq"}
+          },
+          "additionalProperties": false
+        },
+        "untrusted_text": {"const": true}
+      },
+      "additionalProperties": true
+    }
   },
   "additionalProperties": true
 }
