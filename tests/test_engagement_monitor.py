@@ -1,4 +1,4 @@
-import io, json, math, tempfile, threading, unittest
+import io, json, math, os, subprocess, sys, tempfile, threading, time, unittest
 from unittest import mock
 from email.message import Message
 from pathlib import Path
@@ -6,7 +6,12 @@ from urllib.error import HTTPError
 
 from flop_agent.engagement import SOURCE_URL, build_sample, diff, room_status, series
 from flop_agent.engagement_history import HistoryCorruption, append, latest, load, validate
-from scripts.collect_engagement import CollectionError, MAX_RESPONSE_BYTES, backoff, fetch, interval_minutes, validate_endpoint
+from scripts.collect_engagement import (
+    CollectionError, MAX_RESPONSE_BYTES, MAX_TOTAL_COLLECTION_DEADLINE_SECONDS,
+    SOCKET_TIMEOUT_SECONDS, TOTAL_COLLECTION_DEADLINE_SECONDS,
+    TotalDeadlineExceeded, backoff, fetch, interval_minutes,
+    run_with_total_deadline, total_deadline_seconds, validate_endpoint,
+)
 import jsonschema
 
 
@@ -54,6 +59,63 @@ class EngagementMonitorTests(unittest.TestCase):
         with self.assertRaises(CollectionError) as caught:
             fetch(opener=lambda req, timeout: oversized)
         self.assertEqual(caught.exception.code,"RESPONSE_TOO_LARGE")
+
+    def test_total_deadline_configuration_and_fast_offline_success(self):
+        self.assertEqual(SOCKET_TIMEOUT_SECONDS,20.0)
+        self.assertEqual(TOTAL_COLLECTION_DEADLINE_SECONDS,30.0)
+        self.assertEqual(MAX_TOTAL_COLLECTION_DEADLINE_SECONDS,30.0)
+        for invalid in (0, .99, 30.01, math.inf):
+            with self.assertRaises(ValueError): total_deadline_seconds(invalid)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            command=[sys.executable,"-c",'print(\'{"ok":true,"sample":{"safe":"result"}}\')']
+            result=run_with_total_deadline(root,total_deadline=1,command=command)
+            self.assertEqual(result,{"safe":"result"})
+
+    def test_process_deadline_bounds_stalls_without_retry_or_artifacts(self):
+        class StalledProcess:
+            returncode=None
+            pid=12345
+            def __init__(self): self.calls=0; self.terminated=False; self.killed=False
+            def communicate(self,timeout):
+                self.calls+=1
+                if self.calls==1: raise subprocess.TimeoutExpired("worker",timeout)
+                self.returncode=-15
+                return "",""
+            def terminate(self): self.terminated=True
+            def kill(self): self.killed=True
+        for stage in ("connect-worker","dns","body-read","normalization","schema-validation","history-lock"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as folder:
+                root=Path(folder); history=root/"runtime/engagement/history.jsonl"
+                history.parent.mkdir(parents=True); history.write_text('{"existing":"unchanged"}\n')
+                processes=[]
+                def factory(*args,**kwargs):
+                    process=StalledProcess(); processes.append(process); return process
+                with self.assertRaises(TotalDeadlineExceeded) as caught:
+                    run_with_total_deadline(root,total_deadline=1,command=[stage],popen=factory)
+                self.assertEqual(caught.exception.metadata["error_class"],"TOTAL_DEADLINE_EXCEEDED")
+                self.assertEqual(caught.exception.metadata["configured_total_deadline"],1)
+                self.assertEqual(len(processes),1)
+                self.assertTrue(processes[0].terminated)
+                self.assertEqual(history.read_text(),'{"existing":"unchanged"}\n')
+                self.assertEqual(list((root/"runtime").rglob("*.deadline-*")),[])
+
+    def test_real_worker_is_reaped_and_runtime_is_rolled_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); history=root/"runtime/engagement/history.jsonl"
+            history.parent.mkdir(parents=True); history.write_text("original\n")
+            pid_file=root/"pid"
+            code=("import os,pathlib,time; "
+                  f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+                  f"pathlib.Path({str(history)!r}).write_text('partial raw response'); time.sleep(10)")
+            started=time.monotonic()
+            with self.assertRaises(TotalDeadlineExceeded):
+                run_with_total_deadline(root,total_deadline=1,command=[sys.executable,"-c",code])
+            self.assertLess(time.monotonic()-started,1.5)
+            pid=int(pid_file.read_text())
+            with self.assertRaises(ProcessLookupError): os.kill(pid,0)
+            self.assertEqual(history.read_text(),"original\n")
+            self.assertNotIn("raw response",history.read_text())
 
     def test_http_failures_no_body_read_and_no_retry(self):
         headers=Message(); headers["Retry-After"]="37"

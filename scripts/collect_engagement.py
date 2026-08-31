@@ -3,18 +3,24 @@
 
 from __future__ import annotations
 
-import argparse, hashlib, json, os, subprocess
+import argparse, hashlib, json, os, socket, subprocess, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from flop_agent.engagement import SOURCE_URL, build_sample, diff, series
 from flop_agent.engagement_history import append, load, range_rows
+from flop_agent.engagement_history import HistoryLockError
 
 VERSION = "0.1.0"
 BACKOFF_SECONDS = (900, 1800, 3600, 7200, 14400, 21600)
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+SOCKET_TIMEOUT_SECONDS = 20.0
+TOTAL_COLLECTION_DEADLINE_SECONDS = 30.0
+MIN_TOTAL_COLLECTION_DEADLINE_SECONDS = 1.0
+MAX_TOTAL_COLLECTION_DEADLINE_SECONDS = 30.0
+TERMINATION_GRACE_SECONDS = 0.1
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -29,6 +35,12 @@ class CollectionError(RuntimeError):
         self.status, self.retry_after, self.code = status, retry_after, code
 
 
+class TotalDeadlineExceeded(RuntimeError):
+    def __init__(self, metadata: dict):
+        super().__init__("TOTAL_DEADLINE_EXCEEDED")
+        self.metadata = metadata
+
+
 def validate_endpoint(url: str) -> str:
     if url != SOURCE_URL: raise ValueError("engagement source is an exact fixed allowlist entry")
     return url
@@ -39,6 +51,14 @@ def interval_minutes(value: str | None = None) -> int:
     except ValueError: raise ValueError("ENGAGEMENT_INTERVAL_MIN must be an integer") from None
     if minutes < 5: raise ValueError("ENGAGEMENT_INTERVAL_MIN must be at least 5")
     return minutes
+
+
+def total_deadline_seconds(value: float = TOTAL_COLLECTION_DEADLINE_SECONDS) -> float:
+    try: seconds = float(value)
+    except (TypeError, ValueError): raise ValueError("total deadline must be numeric") from None
+    if not MIN_TOTAL_COLLECTION_DEADLINE_SECONDS <= seconds <= MAX_TOTAL_COLLECTION_DEADLINE_SECONDS:
+        raise ValueError(f"total deadline must be between {MIN_TOTAL_COLLECTION_DEADLINE_SECONDS:g} and {MAX_TOTAL_COLLECTION_DEADLINE_SECONDS:g} seconds")
+    return seconds
 
 
 def retry_after(value: str | None) -> int | None:
@@ -99,11 +119,114 @@ def collect(root: Path, *, timeout: float = 20.0, opener=None,
     return sample
 
 
+def _runtime_files(root: Path) -> tuple[Path, ...]:
+    base = root / "runtime/engagement"
+    preview = base / "public-preview"
+    return (base / "history.jsonl", base / "history.jsonl.lock",
+            base / "history.jsonl.recovery-tail", preview / "engagement-sample.json",
+            preview / "engagement-diff.json", preview / "engagement-series.json")
+
+
+def _snapshot_runtime(root: Path) -> dict[Path, bytes | None]:
+    return {path: path.read_bytes() if path.exists() else None for path in _runtime_files(root)}
+
+
+def _restore_runtime(root: Path, snapshot: dict[Path, bytes | None]) -> None:
+    for path, content in snapshot.items():
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f".{path.name}.restore-{os.getpid()}")
+            temporary.write_bytes(content)
+            os.replace(temporary, path)
+    base = root / "runtime/engagement"
+    if base.exists():
+        for temporary in base.rglob("*.deadline-*"): temporary.unlink(missing_ok=True)
+
+
+def _git_revision(root: Path) -> str | None:
+    try:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                              capture_output=True, text=True, timeout=2).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECONDS,
+                            total_deadline: float = TOTAL_COLLECTION_DEADLINE_SECONDS,
+                            command: list[str] | None = None,
+                            popen=subprocess.Popen) -> dict:
+    """Run one worker under a process deadline that also bounds blocking DNS."""
+    deadline = total_deadline_seconds(total_deadline)
+    started = time.monotonic()
+    snapshot = _snapshot_runtime(root)
+    revision = _git_revision(root)
+    worker = command or [sys.executable, str(Path(__file__).resolve()), "--worker",
+                         "--root", str(root), "--timeout", str(timeout)]
+    process = popen(worker, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    text=True, start_new_session=True)
+    try:
+        worker_budget = deadline - (time.monotonic() - started) - (2 * TERMINATION_GRACE_SECONDS)
+        stdout, _ = process.communicate(timeout=max(0.001, worker_budget))
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        try: process.communicate(timeout=TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill(); process.communicate(timeout=TERMINATION_GRACE_SECONDS)
+        _restore_runtime(root, snapshot)
+        elapsed = min(time.monotonic() - started, deadline + TERMINATION_GRACE_SECONDS * 2)
+        raise TotalDeadlineExceeded({
+            "error_class": "TOTAL_DEADLINE_EXCEEDED",
+            "elapsed_seconds": round(elapsed, 3),
+            "configured_total_deadline": deadline,
+            "collector_version": VERSION,
+            "git_revision": revision,
+        }) from None
+    try: envelope = json.loads(stdout)
+    except json.JSONDecodeError: envelope = {"ok": False, "error_class": "VALIDATION_FAILED"}
+    if process.returncode != 0 or not envelope.get("ok"):
+        raise CollectionError(None, code=str(envelope.get("error_class", "VALIDATION_FAILED")))
+    return envelope["sample"]
+
+
+def _worker(root: Path, timeout: float) -> int:
+    try:
+        sample = collect(root, timeout=timeout)
+        envelope = {"ok": True, "sample": sample}
+    except (TimeoutError, socket.timeout):
+        envelope = {"ok": False, "error_class": "HTTP_TIMEOUT"}
+    except URLError as error:
+        envelope = {"ok": False, "error_class":
+                    "HTTP_TIMEOUT" if isinstance(error.reason, (TimeoutError, socket.timeout))
+                    else "VALIDATION_FAILED"}
+    except HistoryLockError:
+        envelope = {"ok": False, "error_class": "HISTORY_LOCK_TIMEOUT"}
+    except (ValueError, json.JSONDecodeError):
+        envelope = {"ok": False, "error_class": "VALIDATION_FAILED"}
+    except CollectionError as error:
+        envelope = {"ok": False, "error_class": error.code}
+    except Exception:
+        envelope = {"ok": False, "error_class": "VALIDATION_FAILED"}
+    print(json.dumps(envelope, separators=(",", ":")))
+    return 0 if envelope["ok"] else 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--timeout", type=float, default=20.0)
-    args = parser.parse_args(); print(json.dumps(collect(args.root, timeout=args.timeout), indent=2))
+    parser.add_argument("--timeout", type=float, default=SOCKET_TIMEOUT_SECONDS)
+    parser.add_argument("--total-deadline", type=float, default=TOTAL_COLLECTION_DEADLINE_SECONDS)
+    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.worker: raise SystemExit(_worker(args.root, args.timeout))
+    try: result = run_with_total_deadline(args.root, timeout=args.timeout, total_deadline=args.total_deadline)
+    except TotalDeadlineExceeded as error:
+        print(json.dumps(error.metadata, indent=2)); raise SystemExit(2) from None
+    except CollectionError as error:
+        print(json.dumps({"error_class": error.code, "collector_version": VERSION,
+                          "git_revision": _git_revision(args.root)}, indent=2)); raise SystemExit(1) from None
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__": main()

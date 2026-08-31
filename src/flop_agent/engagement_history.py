@@ -82,8 +82,10 @@ def append(path: Path, sample: Mapping[str, Any]) -> bool:
                 time.sleep(0.05)
         try:
             separator = b""
+            existing_data = b""
             if path.exists():
                 data = path.read_bytes()
+                existing_data = data
                 lines = data.splitlines(keepends=True)
                 if lines and not lines[-1].endswith((b"\n", b"\r")):
                     try:
@@ -92,19 +94,30 @@ def append(path: Path, sample: Mapping[str, Any]) -> bool:
                     except (ValueError, json.JSONDecodeError, TypeError):
                         recovery = path.with_suffix(path.suffix + ".recovery-tail")
                         recovery.write_bytes(lines[-1])
-                        with path.open("r+b") as stream:
-                            stream.truncate(len(data) - len(lines[-1])); stream.flush(); os.fsync(stream.fileno())
+                        existing_data = data[:-len(lines[-1])]
             if any(key(existing) == key(row) for existing in load(path)): return False
             payload = separator + (json.dumps(row, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n").encode()
-            descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+            # Replace a fully fsynced candidate atomically.  This retains the
+            # complete-write loop while ensuring forced worker termination can
+            # never expose a partially appended JSONL record.
+            temporary = path.with_name(f".{path.name}.deadline-{os.getpid()}")
+            descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
+                payload = existing_data + payload
                 written = 0
                 while written < len(payload):
                     count = os.write(descriptor, payload[written:])
                     if count <= 0: raise OSError("short history write")
                     written += count
                 os.fsync(descriptor)
-            finally: os.close(descriptor)
+                os.close(descriptor); descriptor = -1
+                os.replace(temporary, path)
+                directory = os.open(path.parent, os.O_RDONLY)
+                try: os.fsync(directory)
+                finally: os.close(directory)
+            finally:
+                if descriptor >= 0: os.close(descriptor)
+                temporary.unlink(missing_ok=True)
             return True
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
