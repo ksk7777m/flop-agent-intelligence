@@ -7,6 +7,7 @@
   "age_seconds": null,
   "freshness": "UNKNOWN",
   "latest": null,
-  "evidence_level": "LOCAL_DERIVED",
+  "source_evidence_level": null,
+  "derived_evidence_level": "LOCAL_DERIVED",
   "warnings": ["These are observational engagement signals, not FLOP eligibility metrics."]
 }

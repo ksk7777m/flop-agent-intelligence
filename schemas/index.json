@@ -22,7 +22,25 @@
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/engagement-sample.v1.json",
       "path": "schemas/engagement-sample.v1.json",
       "purpose": "Validates normalized public aggregate engagement observations without raw response bodies.",
-      "related_endpoint": "https://ksk7777m.github.io/flop-agent-intelligence/api/engagement-status.json"
+      "related_endpoint": null
+    },
+    {
+      "name": "Engagement Public API V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/engagement-api.v1.json",
+      "path": "schemas/engagement-api.v1.json",
+      "purpose": "Validates Engagement status, neutral diff, and bounded series documents.",
+      "related_endpoints": [
+        "https://ksk7777m.github.io/flop-agent-intelligence/api/engagement-status.json",
+        "https://ksk7777m.github.io/flop-agent-intelligence/api/engagement-diff.json",
+        "https://ksk7777m.github.io/flop-agent-intelligence/api/engagement-series.json"
+      ]
+    },
+    {
+      "name": "Capabilities V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/capabilities.v1.json",
+      "path": "schemas/capabilities.v1.json",
+      "purpose": "Strictly validates disabled write, scheduler, Presence, KV, Engagement, collaboration, and drift capability states.",
+      "related_endpoint": "https://ksk7777m.github.io/flop-agent-intelligence/api/capabilities.json"
     }
   ]
 }

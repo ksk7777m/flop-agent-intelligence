@@ -8,6 +8,11 @@ ENGAGEMENT HISTORY YET**. Runtime history is append-only under ignored
 key combines `fetched_at` and `source_sha256`. The public series is bounded to
 seven days and 672 points. A room missing from a later bounded response is only
 `NOT_OBSERVED_IN_LATEST_SNAPSHOT`, never deleted, banned, or reaped.
+Successful responses are capped at 2 MiB using both declared-length rejection
+and an actual bounded read. Runtime samples are schema-validated before append.
+History uses a local advisory lock; a truncated tail is quarantined while
+middle corruption fails closed. Runtime history is not automatically deleted
+or rotated, and any future scheduler review must include a retention decision.
 
 The independent KV Observatory publishes `/api/kv/status.json`, `/api/kv/namespaces.json`, `/api/kv/changes.json`, and `/api/kv/presence.json`. These are static GET-only snapshots with a common `snapshot_id` and `generated_at`. Coverage is allowlist-only and current coverage means a successful namespace poll in the latest completed cycle. `first_seen_at` means **FIRST OBSERVED BY THIS OBSERVATORY**; `last_changed_at` means **LAST OBSERVED CHANGE**; `DISAPPEARED_FROM_OBSERVER_VIEW` means this observer later saw the key absent, with cause unknown. All timestamps are observer-derived, hashes derive from untrusted public values, raw values are never published, and `room-nonce` is aggregate-only. The checked-in generation states **NO REVIEWED LIVE OBSERVATION YET**.
 
@@ -83,6 +88,12 @@ the local safety policy is independently fixed at a 15-minute default and a
 five-minute hard floor. A valid bounded `Retry-After` is recorded for 429, but
 the one-shot collector never retries. The documented future 5xx backoff is
 15m, 30m, 1h, 2h, 4h, then 6h maximum; no loop or scheduler implements it.
+
+Samples separate `source_evidence_level: OFFICIAL_PUBLIC_ENDPOINT` from
+`derived_evidence_level: LOCAL_DERIVED` and enumerate direct, optional, and
+observer-derived fields. A changed room lists comparable `changed_fields`;
+window, generation, or first-sequence changes are neutral
+`OBSERVATION_CONTEXT_CHANGED`, never evidence of deterioration.
 
 - `zero_response_share`: fraction of messages after which no different nick spoke.
 - `nick_diversity`: distinct nicks divided by messages in the observed window.

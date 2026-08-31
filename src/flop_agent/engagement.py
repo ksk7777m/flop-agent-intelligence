@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping, Sequence
 
 SOURCE_URL = "https://technocore.chat/rooms?format=json&limit=200"
@@ -14,12 +15,19 @@ CAVEATS = [
 ]
 
 
-def number(value: Any) -> int | float | None:
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+def number(value: Any, *, field: str = "number", integer: bool = False,
+           ratio: bool = False) -> int | float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"invalid {field}")
+    if value < 0 or (ratio and value > 1) or (integer and not isinstance(value, int)):
+        raise ValueError(f"invalid {field}")
+    return value
 
 
 def room_status(window: Any) -> str:
-    value = number(window)
+    value = number(window, field="window", integer=True)
     return "INSUFFICIENT_WINDOW" if value is None or value < 20 else "OBSERVED"
 
 
@@ -34,13 +42,13 @@ def build_sample(raw: Mapping[str, Any], *, fetched_at: str, source_sha256: str,
         room = item.get("room")
         per_room.append({
             "room": room[:48] if isinstance(room, str) else "",
-            "window": number(item.get("window")),
-            "zero_response_share": number(item.get("zero_response_share")),
-            "nick_diversity": number(item.get("nick_diversity")),
-            "last_seq": number(item.get("last_seq")),
-            "first_seq": number(item.get("first_seq")),
-            "idle_seconds": number(item.get("idle_seconds")),
-            "generation": number(item.get("generation")),
+            "window": number(item.get("window"), field="window", integer=True),
+            "zero_response_share": number(item.get("zero_response_share"), field="zero_response_share", ratio=True),
+            "nick_diversity": number(item.get("nick_diversity"), field="nick_diversity", ratio=True),
+            "last_seq": number(item.get("last_seq"), field="last_seq", integer=True),
+            "first_seq": number(item.get("first_seq"), field="first_seq", integer=True),
+            "idle_seconds": number(item.get("idle_seconds"), field="idle_seconds"),
+            "generation": number(item.get("generation"), field="generation", integer=True),
             "status": room_status(item.get("window")),
             "untrusted": True,
         })
@@ -52,14 +60,21 @@ def build_sample(raw: Mapping[str, Any], *, fetched_at: str, source_sha256: str,
         "source_url": SOURCE_URL, "source_sha256": source_sha256,
         "collector_version": collector_version, "git_revision": git_revision,
         "content_length": content_length, "http_status": 200,
-        "evidence_level": "OFFICIAL_PUBLIC_ENDPOINT", "limit": 200,
-        "returned_rooms": len(per_room), "rooms_total": number(raw.get("total")),
-        "windowed_messages": number(rollup.get("windowed_messages")),
-        "zero_response_share": number(rollup.get("zero_response_share")),
-        "nick_diversity": number(rollup.get("nick_diversity")),
-        "windowed_note_to_message_ratio": number(rollup.get("windowed_note_to_message_ratio")),
-        "notes_total": number(notes.get("total")) if notes else number(raw.get("notes_total")),
-        "notes_capacity": number(notes.get("capacity")) if notes else number(raw.get("notes_capacity")),
+        "source_evidence_level": "OFFICIAL_PUBLIC_ENDPOINT",
+        "derived_evidence_level": "LOCAL_DERIVED",
+        "provenance": {
+            "direct_source": ["rooms_total", "windowed_messages", "zero_response_share", "nick_diversity", "windowed_note_to_message_ratio", "per_room"],
+            "local_derived": ["source_sha256", "returned_rooms", "coverage", "warnings", "per_room.status", "per_room.untrusted"],
+            "optional_source": ["notes_total", "notes_capacity", "observed_spec_version", "per_room.first_seq", "per_room.generation"],
+        },
+        "limit": 200,
+        "returned_rooms": len(per_room), "rooms_total": number(raw.get("total"), field="rooms_total", integer=True),
+        "windowed_messages": number(rollup.get("windowed_messages"), field="windowed_messages", integer=True),
+        "zero_response_share": number(rollup.get("zero_response_share"), field="zero_response_share", ratio=True),
+        "nick_diversity": number(rollup.get("nick_diversity"), field="nick_diversity", ratio=True),
+        "windowed_note_to_message_ratio": number(rollup.get("windowed_note_to_message_ratio"), field="windowed_note_to_message_ratio"),
+        "notes_total": number(notes.get("total"), field="notes_total", integer=True) if notes else number(raw.get("notes_total"), field="notes_total", integer=True),
+        "notes_capacity": number(notes.get("capacity"), field="notes_capacity", integer=True) if notes else number(raw.get("notes_capacity"), field="notes_capacity", integer=True),
         "observed_spec_version": raw.get("version") if isinstance(raw.get("version"), str) else None,
         "coverage": {"scope": "OBSERVED_COVERAGE_ONLY", "returned_rooms": len(per_room),
                      "rooms_total": number(raw.get("total"))},
@@ -68,13 +83,21 @@ def build_sample(raw: Mapping[str, Any], *, fetched_at: str, source_sha256: str,
 
 
 def _delta(current: Any, previous: Any) -> int | float | None:
-    return current - previous if number(current) is not None and number(previous) is not None else None
+    return current - previous if current is not None and previous is not None else None
 
 
 def diff(previous: Mapping[str, Any] | None, current: Mapping[str, Any]) -> dict[str, Any]:
     prior = previous or {}
     old = {r.get("room"): r for r in prior.get("per_room", []) if isinstance(r, Mapping)}
     new = {r.get("room"): r for r in current.get("per_room", []) if isinstance(r, Mapping)}
+    comparable = ("zero_response_share", "nick_diversity", "last_seq", "idle_seconds")
+    changed = []
+    for room in sorted(k for k in old.keys() & new.keys() if k):
+        fields = [field for field in comparable if old[room].get(field) != new[room].get(field)]
+        context = any(old[room].get(field) != new[room].get(field) for field in ("window", "generation", "first_seq"))
+        if fields or context:
+            changed.append({"room": room, "changed_fields": fields,
+                            "observation_context": "OBSERVATION_CONTEXT_CHANGED" if context else "COMPARABLE"})
     return {
         "schema": "engagement-diff-v1", "generated_at": current["fetched_at"],
         "comparison": "OBSERVED_ENGAGEMENT_CHANGE" if previous else "NO_PREVIOUS_SAMPLE",
@@ -83,7 +106,7 @@ def diff(previous: Mapping[str, Any] | None, current: Mapping[str, Any]) -> dict
         "delta_notes_total": _delta(current.get("notes_total"), prior.get("notes_total")),
         "new_rooms": sorted(k for k in new.keys() - old.keys() if k),
         "not_observed_in_latest_snapshot": sorted(k for k in old.keys() - new.keys() if k),
-        "changed_rooms": sorted(k for k in old.keys() & new.keys() if old[k] != new[k] and k),
+        "changed_rooms": changed,
         "evidence_level": "LOCAL_DERIVED", "warnings": list(CAVEATS),
     }
 

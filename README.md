@@ -115,9 +115,11 @@ The KV Observatory is an independent, local, GET-only temporal observer for an e
 
 ## Engagement & Decay Monitor V1
 
-The independent Engagement Monitor is implemented with collection and scheduling disabled. A future one-shot run reads only the exact public aggregate URL `https://technocore.chat/rooms?format=json&limit=200`, normalizes bounded fields into ignored `runtime/`, discards raw and error bodies, and makes no room, KV, mailbox, wallet, or write request. The intended interval is 15 minutes with a hard five-minute floor; no scheduler is installed or activated. Checked-in APIs honestly report **NO REVIEWED ENGAGEMENT HISTORY YET**.
+The independent Engagement Monitor is implemented with collection and scheduling disabled. A future one-shot run reads only the exact public aggregate URL `https://technocore.chat/rooms?format=json&limit=200`, enforces a 2 MiB successful-response limit, normalizes and schema-validates bounded fields into ignored `runtime/`, discards raw and error bodies, and makes no room, KV, mailbox, wallet, or write request. The intended interval is 15 minutes with a hard five-minute floor; no scheduler is installed or activated. Checked-in APIs honestly report **NO REVIEWED ENGAGEMENT HISTORY YET**.
 
 Low nick diversity does not imply bot activity and high zero-response share does not imply spam. These are observational signals, not FLOP eligibility, reward, reputation, or airdrop scores.
+
+Runtime history is append-only and may grow until an operator adopts a reviewed retention or archival policy. The public series remains bounded to seven days and 672 points. Scheduler activation requires an explicit storage-retention review; no cleanup or rotation is automatic.
 
 ## Workflow
 
@@ -201,7 +203,7 @@ Publishing remains dry-run unless the human supplies both `--confirm` and an `AP
 
 ## Development
 
-Python 3.9+ and `cryptography` are required.
+Python 3.9+, `cryptography`, and `jsonschema` are required.
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v

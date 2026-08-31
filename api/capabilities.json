@@ -5,6 +5,7 @@
   "engagement": {"state": "IMPLEMENTED_COLLECTION_DISABLED", "observation": true, "live_collection": false},
   "collaboration": {"state": "READINESS_ONLY", "live_write": false},
   "scheduler": "DISABLED",
+  "drift_implementation": "NOT_IMPLEMENTED",
   "live_write_enabled": false,
   "presence_writes": 0,
   "technocore_write_automatic": false

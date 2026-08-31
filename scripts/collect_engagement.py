@@ -14,6 +14,7 @@ from flop_agent.engagement_history import append, load, range_rows
 
 VERSION = "0.1.0"
 BACKOFF_SECONDS = (900, 1800, 3600, 7200, 14400, 21600)
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -21,9 +22,11 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class CollectionError(RuntimeError):
-    def __init__(self, status: int | None, retry_after: int | None = None):
-        super().__init__(f"engagement collection failed: HTTP {status or 'NETWORK'}")
-        self.status, self.retry_after = status, retry_after
+    def __init__(self, status: int | None, retry_after: int | None = None,
+                 code: str = "COLLECTION_FAILED"):
+        super().__init__(code if code == "RESPONSE_TOO_LARGE"
+                         else f"engagement collection failed: HTTP {status or 'NETWORK'}")
+        self.status, self.retry_after, self.code = status, retry_after, code
 
 
 def validate_endpoint(url: str) -> str:
@@ -58,7 +61,13 @@ def fetch(*, timeout: float = 20.0, opener=None) -> tuple[bytes, int, object]:
     try:
         with open_fn(request, timeout=timeout) as response:
             if response.geturl() != SOURCE_URL: raise CollectionError(response.status)
-            return response.read(), response.status, response.headers
+            declared = response.headers.get("Content-Length")
+            if isinstance(declared, str) and declared.strip().isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+                raise CollectionError(response.status, code="RESPONSE_TOO_LARGE")
+            body = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(body) > MAX_RESPONSE_BYTES:
+                raise CollectionError(response.status, code="RESPONSE_TOO_LARGE")
+            return body, response.status, response.headers
     except HTTPError as error:
         # Deliberately discard every error body and perform no retry.
         raise CollectionError(error.code, backoff(error.code, retry_header=error.headers.get("Retry-After"))) from None
@@ -83,7 +92,7 @@ def collect(root: Path, *, timeout: float = 20.0, opener=None,
     append(history_path, sample)
     rows = load(history_path)
     output = root / "runtime/engagement/public-preview"; output.mkdir(parents=True, exist_ok=True)
-    (output / "engagement-status.json").write_text(json.dumps(sample, indent=2) + "\n", encoding="utf-8")
+    (output / "engagement-sample.json").write_text(json.dumps(sample, indent=2) + "\n", encoding="utf-8")
     (output / "engagement-diff.json").write_text(json.dumps(diff(before[-1] if before else None, sample), indent=2) + "\n", encoding="utf-8")
     stamp = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
     (output / "engagement-series.json").write_text(json.dumps(series(range_rows(rows, now=stamp)), indent=2) + "\n", encoding="utf-8")

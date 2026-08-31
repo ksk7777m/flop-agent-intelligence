@@ -46,7 +46,15 @@ async function loadEngagementMonitorData() {
     if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
     return [name, await response.json()];
   }));
-  return Object.fromEntries(values);
+  const data = Object.fromEntries(values);
+  const status = data["engagement-status"], diff = data["engagement-diff"], series = data["engagement-series"];
+  if (!status || status.schema !== "engagement-status-v1" ||
+      typeof status.state !== "string" || status.collection !== "DISABLED" || status.scheduler !== "DISABLED" ||
+      !diff || diff.schema !== "engagement-diff-v1" || !Array.isArray(diff.changed_rooms) ||
+      !series || series.schema !== "engagement-series-v1" || !Array.isArray(series.points)) {
+    throw new Error("malformed Engagement API");
+  }
+  return data;
 }
 
 function renderEngagementMonitor(status, diff, seriesData) {

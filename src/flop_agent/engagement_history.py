@@ -4,9 +4,23 @@ from __future__ import annotations
 
 import json
 import os
+import fcntl
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Any
+
+import jsonschema
+
+ROOT = Path(__file__).resolve().parents[2]
+SCHEMA_PATH = ROOT / "schemas/engagement-sample.v1.json"
+
+
+class HistoryCorruption(ValueError): pass
+
+
+class RecoverableTailTruncation(ValueError): pass
+class HistoryLockError(RuntimeError): pass
 
 
 def validate(sample: Mapping[str, Any]) -> dict[str, Any]:
@@ -19,22 +33,34 @@ def validate(sample: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid source hash")
     if not isinstance(sample["per_room"], list) or not isinstance(sample["warnings"], list):
         raise ValueError("invalid engagement collections")
-    return dict(sample)
+    row = dict(sample)
+    try:
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        jsonschema.Draft202012Validator(schema).validate(row)
+    except (OSError, json.JSONDecodeError, jsonschema.ValidationError) as error:
+        raise ValueError("invalid engagement sample") from error
+    return row
 
 
 def key(row: Mapping[str, Any]) -> tuple[str, str]:
     return str(row["fetched_at"]), str(row["source_sha256"])
 
 
-def load(path: Path, *, strict: bool = True) -> list[dict[str, Any]]:
+def load(path: Path, *, strict: bool = True, recover_tail: bool = True) -> list[dict[str, Any]]:
     if not path.exists(): return []
     rows = {}
-    lines = path.read_text(encoding="utf-8").splitlines()
+    data = path.read_bytes()
+    try: text = data.decode("utf-8")
+    except UnicodeDecodeError as error: raise HistoryCorruption("HISTORY_CORRUPTION") from error
+    lines = text.splitlines(keepends=True)
     for index, line in enumerate(lines, 1):
         if not line.strip(): continue
         try: row = validate(json.loads(line))
         except (ValueError, json.JSONDecodeError, TypeError):
-            if strict: raise ValueError(f"invalid history line {index}") from None
+            is_tail = index == len(lines) and not line.endswith(("\n", "\r"))
+            if is_tail and recover_tail:
+                continue
+            if strict: raise HistoryCorruption(f"HISTORY_CORRUPTION line {index}") from None
             continue
         rows[key(row)] = row
     return sorted(rows.values(), key=key)
@@ -42,13 +68,46 @@ def load(path: Path, *, strict: bool = True) -> list[dict[str, Any]]:
 
 def append(path: Path, sample: Mapping[str, Any]) -> bool:
     row = validate(sample)
-    if any(key(existing) == key(row) for existing in load(path)): return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = (json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n").encode()
-    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-    try: os.write(descriptor, payload); os.fsync(descriptor)
-    finally: os.close(descriptor)
-    return True
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with lock_path.open("a+b") as lock:
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise HistoryLockError("HISTORY_LOCK_TIMEOUT") from None
+                time.sleep(0.05)
+        try:
+            separator = b""
+            if path.exists():
+                data = path.read_bytes()
+                lines = data.splitlines(keepends=True)
+                if lines and not lines[-1].endswith((b"\n", b"\r")):
+                    try:
+                        validate(json.loads(lines[-1]))
+                        separator = b"\n"
+                    except (ValueError, json.JSONDecodeError, TypeError):
+                        recovery = path.with_suffix(path.suffix + ".recovery-tail")
+                        recovery.write_bytes(lines[-1])
+                        with path.open("r+b") as stream:
+                            stream.truncate(len(data) - len(lines[-1])); stream.flush(); os.fsync(stream.fileno())
+            if any(key(existing) == key(row) for existing in load(path)): return False
+            payload = separator + (json.dumps(row, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n").encode()
+            descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+            try:
+                written = 0
+                while written < len(payload):
+                    count = os.write(descriptor, payload[written:])
+                    if count <= 0: raise OSError("short history write")
+                    written += count
+                os.fsync(descriptor)
+            finally: os.close(descriptor)
+            return True
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def latest(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any] | None:
