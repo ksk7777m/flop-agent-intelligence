@@ -7,12 +7,43 @@ from urllib.error import HTTPError
 from flop_agent.engagement import SOURCE_URL, build_sample, diff, room_status, series
 from flop_agent.engagement_history import HistoryCorruption, append, latest, load, validate
 from scripts.collect_engagement import (
-    CollectionError, MAX_RESPONSE_BYTES, MAX_TOTAL_COLLECTION_DEADLINE_SECONDS,
+    CollectionError, MAX_IPC_BYTES, MAX_RESPONSE_BYTES, MAX_TOTAL_COLLECTION_DEADLINE_SECONDS,
     SOCKET_TIMEOUT_SECONDS, TOTAL_COLLECTION_DEADLINE_SECONDS,
-    TotalDeadlineExceeded, backoff, fetch, interval_minutes,
-    run_with_total_deadline, total_deadline_seconds, validate_endpoint,
+    TotalDeadlineExceeded, _decode_worker_result, backoff, commit_sample, fetch,
+    interval_minutes, run_with_total_deadline, total_deadline_seconds, validate_endpoint,
 )
 import jsonschema
+
+
+def _worker_sample(when="2026-08-29T00:00:00Z"):
+    return build_sample({"rooms":[{"room":"a","window":0}],"engagement":{}}, fetched_at=when,
+                        source_sha256="0"*64, collector_version="test")
+
+
+def successful_worker(connection, root, timeout, revision):
+    connection.send_bytes(json.dumps({"ok":True,"sample":_worker_sample()}).encode())
+    connection.close()
+
+
+def slow_successful_worker(connection, root, timeout, revision):
+    time.sleep(.6); successful_worker(connection,root,timeout,revision)
+
+
+def stalled_worker(connection, root, timeout, revision):
+    time.sleep(10)
+
+
+def descendant_worker(connection, root, timeout, revision):
+    signal_code="import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10)"
+    child=subprocess.Popen([sys.executable,"-c",signal_code])
+    Path(root,"worker-pids").write_text(f"{os.getpid()} {child.pid}")
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    time.sleep(10)
+
+
+def crashed_worker(connection, root, timeout, revision):
+    os._exit(7)
 
 
 class Response:
@@ -68,54 +99,103 @@ class EngagementMonitorTests(unittest.TestCase):
             with self.assertRaises(ValueError): total_deadline_seconds(invalid)
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
-            command=[sys.executable,"-c",'print(\'{"ok":true,"sample":{"safe":"result"}}\')']
-            result=run_with_total_deadline(root,total_deadline=1,command=command)
-            self.assertEqual(result,{"safe":"result"})
+            result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker)
+            self.assertEqual(result["schema"],"engagement-sample-v1")
+            self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
 
-    def test_process_deadline_bounds_stalls_without_retry_or_artifacts(self):
-        class StalledProcess:
-            returncode=None
-            pid=12345
-            def __init__(self): self.calls=0; self.terminated=False; self.killed=False
-            def communicate(self,timeout):
-                self.calls+=1
-                if self.calls==1: raise subprocess.TimeoutExpired("worker",timeout)
-                self.returncode=-15
-                return "",""
-            def terminate(self): self.terminated=True
-            def kill(self): self.killed=True
+    def test_process_deadline_bounds_stalls_without_rollback(self):
         for stage in ("connect-worker","dns","body-read","normalization","schema-validation","history-lock"):
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as folder:
                 root=Path(folder); history=root/"runtime/engagement/history.jsonl"
-                history.parent.mkdir(parents=True); history.write_text('{"existing":"unchanged"}\n')
-                processes=[]
-                def factory(*args,**kwargs):
-                    process=StalledProcess(); processes.append(process); return process
+                append(history,_worker_sample())
+                before=history.read_bytes(); lock=history.with_suffix(".jsonl.lock"); inode=lock.stat().st_ino
                 with self.assertRaises(TotalDeadlineExceeded) as caught:
-                    run_with_total_deadline(root,total_deadline=1,command=[stage],popen=factory)
+                    run_with_total_deadline(root,total_deadline=1,worker_target=stalled_worker)
                 self.assertEqual(caught.exception.metadata["error_class"],"TOTAL_DEADLINE_EXCEEDED")
                 self.assertEqual(caught.exception.metadata["configured_total_deadline"],1)
-                self.assertEqual(len(processes),1)
-                self.assertTrue(processes[0].terminated)
-                self.assertEqual(history.read_text(),'{"existing":"unchanged"}\n')
+                self.assertEqual(history.read_bytes(),before)
+                self.assertEqual(lock.stat().st_ino,inode)
                 self.assertEqual(list((root/"runtime").rglob("*.deadline-*")),[])
 
-    def test_real_worker_is_reaped_and_runtime_is_rolled_back(self):
+    def test_process_group_is_killed_and_reaped(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with self.assertRaises(TotalDeadlineExceeded):
+                run_with_total_deadline(root,total_deadline=1,worker_target=descendant_worker)
+            pids=[int(value) for value in (root/"worker-pids").read_text().split()]
+            for _ in range(50):
+                if all(self._process_gone(pid) for pid in pids): break
+                time.sleep(.02)
+            self.assertTrue(all(self._process_gone(pid) for pid in pids))
+
+    @staticmethod
+    def _process_gone(pid):
+        try: os.kill(pid,0); return False
+        except ProcessLookupError: return True
+
+    def test_ipc_protocol_and_crash_fail_closed(self):
+        sample=_worker_sample()
+        valid=json.dumps({"ok":True,"sample":sample}).encode()
+        self.assertTrue(_decode_worker_result(valid,0)["ok"])
+        self.assertEqual(_decode_worker_result(b'{"ok":false,"error_class":"HTTP_TIMEOUT"}',0)["error_class"],"HTTP_TIMEOUT")
+        invalid=[b'{"ok":true}',b'{"safe":"result"}',b'{"ok":true,"sample":1}',
+                 b'{"ok":true,"sample":{},"extra":1}',b'bad',b'',b'x'*(MAX_IPC_BYTES+1)]
+        for payload in invalid:
+            with self.subTest(payload=payload[:20]),self.assertRaises(CollectionError) as caught:
+                _decode_worker_result(payload,0)
+            self.assertEqual(caught.exception.code,"WORKER_PROTOCOL_ERROR")
+        with self.assertRaises(CollectionError) as caught: _decode_worker_result(valid,7)
+        self.assertEqual(caught.exception.code,"WORKER_CRASHED")
+        with tempfile.TemporaryDirectory() as folder,self.assertRaises(CollectionError) as caught:
+            run_with_total_deadline(Path(folder),total_deadline=1,worker_target=crashed_worker)
+        self.assertEqual(caught.exception.code,"WORKER_CRASHED")
+
+    def test_remaining_budget_prevents_commit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); called=[]
+            def forbidden_commit(*args,**kwargs): called.append(True)
+            with self.assertRaises(TotalDeadlineExceeded):
+                run_with_total_deadline(root,total_deadline=1,worker_target=slow_successful_worker,commit=forbidden_commit)
+            self.assertEqual(called,[]); self.assertFalse((root/"runtime").exists())
+
+    def test_timeout_never_rolls_back_concurrent_commits(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); history=root/"runtime/engagement/history.jsonl"
-            history.parent.mkdir(parents=True); history.write_text("original\n")
-            pid_file=root/"pid"
-            code=("import os,pathlib,time; "
-                  f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
-                  f"pathlib.Path({str(history)!r}).write_text('partial raw response'); time.sleep(10)")
-            started=time.monotonic()
+            append(history,_worker_sample())
+            committed=_worker_sample("2026-08-29T01:00:00Z")
+            thread=threading.Thread(target=lambda: (time.sleep(.1),append(history,committed)))
+            thread.start()
             with self.assertRaises(TotalDeadlineExceeded):
-                run_with_total_deadline(root,total_deadline=1,command=[sys.executable,"-c",code])
-            self.assertLess(time.monotonic()-started,1.5)
-            pid=int(pid_file.read_text())
-            with self.assertRaises(ProcessLookupError): os.kill(pid,0)
-            self.assertEqual(history.read_text(),"original\n")
-            self.assertNotIn("raw response",history.read_text())
+                run_with_total_deadline(root,total_deadline=1,worker_target=stalled_worker)
+            thread.join(); self.assertEqual([r["fetched_at"] for r in load(history)],
+                                           ["2026-08-29T00:00:00Z","2026-08-29T01:00:00Z"])
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); history=root/"runtime/engagement/history.jsonl"
+            with self.assertRaises(TotalDeadlineExceeded):
+                run_with_total_deadline(root,total_deadline=1,worker_target=stalled_worker)
+            append(history,_worker_sample()); self.assertEqual(len(load(history)),1)
+
+    def test_parent_commits_serialize_and_dedupe_under_stable_lock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); results=[]; barrier=threading.Barrier(2)
+            def commit():
+                barrier.wait(); results.append(commit_sample(root,_worker_sample()))
+            threads=[threading.Thread(target=commit) for _ in range(2)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join()
+            history=root/"runtime/engagement/history.jsonl"
+            self.assertEqual(sorted(results),[False,True]); self.assertEqual(len(load(history)),1)
+            lock=history.with_suffix(".jsonl.lock")
+            inode=lock.stat().st_ino
+            commit_sample(root,_worker_sample("2026-08-29T01:00:00Z"))
+            self.assertEqual(lock.stat().st_ino,inode); self.assertEqual(len(load(history)),2)
+            self.assertEqual(oct(history.stat().st_mode & 0o777),"0o600")
+
+    def test_worker_cli_bypass_is_rejected(self):
+        root=Path(__file__).resolve().parents[1]
+        result=subprocess.run([sys.executable,str(root/"scripts/collect_engagement.py"),"--worker"],
+                              cwd=root,capture_output=True,text=True,timeout=3)
+        self.assertEqual(result.returncode,2); self.assertIn("unrecognized arguments",result.stderr)
 
     def test_http_failures_no_body_read_and_no_retry(self):
         headers=Message(); headers["Retry-After"]="37"

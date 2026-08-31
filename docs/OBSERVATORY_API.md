@@ -10,12 +10,16 @@ seven days and 672 points. A room missing from a later bounded response is only
 `NOT_OBSERVED_IN_LATEST_SNAPSHOT`, never deleted, banned, or reaped.
 Successful responses are capped at 2 MiB using both declared-length rejection
 and an actual bounded read. Runtime samples are schema-validated before append.
-The one-shot CLI runs its collector in a supervised child process with a
-30-second total wall-clock deadline and retains the 20-second socket timeout.
-The process boundary also bounds blocking DNS resolution. On expiry the parent
-terminates the worker, waits one bounded grace period, kills only if necessary,
-restores the pre-attempt runtime files, and reports `TOTAL_DEADLINE_EXCEEDED`
-without retrying. The deadline accepts only 1–30 seconds and cannot be disabled.
+The one-shot CLI runs an internal preparation worker under a 30-second total
+wall-clock deadline and retains the 20-second socket timeout. The process
+boundary also bounds blocking DNS resolution. The worker cannot be selected by
+a CLI flag and never mutates history. It returns at most 256 KiB of normalized,
+schema-validated IPC; the parent validates that envelope again and uses the
+remaining deadline budget for one commit under the stable `0600` history lock.
+On expiry the parent terminates and reaps the worker process group, discards
+uncommitted work, and reports `TOTAL_DEADLINE_EXCEEDED` without restoring or
+modifying committed history. The deadline accepts only 1–30 seconds, cannot be
+disabled, and never retries. Scheduling remains disabled.
 History uses a local advisory lock; a truncated tail is quarantined while
 middle corruption fails closed. Runtime history is not automatically deleted
 or rotated, and any future scheduler review must include a retention decision.

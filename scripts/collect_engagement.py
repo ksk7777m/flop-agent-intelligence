@@ -3,15 +3,16 @@
 
 from __future__ import annotations
 
-import argparse, hashlib, json, os, socket, subprocess, sys, time
+import argparse, hashlib, json, multiprocessing, os, signal, socket, subprocess, threading, time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from flop_agent.engagement import SOURCE_URL, build_sample, diff, series
-from flop_agent.engagement_history import append, load, range_rows
-from flop_agent.engagement_history import HistoryLockError
+from flop_agent.engagement_history import append, load, range_rows, validate
+from flop_agent.engagement_history import HistoryDeadlineExceeded, HistoryLockError
 
 VERSION = "0.1.0"
 BACKOFF_SECONDS = (900, 1800, 3600, 7200, 14400, 21600)
@@ -21,6 +22,9 @@ TOTAL_COLLECTION_DEADLINE_SECONDS = 30.0
 MIN_TOTAL_COLLECTION_DEADLINE_SECONDS = 1.0
 MAX_TOTAL_COLLECTION_DEADLINE_SECONDS = 30.0
 TERMINATION_GRACE_SECONDS = 0.1
+MAX_IPC_BYTES = 256 * 1024
+MIN_COMMIT_BUDGET_SECONDS = 0.5
+WORKER_ERRORS = {"HTTP_TIMEOUT", "VALIDATION_FAILED", "RESPONSE_TOO_LARGE"}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -93,56 +97,31 @@ def fetch(*, timeout: float = 20.0, opener=None) -> tuple[bytes, int, object]:
         raise CollectionError(error.code, backoff(error.code, retry_header=error.headers.get("Retry-After"))) from None
 
 
-def collect(root: Path, *, timeout: float = 20.0, opener=None,
-            fetched_at: str | None = None) -> dict:
+def prepare_sample(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECONDS, opener=None,
+                   fetched_at: str | None = None, git_revision: str | None = None) -> dict:
     interval_minutes()
     body, status, _headers = fetch(timeout=timeout, opener=opener)
     try: raw = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError): raise ValueError("official endpoint returned invalid JSON") from None
     if not isinstance(raw, dict): raise ValueError("official endpoint returned a non-object")
     fetched_at = fetched_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    try:
-        revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
-                                  capture_output=True, text=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError): revision = None
     sample = build_sample(raw, fetched_at=fetched_at, source_sha256=hashlib.sha256(body).hexdigest(),
-                          collector_version=VERSION, git_revision=revision, content_length=len(body))
+                          collector_version=VERSION, git_revision=git_revision, content_length=len(body))
+    return validate(sample)
+
+
+def commit_sample(root: Path, sample: dict, *, deadline_at: float | None = None) -> bool:
+    sample = validate(sample)
     history_path = root / "runtime/engagement/history.jsonl"
     before = load(history_path)
-    append(history_path, sample)
+    committed = append(history_path, sample, deadline_at=deadline_at)
     rows = load(history_path)
     output = root / "runtime/engagement/public-preview"; output.mkdir(parents=True, exist_ok=True)
     (output / "engagement-sample.json").write_text(json.dumps(sample, indent=2) + "\n", encoding="utf-8")
     (output / "engagement-diff.json").write_text(json.dumps(diff(before[-1] if before else None, sample), indent=2) + "\n", encoding="utf-8")
-    stamp = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    stamp = datetime.fromisoformat(sample["fetched_at"].replace("Z", "+00:00"))
     (output / "engagement-series.json").write_text(json.dumps(series(range_rows(rows, now=stamp)), indent=2) + "\n", encoding="utf-8")
-    return sample
-
-
-def _runtime_files(root: Path) -> tuple[Path, ...]:
-    base = root / "runtime/engagement"
-    preview = base / "public-preview"
-    return (base / "history.jsonl", base / "history.jsonl.lock",
-            base / "history.jsonl.recovery-tail", preview / "engagement-sample.json",
-            preview / "engagement-diff.json", preview / "engagement-series.json")
-
-
-def _snapshot_runtime(root: Path) -> dict[Path, bytes | None]:
-    return {path: path.read_bytes() if path.exists() else None for path in _runtime_files(root)}
-
-
-def _restore_runtime(root: Path, snapshot: dict[Path, bytes | None]) -> None:
-    for path, content in snapshot.items():
-        if content is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_name(f".{path.name}.restore-{os.getpid()}")
-            temporary.write_bytes(content)
-            os.replace(temporary, path)
-    base = root / "runtime/engagement"
-    if base.exists():
-        for temporary in base.rglob("*.deadline-*"): temporary.unlink(missing_ok=True)
+    return committed
 
 
 def _git_revision(root: Path) -> str | None:
@@ -153,63 +132,136 @@ def _git_revision(root: Path) -> str | None:
         return None
 
 
+def _error_envelope(error_class: str) -> dict:
+    return {"ok": False, "error_class": error_class}
+
+
+def _worker_entry(connection, root: str, timeout: float, revision: str | None) -> None:
+    try:
+        try:
+            envelope = {"ok": True, "sample": prepare_sample(Path(root), timeout=timeout,
+                                                               git_revision=revision)}
+        except (TimeoutError, socket.timeout): envelope = _error_envelope("HTTP_TIMEOUT")
+        except URLError as error:
+            envelope = _error_envelope("HTTP_TIMEOUT" if isinstance(error.reason, (TimeoutError, socket.timeout))
+                                       else "VALIDATION_FAILED")
+        except CollectionError as error:
+            envelope = _error_envelope(error.code if error.code in WORKER_ERRORS else "VALIDATION_FAILED")
+        except Exception: envelope = _error_envelope("VALIDATION_FAILED")
+        encoded = json.dumps(envelope, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        connection.send_bytes(encoded)
+    except BaseException:
+        pass
+    finally:
+        connection.close()
+
+
+def _process_bootstrap(target, connection, root: str, timeout: float, revision: str | None) -> None:
+    try: os.setsid()
+    except OSError: pass
+    target(connection, root, timeout, revision)
+
+
+def _stop_process_group(process) -> None:
+    if process.pid is None: return
+    def group_exists() -> bool:
+        try: os.killpg(process.pid, 0); return True
+        except ProcessLookupError: return False
+        except PermissionError: return True
+    try: os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    except OSError:
+        try: process.terminate()
+        except (ProcessLookupError, OSError, AttributeError): pass
+    try: process.join(TERMINATION_GRACE_SECONDS)
+    except (OSError, AssertionError): pass
+    if process.is_alive() or group_exists():
+        try: os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+        except OSError:
+            try: process.kill()
+            except (ProcessLookupError, OSError, AttributeError): pass
+        try: process.join(TERMINATION_GRACE_SECONDS)
+        except (OSError, AssertionError): pass
+    if process.is_alive():
+        try: process.kill(); process.join(TERMINATION_GRACE_SECONDS)
+        except (ProcessLookupError, OSError, AssertionError, AttributeError): pass
+
+
+def _decode_worker_result(payload: bytes, exit_code: int | None) -> dict:
+    if exit_code not in (0, None): raise CollectionError(None, code="WORKER_CRASHED")
+    if not payload or len(payload) > MAX_IPC_BYTES: raise CollectionError(None, code="WORKER_PROTOCOL_ERROR")
+    try: envelope = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError): raise CollectionError(None, code="WORKER_PROTOCOL_ERROR") from None
+    if not isinstance(envelope, dict) or type(envelope.get("ok")) is not bool:
+        raise CollectionError(None, code="WORKER_PROTOCOL_ERROR")
+    if envelope["ok"]:
+        if set(envelope) != {"ok", "sample"} or not isinstance(envelope.get("sample"), dict):
+            raise CollectionError(None, code="WORKER_PROTOCOL_ERROR")
+        try: envelope["sample"] = validate(envelope["sample"])
+        except ValueError: raise CollectionError(None, code="WORKER_PROTOCOL_ERROR") from None
+    else:
+        if set(envelope) != {"ok", "error_class"} or envelope.get("error_class") not in WORKER_ERRORS:
+            raise CollectionError(None, code="WORKER_PROTOCOL_ERROR")
+    return envelope
+
+
+@contextmanager
+def _commit_alarm(seconds: float):
+    if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
+        yield; return
+    previous = signal.getsignal(signal.SIGALRM)
+    def expired(_signum, _frame): raise HistoryDeadlineExceeded("TOTAL_DEADLINE_EXCEEDED")
+    signal.signal(signal.SIGALRM, expired); signal.setitimer(signal.ITIMER_REAL, max(0.001, seconds))
+    try: yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0); signal.signal(signal.SIGALRM, previous)
+
+
 def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECONDS,
                             total_deadline: float = TOTAL_COLLECTION_DEADLINE_SECONDS,
-                            command: list[str] | None = None,
-                            popen=subprocess.Popen) -> dict:
+                            worker_target=_worker_entry,
+                            context=None,
+                            commit=commit_sample) -> dict:
     """Run one worker under a process deadline that also bounds blocking DNS."""
     deadline = total_deadline_seconds(total_deadline)
     started = time.monotonic()
-    snapshot = _snapshot_runtime(root)
     revision = _git_revision(root)
-    worker = command or [sys.executable, str(Path(__file__).resolve()), "--worker",
-                         "--root", str(root), "--timeout", str(timeout)]
-    process = popen(worker, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    text=True, start_new_session=True)
+    ctx = context or multiprocessing.get_context("fork")
+    parent_connection, child_connection = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_process_bootstrap,
+                          args=(worker_target, child_connection, str(root), timeout, revision))
+    process.start(); child_connection.close()
     try:
         worker_budget = deadline - (time.monotonic() - started) - (2 * TERMINATION_GRACE_SECONDS)
-        stdout, _ = process.communicate(timeout=max(0.001, worker_budget))
-    except subprocess.TimeoutExpired:
-        process.terminate()
-        try: process.communicate(timeout=TERMINATION_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            process.kill(); process.communicate(timeout=TERMINATION_GRACE_SECONDS)
-        _restore_runtime(root, snapshot)
-        elapsed = min(time.monotonic() - started, deadline + TERMINATION_GRACE_SECONDS * 2)
+        if worker_budget <= 0 or not parent_connection.poll(max(0.001, worker_budget)):
+            raise TotalDeadlineExceeded({})
+        try: payload = parent_connection.recv_bytes(MAX_IPC_BYTES)
+        except (EOFError, OSError):
+            process.join(TERMINATION_GRACE_SECONDS)
+            code = "WORKER_CRASHED" if process.exitcode not in (0, None) else "WORKER_PROTOCOL_ERROR"
+            raise CollectionError(None, code=code) from None
+        process.join(TERMINATION_GRACE_SECONDS)
+        if process.is_alive(): raise TotalDeadlineExceeded({})
+        envelope = _decode_worker_result(payload, process.exitcode)
+        if not envelope["ok"]: raise CollectionError(None, code=envelope["error_class"])
+        remaining = deadline - (time.monotonic() - started)
+        if remaining < MIN_COMMIT_BUDGET_SECONDS: raise TotalDeadlineExceeded({})
+        try:
+            with _commit_alarm(remaining): commit(root, envelope["sample"], deadline_at=started + deadline)
+        except HistoryLockError: raise CollectionError(None, code="HISTORY_LOCK_TIMEOUT") from None
+        except HistoryDeadlineExceeded: raise TotalDeadlineExceeded({}) from None
+        if time.monotonic() - started > deadline: raise TotalDeadlineExceeded({})
+        return envelope["sample"]
+    except TotalDeadlineExceeded:
+        _stop_process_group(process)
         raise TotalDeadlineExceeded({
-            "error_class": "TOTAL_DEADLINE_EXCEEDED",
-            "elapsed_seconds": round(elapsed, 3),
-            "configured_total_deadline": deadline,
-            "collector_version": VERSION,
-            "git_revision": revision,
+            "error_class": "TOTAL_DEADLINE_EXCEEDED", "elapsed_seconds": round(time.monotonic() - started, 3),
+            "configured_total_deadline": deadline, "collector_version": VERSION, "git_revision": revision,
         }) from None
-    try: envelope = json.loads(stdout)
-    except json.JSONDecodeError: envelope = {"ok": False, "error_class": "VALIDATION_FAILED"}
-    if process.returncode != 0 or not envelope.get("ok"):
-        raise CollectionError(None, code=str(envelope.get("error_class", "VALIDATION_FAILED")))
-    return envelope["sample"]
-
-
-def _worker(root: Path, timeout: float) -> int:
-    try:
-        sample = collect(root, timeout=timeout)
-        envelope = {"ok": True, "sample": sample}
-    except (TimeoutError, socket.timeout):
-        envelope = {"ok": False, "error_class": "HTTP_TIMEOUT"}
-    except URLError as error:
-        envelope = {"ok": False, "error_class":
-                    "HTTP_TIMEOUT" if isinstance(error.reason, (TimeoutError, socket.timeout))
-                    else "VALIDATION_FAILED"}
-    except HistoryLockError:
-        envelope = {"ok": False, "error_class": "HISTORY_LOCK_TIMEOUT"}
-    except (ValueError, json.JSONDecodeError):
-        envelope = {"ok": False, "error_class": "VALIDATION_FAILED"}
-    except CollectionError as error:
-        envelope = {"ok": False, "error_class": error.code}
-    except Exception:
-        envelope = {"ok": False, "error_class": "VALIDATION_FAILED"}
-    print(json.dumps(envelope, separators=(",", ":")))
-    return 0 if envelope["ok"] else 1
+    finally:
+        parent_connection.close()
+        _stop_process_group(process)
 
 
 def main() -> None:
@@ -217,9 +269,7 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--timeout", type=float, default=SOCKET_TIMEOUT_SECONDS)
     parser.add_argument("--total-deadline", type=float, default=TOTAL_COLLECTION_DEADLINE_SECONDS)
-    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if args.worker: raise SystemExit(_worker(args.root, args.timeout))
     try: result = run_with_total_deadline(args.root, timeout=args.timeout, total_deadline=args.total_deadline)
     except TotalDeadlineExceeded as error:
         print(json.dumps(error.metadata, indent=2)); raise SystemExit(2) from None

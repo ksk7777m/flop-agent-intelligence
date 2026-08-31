@@ -21,6 +21,7 @@ class HistoryCorruption(ValueError): pass
 
 class RecoverableTailTruncation(ValueError): pass
 class HistoryLockError(RuntimeError): pass
+class HistoryDeadlineExceeded(TimeoutError): pass
 
 
 def validate(sample: Mapping[str, Any]) -> dict[str, Any]:
@@ -66,13 +67,18 @@ def load(path: Path, *, strict: bool = True, recover_tail: bool = True) -> list[
     return sorted(rows.values(), key=key)
 
 
-def append(path: Path, sample: Mapping[str, Any]) -> bool:
+def append(path: Path, sample: Mapping[str, Any], *, deadline_at: float | None = None) -> bool:
     row = validate(sample)
+    def check_deadline() -> None:
+        if deadline_at is not None and time.monotonic() >= deadline_at:
+            raise HistoryDeadlineExceeded("TOTAL_DEADLINE_EXCEEDED")
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     with lock_path.open("a+b") as lock:
-        deadline = time.monotonic() + 5
+        os.chmod(lock_path, 0o600)
+        deadline = min(time.monotonic() + 5, deadline_at) if deadline_at is not None else time.monotonic() + 5
         while True:
+            check_deadline()
             try:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
@@ -81,6 +87,7 @@ def append(path: Path, sample: Mapping[str, Any]) -> bool:
                     raise HistoryLockError("HISTORY_LOCK_TIMEOUT") from None
                 time.sleep(0.05)
         try:
+            check_deadline()
             separator = b""
             existing_data = b""
             if path.exists():
@@ -94,8 +101,10 @@ def append(path: Path, sample: Mapping[str, Any]) -> bool:
                     except (ValueError, json.JSONDecodeError, TypeError):
                         recovery = path.with_suffix(path.suffix + ".recovery-tail")
                         recovery.write_bytes(lines[-1])
+                        os.chmod(recovery, 0o600)
                         existing_data = data[:-len(lines[-1])]
             if any(key(existing) == key(row) for existing in load(path)): return False
+            check_deadline()
             payload = separator + (json.dumps(row, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n").encode()
             # Replace a fully fsynced candidate atomically.  This retains the
             # complete-write loop while ensuring forced worker termination can
@@ -110,8 +119,10 @@ def append(path: Path, sample: Mapping[str, Any]) -> bool:
                     if count <= 0: raise OSError("short history write")
                     written += count
                 os.fsync(descriptor)
+                check_deadline()
                 os.close(descriptor); descriptor = -1
                 os.replace(temporary, path)
+                os.chmod(path, 0o600)
                 directory = os.open(path.parent, os.O_RDONLY)
                 try: os.fsync(directory)
                 finally: os.close(directory)
