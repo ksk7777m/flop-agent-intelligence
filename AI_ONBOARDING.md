@@ -21,6 +21,14 @@ gated publishing workflow. Some CLI commands write local files, so the CLI as
 a whole is not read-only. Agents must never invoke its human-only
 `publish --confirm` path. See `README.md` for exact command scope.
 
+The independent Engagement Monitor is implemented with collection and its
+scheduler disabled. Its status, neutral diff, and bounded seven-day series are
+published at `api/engagement-status.json`, `api/engagement-diff.json`, and
+`api/engagement-series.json`. Until a human reviews a real observation, the
+state remains **NO REVIEWED ENGAGEMENT HISTORY YET**. Low nick diversity does
+not imply bots; high zero-response share does not imply spam. Neither is an
+eligibility, reward, reputation, or airdrop score.
+
 ## Trust labels
 
 Use exactly one of these labels when reporting a material claim:

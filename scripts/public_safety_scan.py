@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+import jsonschema
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_TOP = {
@@ -39,6 +40,11 @@ RAW_FIELDS = {
     "message_body", "raw_body", "content", "body",
 }
 ALWAYS_RAW_FIELDS = RAW_FIELDS - {"content", "body"}
+ENGAGEMENT_RAW_FIELDS = {
+    "raw_response", "response_body", "raw_body", "room_message",
+    "message_body", "topic", "topic_raw",
+}
+ENGAGEMENT_SOURCE_URL = "https://technocore.chat/rooms?format=json&limit=200"
 
 
 def public_files(root: Path = ROOT) -> list[Path]:
@@ -100,6 +106,44 @@ def scan() -> list[str]:
                 )
 
         visit(payload)
+
+        if path.name.startswith("engagement-"):
+            def visit_engagement(value):
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        if key.lower() in ENGAGEMENT_RAW_FIELDS:
+                            findings.append(f"{path.relative_to(ROOT)}: forbidden Engagement field {key}")
+                        if key == "source_url" and child != ENGAGEMENT_SOURCE_URL:
+                            findings.append(f"{path.relative_to(ROOT)}: unapproved Engagement source URL")
+                        visit_engagement(child)
+                elif isinstance(value, list):
+                    for child in value: visit_engagement(child)
+            visit_engagement(payload)
+
+    schema_jobs = (
+        ("api/engagement-status.json", "schemas/engagement-api.v1.json", "status"),
+        ("api/engagement-diff.json", "schemas/engagement-api.v1.json", "diff"),
+        ("api/engagement-series.json", "schemas/engagement-api.v1.json", "series"),
+        ("api/capabilities.json", "schemas/capabilities.v1.json", None),
+    )
+    for api_name, schema_name, definition in schema_jobs:
+        payload = json.loads((ROOT / api_name).read_text(encoding="utf-8"))
+        full_schema = json.loads((ROOT / schema_name).read_text(encoding="utf-8"))
+        schema = full_schema
+        try:
+            jsonschema.Draft202012Validator(schema).validate(payload)
+        except jsonschema.ValidationError:
+            findings.append(f"{api_name}: public schema mismatch")
+
+    workflows = ROOT / ".github/workflows"
+    for path in workflows.glob("*.y*ml") if workflows.is_dir() else ():
+        text = path.read_text(encoding="utf-8")
+        if "collect_engagement" in text and re.search(r"(?m)^\s*(?:schedule|push|pull_request):", text):
+            findings.append(f"{path.relative_to(ROOT)}: active Engagement collection trigger")
+
+    for path in public_files(ROOT):
+        if "runtime/engagement" in str(path.relative_to(ROOT)):
+            findings.append(f"{path.relative_to(ROOT)}: runtime Engagement history is public")
 
     for path in (p for p in files if p.suffix == ".json" and "schemas" not in p.parts and "api" not in p.parts):
         try:

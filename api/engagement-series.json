@@ -1,0 +1,5 @@
+{
+  "schema": "engagement-series-v1", "window_days": 7, "points": [],
+  "interpretation": "NO_PERSISTENT_CHANGE_ESTABLISHED", "evidence_level": "LOCAL_DERIVED",
+  "warnings": ["NO REVIEWED ENGAGEMENT HISTORY YET"]
+}

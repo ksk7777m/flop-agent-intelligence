@@ -1,0 +1,12 @@
+{
+  "schema": "flop-agent-capabilities-v1",
+  "presence": {"state": "LIVE_READY_DISABLED", "observation": true, "readiness": true, "live_write": false, "writes": 0},
+  "kv": {"state": "READ_ONLY_OBSERVATORY", "coverage_scope": "OBSERVED_COVERAGE_ONLY", "live_write": false},
+  "engagement": {"state": "IMPLEMENTED_COLLECTION_DISABLED", "observation": true, "live_collection": false},
+  "collaboration": {"state": "READINESS_ONLY", "live_write": false},
+  "scheduler": "DISABLED",
+  "drift_implementation": "NOT_IMPLEMENTED",
+  "live_write_enabled": false,
+  "presence_writes": 0,
+  "technocore_write_automatic": false
+}

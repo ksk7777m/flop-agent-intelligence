@@ -149,7 +149,10 @@ class ObservatoryTests(unittest.TestCase):
         for entry in index["schemas"]:
             self.assertTrue((ROOT / entry["path"]).is_file())
             self.assertEqual(local_path(entry["url"]), ROOT / entry["path"])
-            self.assertTrue(local_path(entry["related_endpoint"]).is_file())
+            related = ([entry["related_endpoint"]] if entry.get("related_endpoint") else
+                       entry.get("related_endpoints", []))
+            for endpoint in related:
+                self.assertTrue(local_path(endpoint).is_file())
 
     def test_derived_fields_schema_and_documentation(self):
         schema = json.loads((ROOT / "schemas/observatory.schema.json").read_text(encoding="utf-8"))

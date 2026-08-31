@@ -1,0 +1,12 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://ksk7777m.github.io/flop-agent-intelligence/schemas/capabilities.v1.json","title":"FLOP Agent Capabilities V1","type":"object","additionalProperties":false,
+  "required":["schema","presence","kv","engagement","collaboration","scheduler","drift_implementation","live_write_enabled","presence_writes","technocore_write_automatic"],
+  "properties":{
+    "schema":{"const":"flop-agent-capabilities-v1"},
+    "presence":{"type":"object","additionalProperties":false,"required":["state","observation","readiness","live_write","writes"],"properties":{"state":{"const":"LIVE_READY_DISABLED"},"observation":{"const":true},"readiness":{"const":true},"live_write":{"const":false},"writes":{"const":0}}},
+    "kv":{"type":"object","additionalProperties":false,"required":["state","coverage_scope","live_write"],"properties":{"state":{"const":"READ_ONLY_OBSERVATORY"},"coverage_scope":{"const":"OBSERVED_COVERAGE_ONLY"},"live_write":{"const":false}}},
+    "engagement":{"type":"object","additionalProperties":false,"required":["state","observation","live_collection"],"properties":{"state":{"const":"IMPLEMENTED_COLLECTION_DISABLED"},"observation":{"const":true},"live_collection":{"const":false}}},
+    "collaboration":{"type":"object","additionalProperties":false,"required":["state","live_write"],"properties":{"state":{"const":"READINESS_ONLY"},"live_write":{"const":false}}},
+    "scheduler":{"const":"DISABLED"},"drift_implementation":{"const":"NOT_IMPLEMENTED"},"live_write_enabled":{"const":false},"presence_writes":{"const":0},"technocore_write_automatic":{"const":false}
+  }
+}

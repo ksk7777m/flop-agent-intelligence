@@ -39,6 +39,44 @@ async function loadPresenceData() {
   return response.json();
 }
 
+async function loadEngagementMonitorData() {
+  const names = ["engagement-status", "engagement-diff", "engagement-series"];
+  const values = await Promise.all(names.map(async name => {
+    const response = await fetch(`./api/${name}.json`, {cache: "no-store"});
+    if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
+    return [name, await response.json()];
+  }));
+  const data = Object.fromEntries(values);
+  const status = data["engagement-status"], diff = data["engagement-diff"], series = data["engagement-series"];
+  if (!status || status.schema !== "engagement-status-v1" ||
+      typeof status.state !== "string" || status.collection !== "DISABLED" || status.scheduler !== "DISABLED" ||
+      !diff || diff.schema !== "engagement-diff-v1" || !Array.isArray(diff.changed_rooms) ||
+      !series || series.schema !== "engagement-series-v1" || !Array.isArray(series.points)) {
+    throw new Error("malformed Engagement API");
+  }
+  return data;
+}
+
+function renderEngagementMonitor(status, diff, seriesData) {
+  const root = document.querySelector("#engagement-monitor");
+  const values = [["State", status.state], ["Collection", status.collection],
+    ["Scheduler", status.scheduler], ["Freshness", status.freshness],
+    ["Seven-day points", seriesData.points.length], ["Comparison", diff.comparison]];
+  root.replaceChildren(...values.map(([label, value]) => {
+    const item = text("div", "", "monitor-item");
+    item.append(text("small", label), text("strong", String(value), statusClass(value)));
+    return item;
+  }));
+  document.querySelector("#engagement-monitor-detail").textContent =
+    "Observer snapshot freshness only · low diversity does not imply bots · high zero-response share does not imply spam";
+}
+
+function renderEngagementMonitorError() {
+  document.querySelector("#engagement-monitor").replaceChildren(text("strong", "ENGAGEMENT DATA UNAVAILABLE", "status-unknown"));
+  document.querySelector("#engagement-monitor-detail").textContent =
+    "Presence, KV, Observatory, and discovery remain independent. No retry was attempted.";
+}
+
 function renderKv(status, namespaces, changes, presence) {
   const root = document.querySelector("#kv-observatory");
   const values = [["State", status.observation_status], ["Coverage", status.coverage_claim],
@@ -419,6 +457,9 @@ loadData().then(data => {
 });
 
 loadPresenceData().then(renderPresenceAdapter).catch(() => renderPresenceError());
+loadEngagementMonitorData().then(data => renderEngagementMonitor(
+  data["engagement-status"], data["engagement-diff"], data["engagement-series"]
+)).catch(() => renderEngagementMonitorError());
 loadKvData().then(kv => {
   renderKv(kv.kv_status, kv.kv_namespaces, kv.kv_changes, kv.kv_presence);
 }).catch(() => renderKvError());

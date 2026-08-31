@@ -1,0 +1,17 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"https://ksk7777m.github.io/flop-agent-intelligence/schemas/engagement-sample.v1.json",
+  "title":"Engagement Sample V1", "type":"object", "additionalProperties":false,
+  "required":["schema","fetched_at","source_url","source_sha256","collector_version","git_revision","content_length","http_status","source_evidence_level","derived_evidence_level","provenance","limit","returned_rooms","rooms_total","windowed_messages","zero_response_share","nick_diversity","windowed_note_to_message_ratio","notes_total","notes_capacity","observed_spec_version","coverage","warnings","per_room"],
+  "properties":{
+    "schema":{"const":"engagement-sample-v1"},"fetched_at":{"type":"string","format":"date-time"},"source_url":{"const":"https://technocore.chat/rooms?format=json&limit=200"},
+    "source_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"collector_version":{"type":"string","minLength":1,"maxLength":32},"git_revision":{"type":["string","null"],"pattern":"^[0-9a-f]{40}$"},"content_length":{"type":["integer","null"],"minimum":0,"maximum":2097152},
+    "http_status":{"const":200},"source_evidence_level":{"const":"OFFICIAL_PUBLIC_ENDPOINT"},"derived_evidence_level":{"const":"LOCAL_DERIVED"},
+    "provenance":{"type":"object","additionalProperties":false,"required":["direct_source","local_derived","optional_source"],"properties":{"direct_source":{"type":"array","items":{"type":"string"}},"local_derived":{"type":"array","items":{"type":"string"}},"optional_source":{"type":"array","items":{"type":"string"}}}},
+    "limit":{"const":200},"returned_rooms":{"type":"integer","minimum":0,"maximum":200},"rooms_total":{"type":["integer","null"],"minimum":0},"windowed_messages":{"type":["integer","null"],"minimum":0},
+    "zero_response_share":{"type":["number","null"],"minimum":0,"maximum":1},"nick_diversity":{"type":["number","null"],"minimum":0,"maximum":1},"windowed_note_to_message_ratio":{"type":["number","null"],"minimum":0},
+    "notes_total":{"type":["integer","null"],"minimum":0},"notes_capacity":{"type":["integer","null"],"minimum":0},"observed_spec_version":{"type":["string","null"],"maxLength":64},
+    "coverage":{"type":"object","additionalProperties":false,"required":["scope","returned_rooms","rooms_total"],"properties":{"scope":{"const":"OBSERVED_COVERAGE_ONLY"},"returned_rooms":{"type":"integer","minimum":0,"maximum":200},"rooms_total":{"type":["integer","null"],"minimum":0}}},
+    "warnings":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":240}},
+    "per_room":{"type":"array","maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["room","window","zero_response_share","nick_diversity","last_seq","first_seq","idle_seconds","generation","status","untrusted"],"properties":{"room":{"type":"string","maxLength":48},"window":{"type":["integer","null"],"minimum":0},"zero_response_share":{"type":["number","null"],"minimum":0,"maximum":1},"nick_diversity":{"type":["number","null"],"minimum":0,"maximum":1},"last_seq":{"type":["integer","null"],"minimum":0},"first_seq":{"type":["integer","null"],"minimum":0},"idle_seconds":{"type":["number","null"],"minimum":0},"generation":{"type":["integer","null"],"minimum":0},"status":{"enum":["OBSERVED","INSUFFICIENT_WINDOW"]},"untrusted":{"const":true}}}}
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schema": "engagement-status-v1",
+  "state": "NO_REVIEWED_ENGAGEMENT_HISTORY_YET",
+  "collection": "DISABLED",
+  "scheduler": "DISABLED",
+  "last_updated": null,
+  "age_seconds": null,
+  "freshness": "UNKNOWN",
+  "latest": null,
+  "source_evidence_level": null,
+  "derived_evidence_level": "LOCAL_DERIVED",
+  "warnings": ["These are observational engagement signals, not FLOP eligibility metrics."]
+}
