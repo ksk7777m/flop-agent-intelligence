@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse, hashlib, json, multiprocessing, os, signal, socket, subprocess, threading, time
 from contextlib import contextmanager
+from dataclasses import dataclass
+from enum import Enum
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -25,6 +27,7 @@ TERMINATION_GRACE_SECONDS = 0.1
 MAX_IPC_BYTES = 256 * 1024
 MIN_COMMIT_BUDGET_SECONDS = 0.5
 WORKER_ERRORS = {"HTTP_TIMEOUT", "VALIDATION_FAILED", "RESPONSE_TOO_LARGE"}
+STARTUP_IPC_BYTES = 1024
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -110,24 +113,49 @@ def prepare_sample(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECONDS, opene
     return validate(sample)
 
 
-def commit_sample(root: Path, sample: dict, *, deadline_at: float | None = None) -> bool:
+def _atomic_preview(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.candidate-{os.getpid()}-{threading.get_ident()}")
+    descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        written = 0
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0: raise OSError("short preview write")
+            written += count
+        os.fsync(descriptor)
+        os.close(descriptor); descriptor = -1
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    finally:
+        if descriptor >= 0: os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
+def commit_sample(root: Path, sample: dict, *, deadline_at: float | None = None,
+                  transaction: dict[str, str] | None = None) -> bool:
     sample = validate(sample)
     history_path = root / "runtime/engagement/history.jsonl"
     before = load(history_path)
-    committed = append(history_path, sample, deadline_at=deadline_at)
+    committed = append(history_path, sample, deadline_at=deadline_at, transaction=transaction)
     rows = load(history_path)
     output = root / "runtime/engagement/public-preview"; output.mkdir(parents=True, exist_ok=True)
-    (output / "engagement-sample.json").write_text(json.dumps(sample, indent=2) + "\n", encoding="utf-8")
-    (output / "engagement-diff.json").write_text(json.dumps(diff(before[-1] if before else None, sample), indent=2) + "\n", encoding="utf-8")
+    _atomic_preview(output / "engagement-sample.json", (json.dumps(sample, indent=2) + "\n").encode())
+    _atomic_preview(output / "engagement-diff.json", (json.dumps(diff(before[-1] if before else None, sample), indent=2) + "\n").encode())
     stamp = datetime.fromisoformat(sample["fetched_at"].replace("Z", "+00:00"))
-    (output / "engagement-series.json").write_text(json.dumps(series(range_rows(rows, now=stamp)), indent=2) + "\n", encoding="utf-8")
+    _atomic_preview(output / "engagement-series.json", (json.dumps(series(range_rows(rows, now=stamp)), indent=2) + "\n").encode())
     return committed
 
 
-def _git_revision(root: Path) -> str | None:
+def _git_revision(root: Path, deadline_at: float) -> str | None:
+    remaining = deadline_at - time.monotonic()
+    if remaining <= 0: raise TotalDeadlineExceeded({})
     try:
         return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
-                              capture_output=True, text=True, timeout=2).stdout.strip()
+                              capture_output=True, text=True, timeout=min(2.0, remaining)).stdout.strip()
+    except subprocess.TimeoutExpired: raise TotalDeadlineExceeded({}) from None
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -156,36 +184,106 @@ def _worker_entry(connection, root: str, timeout: float, revision: str | None) -
         connection.close()
 
 
-def _process_bootstrap(target, connection, root: str, timeout: float, revision: str | None) -> None:
-    try: os.setsid()
-    except OSError: pass
+def _process_bootstrap(target, connection, root: str, timeout: float, revision: str | None,
+                       startup_timeout: float, session_setup) -> None:
+    try:
+        session_setup()
+        pid, pgid, sid = os.getpid(), os.getpgrp(), os.getsid(0)
+        if pid != pgid or pid != sid: raise OSError("worker session identity mismatch")
+        connection.send_bytes(json.dumps({"type":"READY","pid":pid,"pgid":pgid,"sid":sid},
+                                         separators=(",", ":")).encode())
+    except BaseException:
+        try: connection.send_bytes(b'{"type":"STARTUP_FAILED"}')
+        except BaseException: pass
+        connection.close()
+        return
+    try:
+        if not connection.poll(startup_timeout) or connection.recv_bytes(16) != b"READY_ACK":
+            connection.close(); return
+    except BaseException:
+        connection.close(); return
     target(connection, root, timeout, revision)
 
 
-def _stop_process_group(process) -> None:
+class OwnershipState(Enum):
+    STARTING = "STARTING"
+    OWNED = "OWNED"
+    TERMINATING = "TERMINATING"
+    REAPED = "REAPED"
+    RELEASED = "OWNERSHIP_RELEASED"
+
+
+@dataclass
+class WorkerOwnership:
+    state: OwnershipState = OwnershipState.STARTING
+    pid: int | None = None
+    pgid: int | None = None
+    sid: int | None = None
+
+    def release(self) -> None:
+        self.state = OwnershipState.RELEASED
+        self.pid = self.pgid = self.sid = None
+
+
+def _validate_ready(payload: bytes, process, ownership: WorkerOwnership,
+                    getpgid=os.getpgid, getsid=os.getsid) -> None:
+    try: ready = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise CollectionError(None, code="WORKER_STARTUP_FAILED") from None
+    expected = process.pid
+    if (not isinstance(ready, dict) or set(ready) != {"type","pid","pgid","sid"}
+            or ready.get("type") != "READY" or type(ready.get("pid")) is not int
+            or ready["pid"] != expected or ready.get("pgid") != expected or ready.get("sid") != expected):
+        raise CollectionError(None, code="WORKER_STARTUP_FAILED")
+    try:
+        if getpgid(expected) != expected or getsid(expected) != expected:
+            raise CollectionError(None, code="WORKER_STARTUP_FAILED")
+    except ProcessLookupError: raise CollectionError(None, code="WORKER_STARTUP_FAILED") from None
+    ownership.state, ownership.pid, ownership.pgid, ownership.sid = OwnershipState.OWNED, expected, expected, expected
+
+
+def _owned_identity_matches(ownership: WorkerOwnership, getpgid=os.getpgid,
+                            getsid=os.getsid) -> bool:
+    if ownership.state not in {OwnershipState.OWNED, OwnershipState.TERMINATING} or ownership.pid is None:
+        return False
+    try: return getpgid(ownership.pid) == ownership.pgid and getsid(ownership.pid) == ownership.sid
+    except (ProcessLookupError, PermissionError): return False
+
+
+def _cleanup_unowned(process) -> None:
+    """Bound direct-child cleanup before session ownership is established."""
     if process.pid is None: return
-    def group_exists() -> bool:
-        try: os.killpg(process.pid, 0); return True
-        except ProcessLookupError: return False
-        except PermissionError: return True
-    try: os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError: pass
-    except OSError:
-        try: process.terminate()
-        except (ProcessLookupError, OSError, AttributeError): pass
-    try: process.join(TERMINATION_GRACE_SECONDS)
-    except (OSError, AssertionError): pass
-    if process.is_alive() or group_exists():
-        try: os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError: pass
-        except OSError:
-            try: process.kill()
-            except (ProcessLookupError, OSError, AttributeError): pass
-        try: process.join(TERMINATION_GRACE_SECONDS)
-        except (OSError, AssertionError): pass
+    try: process.terminate()
+    except (ProcessLookupError, OSError, AttributeError): pass
+    process.join(TERMINATION_GRACE_SECONDS)
     if process.is_alive():
-        try: process.kill(); process.join(TERMINATION_GRACE_SECONDS)
-        except (ProcessLookupError, OSError, AssertionError, AttributeError): pass
+        try: process.kill()
+        except (ProcessLookupError, OSError, AttributeError): pass
+        process.join(TERMINATION_GRACE_SECONDS)
+    if process.is_alive(): raise CollectionError(None, code="WORKER_CLEANUP_FAILED")
+
+
+def _cleanup_owned(process, ownership: WorkerOwnership, killpg=os.killpg,
+                   getpgid=os.getpgid, getsid=os.getsid) -> None:
+    """Signal only while the unreaped direct child proves group ownership."""
+    if ownership.state == OwnershipState.RELEASED: return
+    if not _owned_identity_matches(ownership, getpgid, getsid):
+        raise CollectionError(None, code="WORKER_CLEANUP_UNVERIFIED")
+    ownership.state = OwnershipState.TERMINATING
+    try: killpg(ownership.pgid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    except OSError: raise CollectionError(None, code="WORKER_CLEANUP_FAILED") from None
+    time.sleep(TERMINATION_GRACE_SECONDS)
+    # The direct child has deliberately not been joined, so its verified PID
+    # cannot be reused during this grace period.  The cached PGID remains owned
+    # until the escalation signal is sent and only then is the child reaped.
+    try: killpg(ownership.pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError): pass  # macOS: group contains only the terminated zombie leader.
+    except OSError: raise CollectionError(None, code="WORKER_CLEANUP_FAILED") from None
+    process.join(TERMINATION_GRACE_SECONDS)
+    if process.is_alive(): raise CollectionError(None, code="WORKER_CLEANUP_FAILED")
+    ownership.state = OwnershipState.REAPED
+    ownership.release()
 
 
 def _decode_worker_result(payload: bytes, exit_code: int | None) -> dict:
@@ -222,46 +320,82 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
                             total_deadline: float = TOTAL_COLLECTION_DEADLINE_SECONDS,
                             worker_target=_worker_entry,
                             context=None,
-                            commit=commit_sample) -> dict:
+                            commit=commit_sample,
+                            session_setup=os.setsid) -> dict:
     """Run one worker under a process deadline that also bounds blocking DNS."""
     deadline = total_deadline_seconds(total_deadline)
     started = time.monotonic()
-    revision = _git_revision(root)
+    deadline_at = started + deadline
+    try: revision = _git_revision(root, deadline_at)
+    except TotalDeadlineExceeded:
+        raise TotalDeadlineExceeded({
+            "error_class":"TOTAL_DEADLINE_EXCEEDED", "elapsed_seconds":round(time.monotonic()-started,3),
+            "configured_total_deadline":deadline, "collector_version":VERSION, "git_revision":None,
+        }) from None
+    if time.monotonic() >= deadline_at:
+        raise TotalDeadlineExceeded({"error_class":"TOTAL_DEADLINE_EXCEEDED",
+                                     "elapsed_seconds":round(time.monotonic()-started,3),
+                                     "configured_total_deadline":deadline,
+                                     "collector_version":VERSION,"git_revision":revision})
     ctx = context or multiprocessing.get_context("fork")
-    parent_connection, child_connection = ctx.Pipe(duplex=False)
+    parent_connection, child_connection = ctx.Pipe(duplex=True)
     process = ctx.Process(target=_process_bootstrap,
-                          args=(worker_target, child_connection, str(root), timeout, revision))
+                          args=(worker_target, child_connection, str(root), timeout, revision,
+                                max(0.001, deadline_at - time.monotonic()), session_setup))
+    ownership = WorkerOwnership()
     process.start(); child_connection.close()
     try:
-        worker_budget = deadline - (time.monotonic() - started) - (2 * TERMINATION_GRACE_SECONDS)
-        if worker_budget <= 0 or not parent_connection.poll(max(0.001, worker_budget)):
+        startup_budget = deadline_at - time.monotonic()
+        if startup_budget <= 0 or not parent_connection.poll(startup_budget):
             raise TotalDeadlineExceeded({})
+        try: startup_payload = parent_connection.recv_bytes(STARTUP_IPC_BYTES)
+        except (EOFError, OSError): raise CollectionError(None, code="WORKER_STARTUP_FAILED") from None
+        if startup_payload == b'{"type":"STARTUP_FAILED"}':
+            raise CollectionError(None, code="WORKER_STARTUP_FAILED")
+        _validate_ready(startup_payload, process, ownership)
+        parent_connection.send_bytes(b"READY_ACK")
+        worker_budget = deadline_at - time.monotonic() - (2 * TERMINATION_GRACE_SECONDS)
+        if worker_budget <= 0 or not parent_connection.poll(worker_budget): raise TotalDeadlineExceeded({})
         try: payload = parent_connection.recv_bytes(MAX_IPC_BYTES)
         except (EOFError, OSError):
-            process.join(TERMINATION_GRACE_SECONDS)
-            code = "WORKER_CRASHED" if process.exitcode not in (0, None) else "WORKER_PROTOCOL_ERROR"
-            raise CollectionError(None, code=code) from None
-        process.join(TERMINATION_GRACE_SECONDS)
-        if process.is_alive(): raise TotalDeadlineExceeded({})
+            raise CollectionError(None, code="WORKER_CRASHED") from None
+        exit_budget = max(0.0, deadline_at - time.monotonic())
+        process.join(min(TERMINATION_GRACE_SECONDS, exit_budget))
+        if process.is_alive(): _cleanup_owned(process, ownership)
+        else: ownership.state = OwnershipState.REAPED; ownership.release()
         envelope = _decode_worker_result(payload, process.exitcode)
         if not envelope["ok"]: raise CollectionError(None, code=envelope["error_class"])
-        remaining = deadline - (time.monotonic() - started)
+        remaining = deadline_at - time.monotonic()
         if remaining < MIN_COMMIT_BUDGET_SECONDS: raise TotalDeadlineExceeded({})
+        transaction = {"state":"PRE_COMMIT"}
         try:
-            with _commit_alarm(remaining): commit(root, envelope["sample"], deadline_at=started + deadline)
+            with _commit_alarm(remaining):
+                commit(root, envelope["sample"], deadline_at=deadline_at, transaction=transaction)
         except HistoryLockError: raise CollectionError(None, code="HISTORY_LOCK_TIMEOUT") from None
-        except HistoryDeadlineExceeded: raise TotalDeadlineExceeded({}) from None
-        if time.monotonic() - started > deadline: raise TotalDeadlineExceeded({})
-        return envelope["sample"]
-    except TotalDeadlineExceeded:
-        _stop_process_group(process)
+        except HistoryDeadlineExceeded:
+            if transaction["state"] in {"COMMITTED","DURABLE","DEDUPED"}:
+                return {"ok":True,"sample":envelope["sample"],"commit_state":transaction["state"],
+                        "deadline_cleanup_overrun":True}
+            raise TotalDeadlineExceeded({}) from None
+        overrun = time.monotonic() > deadline_at
+        return {"ok":True,"sample":envelope["sample"],"commit_state":transaction["state"],
+                "deadline_cleanup_overrun":overrun}
+    except TotalDeadlineExceeded as error:
+        if ownership.state == OwnershipState.OWNED: _cleanup_owned(process, ownership)
+        elif ownership.state == OwnershipState.STARTING: _cleanup_unowned(process)
         raise TotalDeadlineExceeded({
             "error_class": "TOTAL_DEADLINE_EXCEEDED", "elapsed_seconds": round(time.monotonic() - started, 3),
             "configured_total_deadline": deadline, "collector_version": VERSION, "git_revision": revision,
         }) from None
     finally:
         parent_connection.close()
-        _stop_process_group(process)
+        if ownership.state == OwnershipState.OWNED:
+            if process.is_alive():
+                _cleanup_owned(process, ownership)
+            else:
+                process.join(0); ownership.state = OwnershipState.REAPED; ownership.release()
+        elif ownership.state == OwnershipState.STARTING and process.is_alive():
+            _cleanup_unowned(process)
 
 
 def main() -> None:
@@ -275,7 +409,7 @@ def main() -> None:
         print(json.dumps(error.metadata, indent=2)); raise SystemExit(2) from None
     except CollectionError as error:
         print(json.dumps({"error_class": error.code, "collector_version": VERSION,
-                          "git_revision": _git_revision(args.root)}, indent=2)); raise SystemExit(1) from None
+                          "git_revision": None}, indent=2)); raise SystemExit(1) from None
     print(json.dumps(result, indent=2))
 
 

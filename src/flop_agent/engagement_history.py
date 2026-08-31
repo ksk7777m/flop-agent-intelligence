@@ -24,6 +24,28 @@ class HistoryLockError(RuntimeError): pass
 class HistoryDeadlineExceeded(TimeoutError): pass
 
 
+def _write_atomic(path: Path, payload: bytes) -> None:
+    """Publish complete private bytes without a write-then-chmod window."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.candidate-{os.getpid()}")
+    descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        written = 0
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0: raise OSError("short private artifact write")
+            written += count
+        os.fsync(descriptor)
+        os.close(descriptor); descriptor = -1
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    finally:
+        if descriptor >= 0: os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
 def validate(sample: Mapping[str, Any]) -> dict[str, Any]:
     required = {"schema", "fetched_at", "source_sha256", "per_room", "coverage", "warnings"}
     if not required.issubset(sample) or sample.get("schema") != "engagement-sample-v1":
@@ -67,8 +89,10 @@ def load(path: Path, *, strict: bool = True, recover_tail: bool = True) -> list[
     return sorted(rows.values(), key=key)
 
 
-def append(path: Path, sample: Mapping[str, Any], *, deadline_at: float | None = None) -> bool:
+def append(path: Path, sample: Mapping[str, Any], *, deadline_at: float | None = None,
+           transaction: dict[str, str] | None = None) -> bool:
     row = validate(sample)
+    if transaction is not None: transaction["state"] = "PRE_COMMIT"
     def check_deadline() -> None:
         if deadline_at is not None and time.monotonic() >= deadline_at:
             raise HistoryDeadlineExceeded("TOTAL_DEADLINE_EXCEEDED")
@@ -100,10 +124,11 @@ def append(path: Path, sample: Mapping[str, Any], *, deadline_at: float | None =
                         separator = b"\n"
                     except (ValueError, json.JSONDecodeError, TypeError):
                         recovery = path.with_suffix(path.suffix + ".recovery-tail")
-                        recovery.write_bytes(lines[-1])
-                        os.chmod(recovery, 0o600)
+                        _write_atomic(recovery, lines[-1])
                         existing_data = data[:-len(lines[-1])]
-            if any(key(existing) == key(row) for existing in load(path)): return False
+            if any(key(existing) == key(row) for existing in load(path)):
+                if transaction is not None: transaction["state"] = "DEDUPED"
+                return False
             check_deadline()
             payload = separator + (json.dumps(row, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n").encode()
             # Replace a fully fsynced candidate atomically.  This retains the
@@ -122,9 +147,12 @@ def append(path: Path, sample: Mapping[str, Any], *, deadline_at: float | None =
                 check_deadline()
                 os.close(descriptor); descriptor = -1
                 os.replace(temporary, path)
+                if transaction is not None: transaction["state"] = "COMMITTED"
                 os.chmod(path, 0o600)
                 directory = os.open(path.parent, os.O_RDONLY)
-                try: os.fsync(directory)
+                try:
+                    os.fsync(directory)
+                    if transaction is not None: transaction["state"] = "DURABLE"
                 finally: os.close(directory)
             finally:
                 if descriptor >= 0: os.close(descriptor)

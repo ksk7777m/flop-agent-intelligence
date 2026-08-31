@@ -10,16 +10,26 @@ seven days and 672 points. A room missing from a later bounded response is only
 `NOT_OBSERVED_IN_LATEST_SNAPSHOT`, never deleted, banned, or reaped.
 Successful responses are capped at 2 MiB using both declared-length rejection
 and an actual bounded read. Runtime samples are schema-validated before append.
-The one-shot CLI runs an internal preparation worker under a 30-second total
-wall-clock deadline and retains the 20-second socket timeout. The process
-boundary also bounds blocking DNS resolution. The worker cannot be selected by
-a CLI flag and never mutates history. It returns at most 256 KiB of normalized,
-schema-validated IPC; the parent validates that envelope again and uses the
-remaining deadline budget for one commit under the stable `0600` history lock.
-On expiry the parent terminates and reaps the worker process group, discards
-uncommitted work, and reports `TOTAL_DEADLINE_EXCEEDED` without restoring or
-modifying committed history. The deadline accepts only 1–30 seconds, cannot be
-disabled, and never retries. Scheduling remains disabled.
+The one-shot CLI uses one absolute monotonic budget (1–30 seconds, default 30)
+for bounded Git metadata, worker startup, IPC, and parent commit, while retaining
+the 20-second socket timeout. The process boundary also bounds blocking DNS.
+Before collection, the internal worker must prove `PID = PGID = SID` and wait
+for the parent's READY acknowledgment; failed session setup is
+`WORKER_STARTUP_FAILED` and performs no request. The worker cannot be selected
+by a CLI flag and never mutates history. It returns at most 256 KiB of
+normalized, schema-validated IPC; the parent validates that envelope again and
+uses the remaining budget for one commit under the stable `0600` history lock.
+On expiry the parent signals only the verified unreaped worker group, escalates
+within bounded waits, then reaps and releases ownership. This safety cleanup may
+slightly exceed the normal deadline; unverified cleanup fails explicitly and
+never signals a cached group after ownership release. Uncommitted work is
+discarded without rollback. History, recovery tails, and previews use complete
+`0600` fsynced candidates and atomic replacement. A deadline crossing after the
+history replace is reported as committed rather than as an unchanged-history
+timeout. On platforms without POSIX `setitimer`, the worker deadline and lock
+budget remain bounded, but a complete local atomic file operation may finish
+after the nominal crossing; no partial history file is exposed. The collector
+cannot disable the deadline and never retries. Scheduling remains disabled.
 History uses a local advisory lock; a truncated tail is quarantined while
 middle corruption fails closed. Runtime history is not automatically deleted
 or rotated, and any future scheduler review must include a retention decision.

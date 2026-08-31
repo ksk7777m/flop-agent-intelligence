@@ -1,4 +1,4 @@
-import io, json, math, os, subprocess, sys, tempfile, threading, time, unittest
+import fcntl, io, json, math, os, signal, subprocess, sys, tempfile, threading, time, unittest
 from unittest import mock
 from email.message import Message
 from pathlib import Path
@@ -6,11 +6,13 @@ from urllib.error import HTTPError
 
 from flop_agent.engagement import SOURCE_URL, build_sample, diff, room_status, series
 from flop_agent.engagement_history import HistoryCorruption, append, latest, load, validate
+from flop_agent.engagement_history import HistoryDeadlineExceeded
 from scripts.collect_engagement import (
     CollectionError, MAX_IPC_BYTES, MAX_RESPONSE_BYTES, MAX_TOTAL_COLLECTION_DEADLINE_SECONDS,
+    OwnershipState, WorkerOwnership,
     SOCKET_TIMEOUT_SECONDS, TOTAL_COLLECTION_DEADLINE_SECONDS,
-    TotalDeadlineExceeded, _decode_worker_result, backoff, commit_sample, fetch,
-    interval_minutes, run_with_total_deadline, total_deadline_seconds, validate_endpoint,
+    TotalDeadlineExceeded, _cleanup_owned, _decode_worker_result, backoff, commit_sample, fetch,
+    interval_minutes, prepare_sample, run_with_total_deadline, total_deadline_seconds, validate_endpoint,
 )
 import jsonschema
 
@@ -44,6 +46,24 @@ def descendant_worker(connection, root, timeout, revision):
 
 def crashed_worker(connection, root, timeout, revision):
     os._exit(7)
+
+
+def failing_setsid():
+    raise OSError("simulated setsid failure")
+
+
+def marker_worker(connection, root, timeout, revision):
+    Path(root,"worker-ran").write_text("unexpected")
+
+
+def offline_prepare_worker(connection, root, timeout, revision):
+    calls=Path(root,"request-count")
+    def opener(request, timeout):
+        calls.write_text(str(int(calls.read_text())+1 if calls.exists() else 1))
+        return Response(b'{"total":1,"rooms":[{"room":"safe","window":20}],"engagement":{}}')
+    sample=prepare_sample(Path(root),timeout=timeout,opener=opener,
+                          fetched_at="2026-08-29T00:00:00Z",git_revision=revision)
+    connection.send_bytes(json.dumps({"ok":True,"sample":sample}).encode()); connection.close()
 
 
 class Response:
@@ -100,7 +120,7 @@ class EngagementMonitorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker)
-            self.assertEqual(result["schema"],"engagement-sample-v1")
+            self.assertTrue(result["ok"]); self.assertEqual(result["sample"]["schema"],"engagement-sample-v1")
             self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
 
     def test_process_deadline_bounds_stalls_without_rollback(self):
@@ -196,6 +216,103 @@ class EngagementMonitorTests(unittest.TestCase):
         result=subprocess.run([sys.executable,str(root/"scripts/collect_engagement.py"),"--worker"],
                               cwd=root,capture_output=True,text=True,timeout=3)
         self.assertEqual(result.returncode,2); self.assertIn("unrecognized arguments",result.stderr)
+
+    def test_ownership_release_prevents_late_or_stale_group_signals(self):
+        class Process:
+            pid=123
+            def join(self,*args): pass
+            def is_alive(self): return False
+        ownership=WorkerOwnership(OwnershipState.RELEASED,None,None,None); signals=[]
+        _cleanup_owned(Process(),ownership,killpg=lambda *args: signals.append(args))
+        self.assertEqual(signals,[])
+        owned=WorkerOwnership(OwnershipState.OWNED,123,123,123)
+        with self.assertRaises(CollectionError) as caught:
+            _cleanup_owned(Process(),owned,killpg=lambda *args: signals.append(args),
+                           getpgid=lambda pid:999,getsid=lambda pid:123)
+        self.assertEqual(caught.exception.code,"WORKER_CLEANUP_UNVERIFIED"); self.assertEqual(signals,[])
+
+    def test_setsid_failure_is_fail_closed_before_worker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with self.assertRaises(CollectionError) as caught:
+                run_with_total_deadline(root,total_deadline=1,worker_target=marker_worker,
+                                        session_setup=failing_setsid)
+            self.assertEqual(caught.exception.code,"WORKER_STARTUP_FAILED")
+            self.assertFalse((root/"worker-ran").exists()); self.assertFalse((root/"runtime").exists())
+
+    def test_cleanup_signal_failure_is_explicit(self):
+        class Process:
+            pid=321
+            def join(self,*args): pass
+            def is_alive(self): return True
+        ownership=WorkerOwnership(OwnershipState.OWNED,321,321,321)
+        with self.assertRaises(CollectionError) as caught:
+            _cleanup_owned(Process(),ownership,killpg=lambda *args: (_ for _ in ()).throw(OSError()),
+                           getpgid=lambda pid:321,getsid=lambda pid:321)
+        self.assertEqual(caught.exception.code,"WORKER_CLEANUP_FAILED")
+
+    def test_one_second_git_budget_exhaustion_starts_no_worker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with mock.patch("scripts.collect_engagement.subprocess.run",
+                            side_effect=subprocess.TimeoutExpired("git",.9)) as run:
+                with self.assertRaises(TotalDeadlineExceeded) as caught:
+                    run_with_total_deadline(root,total_deadline=1,worker_target=marker_worker)
+            self.assertLessEqual(run.call_args.kwargs["timeout"],1)
+            self.assertEqual(caught.exception.metadata["error_class"],"TOTAL_DEADLINE_EXCEEDED")
+            self.assertFalse((root/"worker-ran").exists()); self.assertFalse((root/"runtime").exists())
+
+    def test_commit_point_deadline_semantics(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); history=root/"runtime/engagement/history.jsonl"; transaction={}
+            with mock.patch("flop_agent.engagement_history.os.replace",side_effect=HistoryDeadlineExceeded()):
+                with self.assertRaises(HistoryDeadlineExceeded):
+                    append(history,_worker_sample(),transaction=transaction)
+            self.assertEqual(transaction["state"],"PRE_COMMIT"); self.assertFalse(history.exists())
+        for state in ("COMMITTED","DURABLE"):
+            with self.subTest(state=state),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder)
+                def committed_then_deadline(root,sample,deadline_at,transaction):
+                    append(root/"runtime/engagement/history.jsonl",sample,transaction=transaction)
+                    transaction["state"]=state
+                    raise HistoryDeadlineExceeded()
+                result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker,
+                                               commit=committed_then_deadline)
+                self.assertTrue(result["ok"]); self.assertTrue(result["deadline_cleanup_overrun"])
+                self.assertEqual(result["commit_state"],state); self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
+
+    def test_recovery_tail_and_previews_are_atomic_private_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); history=root/"history.jsonl"
+            append(history,_worker_sample())
+            with history.open("ab") as stream: stream.write(b'{"partial":')
+            append(history,_worker_sample("2026-08-29T01:00:00Z"))
+            recovery=history.with_suffix(".jsonl.recovery-tail")
+            self.assertEqual(recovery.stat().st_mode & 0o777,0o600)
+            self.assertEqual(list(root.glob(".*.candidate-*")),[])
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); commit_sample(root,_worker_sample())
+            previews=list((root/"runtime/engagement/public-preview").glob("*.json"))
+            self.assertEqual(len(previews),3); self.assertTrue(all(p.stat().st_mode & 0o777==0o600 for p in previews))
+            self.assertEqual(list(root.rglob(".*.candidate-*")),[])
+
+    def test_offline_end_to_end_real_preparation_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            result=run_with_total_deadline(root,total_deadline=1,worker_target=offline_prepare_worker)
+            self.assertTrue(result["ok"]); self.assertEqual((root/"request-count").read_text(),"1")
+            self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
+            self.assertEqual(len(list((root/"runtime/engagement/public-preview").glob("*.json"))),3)
+
+    def test_held_lock_obeys_global_deadline_without_corruption(self):
+        with tempfile.TemporaryDirectory() as folder:
+            history=Path(folder)/"history.jsonl"; append(history,_worker_sample()); before=history.read_bytes()
+            lock_path=history.with_suffix(".jsonl.lock")
+            with lock_path.open("a+b") as lock:
+                fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with self.assertRaises(HistoryDeadlineExceeded):
+                    append(history,_worker_sample("2026-08-29T01:00:00Z"),deadline_at=time.monotonic()+.1)
+            self.assertEqual(history.read_bytes(),before)
 
     def test_http_failures_no_body_read_and_no_retry(self):
         headers=Message(); headers["Retry-After"]="37"
