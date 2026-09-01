@@ -30,10 +30,10 @@ WORKER_ERRORS = {"HTTP_TIMEOUT", "VALIDATION_FAILED", "RESPONSE_TOO_LARGE"}
 STARTUP_IPC_BYTES = 1024
 COMMIT_STATES = {"PRE_COMMIT", "COMMITTED", "DURABLE"}
 PREVIEW_STATES = {"NOT_ATTEMPTED", "UPDATED", "FAILED"}
-POST_COMMIT_ERRORS = {
-    None, "TOTAL_DEADLINE_EXCEEDED", "POST_COMMIT_DURABILITY_WARNING",
-    "POST_COMMIT_PREVIEW_WARNING", "WORKER_CLEANUP_FAILED", "WORKER_CLEANUP_UNVERIFIED",
-}
+DURABILITY_WARNINGS = {None, "POST_COMMIT_DURABILITY_WARNING"}
+PREVIEW_WARNINGS = {None, "POST_COMMIT_PREVIEW_WARNING"}
+CLEANUP_ERRORS = {None, "WORKER_CLEANUP_FAILED", "WORKER_CLEANUP_UNVERIFIED"}
+RESULT_ERRORS = {None, "TOTAL_DEADLINE_EXCEEDED", "POST_COMMIT_WARNING"}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -145,25 +145,35 @@ def commit_sample(root: Path, sample: dict, *, deadline_at: float | None = None,
     sample = validate(sample)
     transaction = transaction if transaction is not None else {}
     transaction["preview_state"] = "NOT_ATTEMPTED"
+    transaction.setdefault("durability_warning", None)
+    transaction.setdefault("preview_warning", None)
     history_path = root / "runtime/engagement/history.jsonl"
     before = load(history_path)
     committed = append(history_path, sample, deadline_at=deadline_at, transaction=transaction)
-    if transaction.get("error_class") == "POST_COMMIT_DURABILITY_WARNING":
+    if transaction.get("durability_warning") == "POST_COMMIT_DURABILITY_WARNING":
         return committed
     if deadline_at is not None and time.monotonic() >= deadline_at:
         raise HistoryDeadlineExceeded("TOTAL_DEADLINE_EXCEEDED")
     try:
         rows = load(history_path)
+    except HistoryDeadlineExceeded:
+        raise
+    except Exception:
+        raise
+    transaction["_preview_started"] = True
+    try:
         output = root / "runtime/engagement/public-preview"; output.mkdir(parents=True, exist_ok=True)
         _atomic_preview(output / "engagement-sample.json", (json.dumps(sample, indent=2) + "\n").encode())
         _atomic_preview(output / "engagement-diff.json", (json.dumps(diff(before[-1] if before else None, sample), indent=2) + "\n").encode())
         stamp = datetime.fromisoformat(sample["fetched_at"].replace("Z", "+00:00"))
         _atomic_preview(output / "engagement-series.json", (json.dumps(series(range_rows(rows, now=stamp)), indent=2) + "\n").encode())
     except HistoryDeadlineExceeded:
+        transaction["preview_state"] = "FAILED"
+        transaction["preview_warning"] = "POST_COMMIT_PREVIEW_WARNING"
         raise
     except Exception:
         transaction["preview_state"] = "FAILED"
-        transaction.setdefault("error_class", "POST_COMMIT_PREVIEW_WARNING")
+        transaction["preview_warning"] = "POST_COMMIT_PREVIEW_WARNING"
     else:
         transaction["preview_state"] = "UPDATED"
     return committed
@@ -171,23 +181,36 @@ def commit_sample(root: Path, sample: dict, *, deadline_at: float | None = None,
 
 def _structured_result(sample: dict, transaction: dict[str, str], *,
                        deadline_cleanup_overrun: bool = False,
-                       cleanup_state: str = "COMPLETED") -> dict:
+                       cleanup_state: str = "COMPLETED", cleanup_error: str | None = None,
+                       success: bool | None = None) -> dict:
     state = transaction.get("state", "PRE_COMMIT")
     preview = transaction.get("preview_state", "NOT_ATTEMPTED")
     error = transaction.get("error_class")
-    success = state in {"COMMITTED", "DURABLE"}
+    durability_warning = transaction.get("durability_warning")
+    preview_warning = transaction.get("preview_warning")
+    expected_success = state in {"COMMITTED", "DURABLE"}
+    success = expected_success if success is None else success
     if (state not in COMMIT_STATES or preview not in PREVIEW_STATES
             or cleanup_state not in {"COMPLETED", "FAILED"}
-            or error not in POST_COMMIT_ERRORS
+            or error not in RESULT_ERRORS
+            or durability_warning not in DURABILITY_WARNINGS
+            or preview_warning not in PREVIEW_WARNINGS
+            or cleanup_error not in CLEANUP_ERRORS
+            or success is not expected_success
             or (state == "PRE_COMMIT" and preview != "NOT_ATTEMPTED")
-            or (preview == "UPDATED" and state != "DURABLE")
-            or (cleanup_state == "FAILED" and error not in
-                {"WORKER_CLEANUP_FAILED", "WORKER_CLEANUP_UNVERIFIED"})):
+            or (preview != "NOT_ATTEMPTED" and state != "DURABLE")
+            or (error == "POST_COMMIT_WARNING" and not expected_success)
+            or (durability_warning is not None and state != "COMMITTED")
+            or ((preview == "FAILED") != (preview_warning == "POST_COMMIT_PREVIEW_WARNING"))
+            or (preview != "FAILED" and preview_warning is not None)
+            or ((cleanup_state == "FAILED") != (cleanup_error in CLEANUP_ERRORS - {None}))
+            or (cleanup_state == "COMPLETED" and cleanup_error is not None)):
         raise ValueError("invalid collection result state")
     return {"ok": success, "success": success, "sample": sample,
             "commit_state": state, "preview_state": preview,
             "cleanup_state": cleanup_state, "deadline_cleanup_overrun": deadline_cleanup_overrun,
-            "error_class": error}
+            "error_class": error, "durability_warning": durability_warning,
+            "preview_warning": preview_warning, "cleanup_error": cleanup_error}
 
 
 def _git_revision(root: Path, deadline_at: float) -> str | None:
@@ -408,7 +431,8 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
         if not envelope["ok"]: raise CollectionError(None, code=envelope["error_class"])
         remaining = deadline_at - time.monotonic()
         if remaining < MIN_COMMIT_BUDGET_SECONDS: raise TotalDeadlineExceeded({})
-        transaction = {"state":"PRE_COMMIT", "preview_state":"NOT_ATTEMPTED"}
+        transaction = {"state":"PRE_COMMIT", "preview_state":"NOT_ATTEMPTED",
+                       "durability_warning":None, "preview_warning":None}
         try:
             with _commit_alarm(remaining):
                 commit(root, envelope["sample"], deadline_at=deadline_at, transaction=transaction)
@@ -423,10 +447,11 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
         except Exception:
             if transaction["state"] in {"COMMITTED", "DURABLE", "DEDUPED"}:
                 if transaction["state"] == "DEDUPED": transaction["state"] = "DURABLE"
-                transaction["error_class"] = ("POST_COMMIT_DURABILITY_WARNING"
-                                              if transaction["state"] == "COMMITTED"
-                                              else "POST_COMMIT_PREVIEW_WARNING")
-                if transaction["state"] == "DURABLE": transaction["preview_state"] = "FAILED"
+                if transaction.pop("_preview_started", False):
+                    transaction["preview_state"] = "FAILED"
+                    transaction["preview_warning"] = "POST_COMMIT_PREVIEW_WARNING"
+                else:
+                    transaction["error_class"] = "POST_COMMIT_WARNING"
                 return _structured_result(envelope["sample"], transaction,
                                           deadline_cleanup_overrun=time.monotonic() > deadline_at)
             raise
@@ -434,15 +459,13 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
         if post_commit_cleanup is not None:
             try: post_commit_cleanup()
             except CollectionError as error:
-                transaction["error_class"] = error.code
                 return _structured_result(envelope["sample"], transaction,
                                           deadline_cleanup_overrun=time.monotonic() > deadline_at,
-                                          cleanup_state="FAILED")
+                                          cleanup_state="FAILED", cleanup_error=error.code)
             except Exception:
-                transaction["error_class"] = "WORKER_CLEANUP_FAILED"
                 return _structured_result(envelope["sample"], transaction,
                                           deadline_cleanup_overrun=time.monotonic() > deadline_at,
-                                          cleanup_state="FAILED")
+                                          cleanup_state="FAILED", cleanup_error="WORKER_CLEANUP_FAILED")
         overrun = time.monotonic() > deadline_at
         return _structured_result(envelope["sample"], transaction,
                                   deadline_cleanup_overrun=overrun)

@@ -166,13 +166,14 @@ def append(path: Path, sample: Mapping[str, Any], *, deadline_at: float | None =
                     os.fsync(directory)
                     if transaction is not None: transaction["state"] = "DURABLE"
                 except OSError:
-                    if transaction is not None: transaction["error_class"] = "POST_COMMIT_DURABILITY_WARNING"
+                    if transaction is not None:
+                        transaction["durability_warning"] = "POST_COMMIT_DURABILITY_WARNING"
                 finally:
                     if directory is not None:
                         try: os.close(directory)
                         except OSError:
                             if transaction is not None and transaction.get("state") != "DURABLE":
-                                transaction["error_class"] = "POST_COMMIT_DURABILITY_WARNING"
+                                transaction["durability_warning"] = "POST_COMMIT_DURABILITY_WARNING"
             finally:
                 if descriptor >= 0: os.close(descriptor)
                 temporary.unlink(missing_ok=True)

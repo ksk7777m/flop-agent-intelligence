@@ -307,7 +307,7 @@ class EngagementMonitorTests(unittest.TestCase):
                 result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker)
             self.assertTrue(result["success"]); self.assertEqual(result["commit_state"],"COMMITTED")
             self.assertEqual(result["preview_state"],"NOT_ATTEMPTED")
-            self.assertEqual(result["error_class"],"POST_COMMIT_DURABILITY_WARNING")
+            self.assertEqual(result["durability_warning"],"POST_COMMIT_DURABILITY_WARNING")
             self.assertNotIn("must not escape",json.dumps(result)); self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
 
     def test_preview_failure_preserves_durable_history(self):
@@ -317,7 +317,7 @@ class EngagementMonitorTests(unittest.TestCase):
                 result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker)
             self.assertTrue(result["success"]); self.assertEqual(result["commit_state"],"DURABLE")
             self.assertEqual(result["preview_state"],"FAILED")
-            self.assertEqual(result["error_class"],"POST_COMMIT_PREVIEW_WARNING")
+            self.assertEqual(result["preview_warning"],"POST_COMMIT_PREVIEW_WARNING")
             self.assertNotIn("private detail",json.dumps(result)); self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
 
     def test_deadline_before_preview_preserves_durable_history(self):
@@ -340,16 +340,75 @@ class EngagementMonitorTests(unittest.TestCase):
                                            post_commit_cleanup=failed_cleanup)
             self.assertTrue(result["success"]); self.assertEqual(result["commit_state"],"DURABLE")
             self.assertEqual(result["cleanup_state"],"FAILED")
-            self.assertEqual(result["error_class"],"WORKER_CLEANUP_FAILED")
+            self.assertEqual(result["cleanup_error"],"WORKER_CLEANUP_FAILED")
 
-    def test_structured_result_rejects_invalid_state_combinations(self):
-        with self.assertRaises(ValueError):
-            _structured_result(self.sample(),{"state":"PRE_COMMIT","preview_state":"UPDATED"})
-        with self.assertRaises(ValueError):
-            _structured_result(self.sample(),{"state":"UNKNOWN","preview_state":"NOT_ATTEMPTED"})
-        with self.assertRaises(ValueError):
-            _structured_result(self.sample(),{"state":"DURABLE","preview_state":"UPDATED",
-                                              "error_class":"RAW_EXCEPTION"})
+    def test_structured_result_invalid_combination_matrix(self):
+        invalid = [
+            ({"state":"DURABLE","preview_state":"UPDATED","durability_warning":"POST_COMMIT_DURABILITY_WARNING"},{}),
+            ({"state":"DURABLE","preview_state":"FAILED"},{}),
+            ({"state":"DURABLE","preview_state":"UPDATED","preview_warning":"POST_COMMIT_PREVIEW_WARNING"},{}),
+            ({"state":"DURABLE","preview_state":"NOT_ATTEMPTED","preview_warning":"POST_COMMIT_PREVIEW_WARNING"},{}),
+            ({"state":"DURABLE","preview_state":"UPDATED"},{"cleanup_error":"WORKER_CLEANUP_FAILED"}),
+            ({"state":"DURABLE","preview_state":"UPDATED"},{"cleanup_state":"FAILED"}),
+            ({"state":"DURABLE","preview_state":"UPDATED"},{"cleanup_state":"FAILED","cleanup_error":"POST_COMMIT_WARNING"}),
+            ({"state":"PRE_COMMIT","preview_state":"UPDATED"},{}),
+            ({"state":"COMMITTED","preview_state":"FAILED","preview_warning":"POST_COMMIT_PREVIEW_WARNING"},{}),
+            ({"state":"PRE_COMMIT","preview_state":"NOT_ATTEMPTED","durability_warning":"POST_COMMIT_DURABILITY_WARNING"},{}),
+            ({"state":"PRE_COMMIT","preview_state":"NOT_ATTEMPTED","error_class":"POST_COMMIT_WARNING"},{}),
+            ({"state":"COMMITTED","preview_state":"NOT_ATTEMPTED"},{"success":False}),
+            ({"state":"DURABLE","preview_state":"UPDATED"},{"success":False}),
+            ({"state":"UNKNOWN","preview_state":"NOT_ATTEMPTED"},{}),
+            ({"state":"DURABLE","preview_state":"UPDATED","error_class":"RAW_EXCEPTION"},{}),
+        ]
+        for transaction, kwargs in invalid:
+            with self.subTest(transaction=transaction,kwargs=kwargs),self.assertRaises(ValueError):
+                _structured_result(self.sample(),transaction,**kwargs)
+
+    def test_structured_result_valid_combination_matrix(self):
+        valid = [
+            ({"state":"PRE_COMMIT","preview_state":"NOT_ATTEMPTED","error_class":"TOTAL_DEADLINE_EXCEEDED"},{}),
+            ({"state":"COMMITTED","preview_state":"NOT_ATTEMPTED","durability_warning":"POST_COMMIT_DURABILITY_WARNING"},{}),
+            ({"state":"DURABLE","preview_state":"UPDATED"},{}),
+            ({"state":"DURABLE","preview_state":"FAILED","preview_warning":"POST_COMMIT_PREVIEW_WARNING"},{}),
+            ({"state":"DURABLE","preview_state":"UPDATED"},{"cleanup_state":"FAILED","cleanup_error":"WORKER_CLEANUP_FAILED"}),
+            ({"state":"COMMITTED","preview_state":"NOT_ATTEMPTED","durability_warning":"POST_COMMIT_DURABILITY_WARNING"},
+             {"cleanup_state":"FAILED","cleanup_error":"WORKER_CLEANUP_UNVERIFIED"}),
+        ]
+        for transaction, kwargs in valid:
+            with self.subTest(transaction=transaction,kwargs=kwargs):
+                result=_structured_result(self.sample(),transaction,**kwargs)
+                self.assertEqual(result["success"],transaction["state"] != "PRE_COMMIT")
+
+    def test_generic_post_commit_exception_before_preview_is_not_preview_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            def fail_before_preview(root,sample,deadline_at,transaction):
+                append(root/"runtime/engagement/history.jsonl",sample,transaction=transaction)
+                raise OSError("private detail")
+            result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker,
+                                           commit=fail_before_preview)
+            self.assertEqual(result["commit_state"],"DURABLE")
+            self.assertEqual(result["preview_state"],"NOT_ATTEMPTED")
+            self.assertIsNone(result["preview_warning"])
+            self.assertEqual(result["error_class"],"POST_COMMIT_WARNING")
+            self.assertNotIn("private detail",json.dumps(result))
+
+    def test_durability_and_cleanup_warnings_are_both_preserved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); real_fsync=os.fsync; calls=0
+            def fail_directory(descriptor):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError("durability detail")
+                return real_fsync(descriptor)
+            def failed_cleanup(): raise CollectionError(None,code="WORKER_CLEANUP_FAILED")
+            with mock.patch("flop_agent.engagement_history.os.fsync",side_effect=fail_directory):
+                result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker,
+                                               post_commit_cleanup=failed_cleanup)
+            self.assertEqual(result["commit_state"],"COMMITTED")
+            self.assertEqual(result["durability_warning"],"POST_COMMIT_DURABILITY_WARNING")
+            self.assertEqual(result["cleanup_state"],"FAILED")
+            self.assertEqual(result["cleanup_error"],"WORKER_CLEANUP_FAILED")
 
     def test_recovery_tail_and_previews_are_atomic_private_files(self):
         with tempfile.TemporaryDirectory() as folder:
