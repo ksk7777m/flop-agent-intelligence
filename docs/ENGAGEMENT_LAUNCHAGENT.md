@@ -6,8 +6,10 @@ collection. The scheduler remains `READY_DISABLED` and is still authoritative
 for state validation, spacing, budget, overlap, and circuit policy.
 
 The template uses `StartInterval=3600`, `RunAtLoad=false`, no `KeepAlive`, and
-direct argument execution through `/usr/bin/python3`. Missed sleep intervals are
-missed; there is no backlog or connectivity probe. Placeholders must be replaced
+direct isolated execution through `/usr/bin/python3 -I`. There is no replay backlog
+or N-times catch-up burst; depending on macOS/launchd behavior, missed intervals may
+produce at most one coalesced wake-time opportunity. Internal scheduler gates remain
+authoritative, and there is no connectivity probe. Placeholders must be replaced
 with a separately reviewed absolute repository root, private runtime root, and
 the final approved 40-character Git revision during Approval C. Public files do
 not contain private local paths.
@@ -24,8 +26,8 @@ at 1 MiB, and retain three files total. Records contain only UTC time, bounded
 outcomes, circuit state, request count, and collector invocation count. Raw
 responses, room content, exception text, environment data, paths, URLs, and
 secrets are forbidden. Preflight logging failure blocks invocation. A logging
-failure after scheduler return is reported as `LOG_UNAVAILABLE` and evidence is
-preserved.
+failure after scheduler return preserves the bounded scheduler outcome and invocation
+facts while reporting `log_persisted=false` and `log_error_class=LOG_UNAVAILABLE`.
 
 If a future launcher receives `READY_DISABLED`, it may call the scheduler but
 the scheduler refuses collection. Approval C must separately implement and

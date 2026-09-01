@@ -29,8 +29,16 @@ LOG_KEYS = {"timestamp","outcome","circuit_state","requests_24h","collector_invo
 LOG_OUTCOMES = {"PREFLIGHT_READY","OK_DISABLED","OK_SCHEDULER_INVOKED",
                 "LAUNCHER_INTERNAL_ERROR","LOG_UNAVAILABLE"}
 CIRCUIT_STATES = {"READY_DISABLED","READY","DEGRADED","CIRCUIT_OPEN",None}
-SAFE_ENV = {"PATH":"/usr/bin:/bin", "LC_ALL":"C", "PYTHONDONTWRITEBYTECODE":"1",
-            "PYTHONPATH":str(CODE_ROOT / "src")}
+SAFE_ENV = {"PATH":"/usr/bin:/bin", "LC_ALL":"C", "PYTHONDONTWRITEBYTECODE":"1"}
+SCHEDULER_OUTCOMES = {
+    "SCHEDULER_DISABLED", "SCHEDULER_READY", "SCHEDULER_MIN_INTERVAL",
+    "SCHEDULER_DAILY_BUDGET_EXCEEDED", "SCHEDULER_CIRCUIT_OPEN",
+    "SCHEDULER_RUN_ALREADY_ACTIVE", "SCHEDULER_COLLECTION_SUCCEEDED",
+    "SCHEDULER_COLLECTION_FAILED", "SCHEDULER_RECOVERED_INTERRUPTED_RUN",
+    "SCHEDULER_STATE_MISSING", "SCHEDULER_STATE_INVALID", "SCHEDULER_STATE_PATH_UNSAFE",
+    "SCHEDULER_STATE_PERMISSIONS", "SCHEDULER_STATE_LOCK_FAILED",
+    "SCHEDULER_RESULT_INVALID",
+}
 
 Runner = Callable[[list[str], Path, int], subprocess.CompletedProcess[bytes]]
 
@@ -40,14 +48,26 @@ def _utc_stamp() -> str:
 
 
 def _result(outcome: str, *, success: bool = False, scheduler_invoked: bool = False,
-            collector_invocations: int = 0, circuit_state: str | None = None) -> dict[str, Any]:
+            scheduler_outcome: str | None = None, collector_invocations: int = 0,
+            circuit_state: str | None = None, log_persisted: bool | None = None,
+            log_error_class: str | None = None) -> dict[str, Any]:
     return {"success":success,"outcome":outcome,"scheduler_invoked":scheduler_invoked,
+            "scheduler_outcome":scheduler_outcome,
             "collector_invocations":collector_invocations,"network_requests":collector_invocations,
-            "circuit_state":circuit_state}
+            "circuit_state":circuit_state,"log_persisted":log_persisted,
+            "log_error_class":log_error_class}
 
 
 def _run(command: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(command,cwd=cwd,env=SAFE_ENV,capture_output=True,check=False,timeout=timeout)
+
+
+def _scheduler_command(action: str, runtime_root: Path) -> list[str]:
+    isolated_entry=("import runpy,sys;"
+               f"sys.path.insert(0,{str(CODE_ROOT / 'src')!r});"
+               f"sys.argv[0]={str(SCHEDULER)!r};"
+               f"runpy.run_path({str(SCHEDULER)!r},run_name='__main__')")
+    return [str(PYTHON),"-I","-c",isolated_entry,action,"--root",str(runtime_root)]
 
 
 def _safe_regular(path: Path, root: Path) -> bool:
@@ -163,7 +183,14 @@ def launch(runtime_root: Path, expected_revision: str, *, runner: Runner = _run,
             return _result("CODE_REVISION_MISMATCH")
         clean=runner([str(GIT),"diff-index","--quiet","HEAD","--"],code_root,5)
         if clean.returncode!=0: return _result("CODE_TREE_DIRTY")
-        status=runner([str(PYTHON),str(SCHEDULER),"status","--root",str(runtime_root)],code_root,10)
+        untracked=runner([str(GIT),"ls-files","--others","--exclude-standard","-z"],code_root,5)
+        if untracked.returncode!=0 or untracked.stderr or untracked.stdout:
+            return _result("CODE_TREE_DIRTY")
+        ignored_code=runner([str(GIT),"ls-files","--others","--ignored","--exclude-standard",
+                             "-z","--","scripts","src"],code_root,5)
+        if ignored_code.returncode!=0 or ignored_code.stderr or ignored_code.stdout:
+            return _result("CODE_TREE_DIRTY")
+        status=runner(_scheduler_command("status",runtime_root),code_root,10)
         state=_bounded_json(status)
         if not state or state.get("success") is not True:
             outcome="STATE_MISSING" if state and state.get("outcome")=="SCHEDULER_STATE_MISSING" else "STATE_INVALID"
@@ -175,29 +202,34 @@ def launch(runtime_root: Path, expected_revision: str, *, runner: Runner = _run,
         append_log(runtime_root,{"timestamp":_utc_stamp(),"outcome":"PREFLIGHT_READY",
                    "circuit_state":state.get("circuit_state"),"requests_24h":state.get("requests_24h")})
     except (OSError,subprocess.SubprocessError,UnicodeDecodeError):
-        return _result("LOG_UNAVAILABLE" if 'state' in locals() else "LAUNCHER_INTERNAL_ERROR")
-    command=[str(PYTHON),str(SCHEDULER),"run-once","--root",str(runtime_root)]
+        return _result("LOG_UNAVAILABLE",log_persisted=False,
+                       log_error_class="LOG_UNAVAILABLE") if 'state' in locals() else _result("LAUNCHER_INTERNAL_ERROR")
+    command=_scheduler_command("run-once",runtime_root)
     try: completed=runner(command,code_root,40)
     except (OSError,subprocess.SubprocessError): return _result("LAUNCHER_INTERNAL_ERROR")
     value=_bounded_json(completed)
-    if not value: result=_result("LAUNCHER_INTERNAL_ERROR",scheduler_invoked=True)
+    if not value: result=_result("LAUNCHER_INTERNAL_ERROR",scheduler_invoked=True,
+                                 scheduler_outcome="SCHEDULER_RESULT_INVALID")
     else:
         invocations=value.get("collector_invocations")
         invocations=invocations if type(invocations) is int and 0<=invocations<=1 else 0
-        if value.get("circuit_state") not in CIRCUIT_STATES:
-            return _result("LAUNCHER_INTERNAL_ERROR",scheduler_invoked=True)
+        scheduler_outcome=value.get("outcome")
+        if (value.get("circuit_state") not in CIRCUIT_STATES
+                or scheduler_outcome not in SCHEDULER_OUTCOMES):
+            return _result("LAUNCHER_INTERNAL_ERROR",scheduler_invoked=True,
+                           scheduler_outcome="SCHEDULER_RESULT_INVALID")
         disabled=(value.get("outcome")=="SCHEDULER_DISABLED" and invocations==0)
         result=_result("OK_DISABLED" if disabled else "OK_SCHEDULER_INVOKED",
                        success=disabled or value.get("success") is True,scheduler_invoked=True,
-                       collector_invocations=invocations,circuit_state=value.get("circuit_state"))
+                       scheduler_outcome=scheduler_outcome,collector_invocations=invocations,
+                       circuit_state=value.get("circuit_state"),log_persisted=True)
     try:
         append_log(runtime_root,{"timestamp":_utc_stamp(),"outcome":result["outcome"],
                    "circuit_state":result["circuit_state"],
                    "collector_invocations":result["collector_invocations"]})
     except OSError:
-        return _result("LOG_UNAVAILABLE",scheduler_invoked=True,
-                       collector_invocations=result["collector_invocations"],
-                       circuit_state=result["circuit_state"])
+        return {**result,"success":False,"log_persisted":False,
+                "log_error_class":"LOG_UNAVAILABLE"}
     return result
 
 

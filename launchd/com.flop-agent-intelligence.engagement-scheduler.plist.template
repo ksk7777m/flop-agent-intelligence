@@ -7,6 +7,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/python3</string>
+    <string>-I</string>
     <string>&lt;APPROVED_REPOSITORY_ROOT&gt;/scripts/engagement_scheduler_launcher.py</string>
     <string>--expected-revision</string>
     <string>&lt;APPROVED_GIT_REVISION&gt;</string>

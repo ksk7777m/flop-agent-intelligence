@@ -22,6 +22,7 @@ class FakeRunner:
         self.calls.append(command)
         if command[1:3]==["rev-parse","HEAD"]: return completed((self.revision+"\n").encode())
         if command[1:3]==["diff-index","--quiet"]: return completed(returncode=1 if self.dirty else 0)
+        if command[1:3]==["ls-files","--others"]: return completed()
         if "status" in command: return completed(json.dumps(self.status).encode())
         if "run-once" in command: return completed(json.dumps(self.run).encode(),returncode=1)
         raise AssertionError(command)
@@ -37,8 +38,9 @@ class EngagementLauncherTests(unittest.TestCase):
             with mock.patch("scripts.engagement_scheduler_launcher.subprocess.run",side_effect=AssertionError):
                 result=launcher.launch(root,REVISION,runner=runner)
             self.assertEqual(result,{"success":True,"outcome":"OK_DISABLED",
-                "scheduler_invoked":True,"collector_invocations":0,"network_requests":0,
-                "circuit_state":"READY_DISABLED"})
+                "scheduler_invoked":True,"scheduler_outcome":"SCHEDULER_DISABLED",
+                "collector_invocations":0,"network_requests":0,"circuit_state":"READY_DISABLED",
+                "log_persisted":True,"log_error_class":None})
             self.assertEqual(sum("run-once" in call for call in runner.calls),1)
             records=(root/"runtime/engagement/launcher-logs/launcher.jsonl").read_text().splitlines()
             self.assertEqual([json.loads(item)["outcome"] for item in records],
@@ -120,6 +122,7 @@ class EngagementLauncherTests(unittest.TestCase):
         for forbidden in ("WatchPaths","QueueDirectories","StartOnMount","Sockets","MachServices"):
             self.assertNotIn(forbidden,value)
         self.assertEqual(value["ProgramArguments"][0],"/usr/bin/python3")
+        self.assertEqual(value["ProgramArguments"][1],"-I")
         self.assertIn("<APPROVED_REPOSITORY_ROOT>"," ".join(value["ProgramArguments"]))
         self.assertNotIn("/Users/",path.read_text())
         self.assertEqual((value["StandardOutPath"],value["StandardErrorPath"]),("/dev/null","/dev/null"))
@@ -138,6 +141,85 @@ class EngagementLauncherTests(unittest.TestCase):
         for forbidden in ("shell=True","launchctl","bootstrap","kickstart","curl","urllib",
                           "requests.","scheduler_enabled=True","git pull","git fetch","git reset"):
             self.assertNotIn(forbidden,source)
+
+    def test_production_commands_are_isolated_and_environment_is_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); self.runtime(root); runner=FakeRunner()
+            launcher.launch(root,REVISION,runner=runner)
+        python_calls=[call for call in runner.calls if call[0]=="/usr/bin/python3"]
+        self.assertEqual(len(python_calls),2)
+        self.assertTrue(all(call[1]=="-I" for call in python_calls))
+        self.assertNotIn("PYTHONPATH",launcher.SAFE_ENV)
+        self.assertFalse(any(key.startswith("GIT_") for key in launcher.SAFE_ENV))
+        probe=subprocess.run(["/usr/bin/python3","-I","-c",
+            "import json,sys;print(json.dumps({'isolated':sys.flags.isolated,'no_user_site':sys.flags.no_user_site,'path':sys.path}))"],
+            env={**os.environ,"PYTHONPATH":str(Path(folder)/"hostile")},capture_output=True,check=True,text=True)
+        isolation=json.loads(probe.stdout)
+        self.assertEqual((isolation["isolated"],isolation["no_user_site"]),(1,1))
+        self.assertNotIn(str(Path(folder)/"hostile"),isolation["path"])
+
+    def test_isolated_python_ignores_adjacent_and_pythonpath_shadow_modules(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); adjacent=root/"adjacent"; hostile=root/"pythonpath"
+            adjacent.mkdir(); hostile.mkdir(); marker=root/"executed"
+            script=adjacent/"probe.py"
+            script.write_text("import json,sys\nprint(sys.flags.isolated,sys.flags.no_user_site,json.__file__)\n")
+            payload=f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n"
+            (adjacent/"json.py").write_text(payload); (hostile/"json.py").write_text(payload)
+            completed=subprocess.run(["/usr/bin/python3","-I",str(script)],cwd=root,
+                env={**os.environ,"PYTHONPATH":str(hostile),"PYTHONUSERBASE":str(hostile)},
+                capture_output=True,check=True,text=True)
+            self.assertTrue(completed.stdout.startswith("1 1 "))
+            self.assertNotIn(str(adjacent),completed.stdout); self.assertFalse(marker.exists())
+
+    def test_untracked_code_fails_before_scheduler(self):
+        class UntrackedRunner(FakeRunner):
+            def __call__(self,command,cwd,timeout):
+                if command[1:3]==["ls-files","--others"]:
+                    self.calls.append(command); return completed(b"scripts/json.py\0")
+                return super().__call__(command,cwd,timeout)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); self.runtime(root); runner=UntrackedRunner()
+            result=launcher.launch(root,REVISION,runner=runner)
+        self.assertEqual(result["outcome"],"CODE_TREE_DIRTY")
+        self.assertFalse(any("status" in call or "run-once" in call for call in runner.calls))
+
+    def test_ignored_executable_code_fails_before_scheduler(self):
+        class IgnoredCodeRunner(FakeRunner):
+            def __call__(self,command,cwd,timeout):
+                if "--ignored" in command:
+                    self.calls.append(command); return completed(b"scripts/json.pyc\0")
+                return super().__call__(command,cwd,timeout)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); self.runtime(root); runner=IgnoredCodeRunner()
+            result=launcher.launch(root,REVISION,runner=runner)
+        self.assertEqual(result["outcome"],"CODE_TREE_DIRTY")
+        self.assertFalse(any("status" in call or "run-once" in call for call in runner.calls))
+
+    def test_pre_and_post_run_log_failures_have_distinct_truthful_results(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); self.runtime(root); runner=FakeRunner()
+            with mock.patch.object(launcher,"append_log",side_effect=OSError):
+                result=launcher.launch(root,REVISION,runner=runner)
+            self.assertEqual((result["outcome"],result["scheduler_invoked"],result["log_persisted"],
+                              result["log_error_class"]),
+                             ("LOG_UNAVAILABLE",False,False,"LOG_UNAVAILABLE"))
+            self.assertFalse(any("run-once" in call for call in runner.calls))
+        for scheduler_result,expected in (({"success":False,"outcome":"SCHEDULER_DISABLED",
+                "collector_invocations":0,"circuit_state":"READY_DISABLED"},("OK_DISABLED",0)),
+                ({"success":True,"outcome":"SCHEDULER_COLLECTION_SUCCEEDED",
+                "collector_invocations":1,"circuit_state":"READY"},("OK_SCHEDULER_INVOKED",1))):
+            with tempfile.TemporaryDirectory() as folder:
+                root=Path(folder); self.runtime(root); runner=FakeRunner(run=scheduler_result)
+                with mock.patch.object(launcher,"append_log",side_effect=[None,OSError]):
+                    result=launcher.launch(root,REVISION,runner=runner)
+                self.assertEqual((result["outcome"],result["collector_invocations"],
+                                  result["network_requests"]), (expected[0],expected[1],expected[1]))
+                self.assertTrue(result["scheduler_invoked"])
+                self.assertEqual(result["scheduler_outcome"],scheduler_result["outcome"])
+                self.assertEqual((result["log_persisted"],result["log_error_class"],result["success"]),
+                                 (False,"LOG_UNAVAILABLE",False))
+                self.assertEqual(sum("run-once" in call for call in runner.calls),1)
 
 
 if __name__=="__main__": unittest.main()
