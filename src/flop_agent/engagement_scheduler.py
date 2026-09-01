@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import fcntl
-import errno
 import json
 import os
 import stat
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +19,7 @@ DAILY_WINDOW = timedelta(hours=24)
 MAX_REQUESTS_PER_DAY = 24
 FAILURE_THRESHOLD = 2
 STATES = {"READY_DISABLED", "READY", "DEGRADED", "CIRCUIT_OPEN"}
+PROVISION_COMMIT_STATES = {"PRE_PUBLISH", "PUBLISHED", "DURABLE"}
 FAILURE_CLASSES = {
     "HTTP_OPEN_TIMEOUT", "HTTP_OPEN_FAILED", "HTTP_BODY_TIMEOUT", "HTTP_BODY_FAILED",
     "TOTAL_DEADLINE_EXCEEDED", "VALIDATION_FAILED", "HISTORY_LOCK_TIMEOUT",
@@ -41,6 +42,12 @@ class SchedulerStateError(RuntimeError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+class SchedulerProvisionError(SchedulerStateError):
+    def __init__(self, code: str, commit_state: str):
+        super().__init__(code)
+        self.commit_state = commit_state
 
 
 def utc_now() -> datetime:
@@ -171,15 +178,19 @@ def _prepare_runtime_directory(root: Path) -> Path:
     return engagement
 
 
-def _write_initial_state(path: Path, state: Mapping[str, Any], *, now: datetime) -> None:
+def _write_initial_state(path: Path, state: Mapping[str, Any], *, now: datetime) -> str:
     """Persist a first state atomically, without replacing a concurrent file."""
     state = validate_state(state, now=now)
     payload = (json.dumps(state, sort_keys=True, separators=(",", ":"),
                           allow_nan=False) + "\n").encode()
-    temporary = path.with_name(f".{path.name}.candidate-{os.getpid()}")
+    temporary: Path | None = None
     descriptor = -1
+    published = False
     try:
-        descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.candidate-", dir=path.parent)
+        temporary = Path(name)
+        if stat.S_IMODE(os.fstat(descriptor).st_mode) != 0o600:
+            raise OSError("unsafe scheduler candidate permissions")
         written = 0
         while written < len(payload):
             count = os.write(descriptor, payload[written:])
@@ -190,20 +201,48 @@ def _write_initial_state(path: Path, state: Mapping[str, Any], *, now: datetime)
         try: os.link(temporary, path, follow_symlinks=False)
         except FileExistsError:
             raise SchedulerStateError("SCHEDULER_STATE_ALREADY_EXISTS") from None
-        directory = os.open(path.parent, os.O_RDONLY)
-        try: os.fsync(directory)
-        finally: os.close(directory)
+        published = True
+        try:
+            temporary.unlink()
+            temporary = None
+            directory = os.open(path.parent, os.O_RDONLY)
+            try: os.fsync(directory)
+            finally: os.close(directory)
+        except OSError:
+            raise SchedulerProvisionError(
+                "SCHEDULER_STATE_COMMITTED_NOT_DURABLE", "PUBLISHED") from None
+        return "DURABLE"
     finally:
         if descriptor >= 0: os.close(descriptor)
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:
+            try: temporary.unlink(missing_ok=True)
+            except OSError:
+                if published:
+                    raise SchedulerProvisionError(
+                        "SCHEDULER_STATE_COMMITTED_NOT_DURABLE", "PUBLISHED") from None
+
+
+def _provision_result(*, success: bool, commit_state: str,
+                      error_class: str | None = None) -> dict[str, Any]:
+    if commit_state not in PROVISION_COMMIT_STATES:
+        raise ValueError("invalid provisioning commit state")
+    state_created = commit_state != "PRE_PUBLISH"
+    durability_confirmed = commit_state == "DURABLE"
+    if success != (commit_state == "DURABLE" and error_class is None):
+        raise ValueError("contradictory provisioning result")
+    if not success and error_class is None:
+        raise ValueError("failed provisioning result requires an error class")
+    return {"success":success, "action":"PROVISION_DISABLED",
+            "state_created":state_created, "commit_state":commit_state,
+            "durability_confirmed":durability_confirmed, "error_class":error_class,
+            "scheduler_enabled":False, "circuit_state":"READY_DISABLED",
+            "network_requests":0, "collector_invocations":0,
+            "outcome":("SCHEDULER_STATE_PROVISIONED_DISABLED" if success else error_class)}
 
 
 def provision_disabled(root: Path, *, now: datetime | None = None) -> dict[str, Any]:
     """Provision exactly one disabled initial state; never collect or activate."""
     now = (now or utc_now()).astimezone(timezone.utc)
-    result = {"success":False, "action":"PROVISION_DISABLED", "state_created":False,
-              "scheduler_enabled":False, "circuit_state":"READY_DISABLED",
-              "network_requests":0, "collector_invocations":0}
     try:
         directory = _prepare_runtime_directory(root)
         state_path = directory / "scheduler-state.json"
@@ -211,8 +250,10 @@ def provision_disabled(root: Path, *, now: datetime | None = None) -> dict[str, 
         if state_path.exists() or state_path.is_symlink():
             metadata = state_path.lstat()
             if stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
-                return {**result, "outcome":"SCHEDULER_STATE_ALREADY_EXISTS"}
-            return {**result, "outcome":"SCHEDULER_STATE_PATH_UNSAFE"}
+                return _provision_result(success=False, commit_state="PRE_PUBLISH",
+                                         error_class="SCHEDULER_STATE_ALREADY_EXISTS")
+            return _provision_result(success=False, commit_state="PRE_PUBLISH",
+                                     error_class="SCHEDULER_STATE_PATH_UNSAFE")
         state = validate_state(disabled_state(), now=now)
         with scheduler_lock(lock_path, blocking=True):
             if state_path.exists() or state_path.is_symlink():
@@ -220,21 +261,27 @@ def provision_disabled(root: Path, *, now: datetime | None = None) -> dict[str, 
                 outcome = ("SCHEDULER_STATE_ALREADY_EXISTS"
                            if stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
                            else "SCHEDULER_STATE_PATH_UNSAFE")
-                return {**result, "outcome":outcome}
-            _write_initial_state(state_path, state, now=now)
-            saved = load_state(state_path, now=now)
+                return _provision_result(success=False, commit_state="PRE_PUBLISH",
+                                         error_class=outcome)
+            commit_state = _write_initial_state(state_path, state, now=now)
+            try: saved = load_state(state_path, now=now)
+            except SchedulerStateError:
+                return _provision_result(success=False, commit_state=commit_state,
+                    error_class="SCHEDULER_STATE_PUBLISHED_VALIDATION_FAILED")
             if saved != state:
-                raise SchedulerStateError("SCHEDULER_STATE_VALIDATION_FAILED")
-        return {**result, "success":True, "state_created":True,
-                "outcome":"SCHEDULER_STATE_PROVISIONED_DISABLED"}
+                return _provision_result(success=False, commit_state=commit_state,
+                    error_class="SCHEDULER_STATE_PUBLISHED_VALIDATION_FAILED")
+        return _provision_result(success=True, commit_state="DURABLE")
+    except SchedulerProvisionError as error:
+        return _provision_result(success=False, commit_state=error.commit_state,
+                                 error_class=error.code)
     except SchedulerStateError as error:
         outcome = error.code
         if outcome == "SCHEDULER_RUN_ALREADY_ACTIVE": outcome = "SCHEDULER_STATE_LOCK_FAILED"
-        return {**result, "outcome":outcome}
-    except OSError as error:
-        outcome = ("SCHEDULER_STATE_ALREADY_EXISTS" if error.errno == errno.EEXIST
-                   else "SCHEDULER_STATE_WRITE_FAILED")
-        return {**result, "outcome":outcome}
+        return _provision_result(success=False, commit_state="PRE_PUBLISH",error_class=outcome)
+    except OSError:
+        return _provision_result(success=False, commit_state="PRE_PUBLISH",
+                                 error_class="SCHEDULER_STATE_WRITE_FAILED")
 
 
 @contextmanager

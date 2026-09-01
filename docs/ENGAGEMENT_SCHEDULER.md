@@ -72,6 +72,10 @@ create the exact initial `READY_DISABLED` state with `scheduler_enabled=false`.
 It makes zero network requests and zero collector calls. It fails closed rather
 than overwriting any existing state. Provisioning is not activation, and
 activation remains separately unauthorized.
+Provisioning results distinguish `PRE_PUBLISH`, `PUBLISHED`, and `DURABLE`.
+If `state_created=true` accompanies any non-success result, the operator must
+stop, must not rerun or repair provisioning, and should use only `status` plus
+read-only filesystem inspection while preserving the state and other evidence.
 `dry-run` reports allowance, spacing, rolling budget, circuit state, overlap,
 and next eligibility without invoking the collector. `run-once` applies every
 safety gate and has no bypass flag. `approve-reset` never invokes the collector.

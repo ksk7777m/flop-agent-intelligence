@@ -8,7 +8,7 @@ from flop_agent.engagement import build_sample
 from flop_agent.engagement_scheduler import (
     DAILY_WINDOW, FAILURE_CLASSES, MAX_REQUESTS_PER_DAY, MINIMUM_INTERVAL, NORMAL_INTERVAL,
     SchedulerStateError, approve_reset, disabled_state, dry_run, evaluate, load_state,
-    provision_disabled, run_once, scheduler_lock, validate_state, write_state,
+    _provision_result, provision_disabled, run_once, scheduler_lock, validate_state, write_state,
 )
 from scripts.engagement_scheduler import CODE_ROOT, REVIEWED_COLLECTOR, _collector, _validated_result, main
 
@@ -373,7 +373,8 @@ class EngagementSchedulerTests(unittest.TestCase):
                  mock.patch("flop_agent.engagement_scheduler.os.open",wraps=os.open) as opened:
                 result=provision_disabled(root,now=NOW)
             self.assertEqual(result,{"success":True,"action":"PROVISION_DISABLED",
-                "state_created":True,"scheduler_enabled":False,"circuit_state":"READY_DISABLED",
+                "state_created":True,"commit_state":"DURABLE","durability_confirmed":True,
+                "error_class":None,"scheduler_enabled":False,"circuit_state":"READY_DISABLED",
                 "network_requests":0,"collector_invocations":0,
                 "outcome":"SCHEDULER_STATE_PROVISIONED_DISABLED"})
             state_path,lock_path=self.paths(root)
@@ -438,6 +439,104 @@ class EngagementSchedulerTests(unittest.TestCase):
             self.assertEqual(result["outcome"],"SCHEDULER_STATE_WRITE_FAILED")
             self.assertFalse(state_path.exists())
             self.assertEqual(list(state_path.parent.glob(".*.candidate-*")),[])
+
+    def test_directory_fsync_failure_truthfully_reports_published_state(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); real_fsync=os.fsync; calls=[]
+            def fail_directory(descriptor):
+                calls.append(descriptor)
+                if len(calls)==2: raise OSError("bounded")
+                return real_fsync(descriptor)
+            with mock.patch("flop_agent.engagement_scheduler.os.fsync",side_effect=fail_directory):
+                result=provision_disabled(root,now=NOW)
+            state_path,_=self.paths(root)
+            self.assertEqual((result["success"],result["state_created"],result["commit_state"],
+                              result["durability_confirmed"],result["error_class"]),
+                             (False,True,"PUBLISHED",False,
+                              "SCHEDULER_STATE_COMMITTED_NOT_DURABLE"))
+            self.assertEqual(load_state(state_path,now=NOW),disabled_state())
+
+    def test_post_publish_readback_failure_preserves_visible_state(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with mock.patch("flop_agent.engagement_scheduler.load_state",
+                            side_effect=SchedulerStateError("SCHEDULER_STATE_INVALID")):
+                result=provision_disabled(root,now=NOW)
+            state_path,_=self.paths(root)
+            self.assertEqual((result["success"],result["state_created"],result["commit_state"],
+                              result["durability_confirmed"],result["error_class"]),
+                             (False,True,"DURABLE",True,
+                              "SCHEDULER_STATE_PUBLISHED_VALIDATION_FAILED"))
+            self.assertTrue(state_path.exists())
+
+    def test_preexisting_candidate_is_untouched_and_not_state_exists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); directory=root/"runtime/engagement"; directory.mkdir(parents=True)
+            candidate=directory/".scheduler-state.json.candidate-preexisting"
+            candidate.write_bytes(b"forensic evidence"); os.chmod(candidate,0o600)
+            before=(candidate.read_bytes(),candidate.stat().st_mode&0o777)
+            result=provision_disabled(root,now=NOW)
+            self.assertTrue(result["success"])
+            self.assertEqual((candidate.read_bytes(),candidate.stat().st_mode&0o777),before)
+
+    def test_candidate_creation_collision_is_not_state_exists_or_unlinked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); directory=root/"runtime/engagement"; directory.mkdir(parents=True)
+            candidate=directory/".scheduler-state.json.candidate-collision"
+            candidate.write_bytes(b"forensic evidence"); os.chmod(candidate,0o600)
+            with mock.patch("flop_agent.engagement_scheduler.tempfile.mkstemp",
+                            side_effect=FileExistsError()):
+                result=provision_disabled(root,now=NOW)
+            self.assertEqual(result["error_class"],"SCHEDULER_STATE_WRITE_FAILED")
+            self.assertNotEqual(result["error_class"],"SCHEDULER_STATE_ALREADY_EXISTS")
+            self.assertEqual(candidate.read_bytes(),b"forensic evidence")
+            self.assertFalse(self.paths(root)[0].exists())
+
+    def test_owned_candidate_cleanup_and_unique_concurrent_candidates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with mock.patch("flop_agent.engagement_scheduler.os.link",side_effect=OSError("bounded")):
+                result=provision_disabled(root,now=NOW)
+            self.assertEqual((result["state_created"],result["commit_state"]),(False,"PRE_PUBLISH"))
+            self.assertEqual(list((root/"runtime/engagement").glob(".*.candidate-*")),[])
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); names=[]; real_mkstemp=tempfile.mkstemp
+            def record_candidate(*args,**kwargs):
+                descriptor,name=real_mkstemp(*args,**kwargs); names.append(name); return descriptor,name
+            results=[]; barrier=threading.Barrier(2)
+            def provision(): barrier.wait(); results.append(provision_disabled(root,now=NOW))
+            with mock.patch("flop_agent.engagement_scheduler.tempfile.mkstemp",
+                            side_effect=record_candidate):
+                threads=[threading.Thread(target=provision) for _ in range(2)]
+                for thread in threads: thread.start()
+                for thread in threads: thread.join()
+            self.assertEqual(len(names),1)
+            self.assertEqual(len(set(names)),1)
+            self.assertEqual(sum(item["state_created"] for item in results),1)
+            self.assertEqual(load_state(self.paths(root)[0],now=NOW),disabled_state())
+
+    def test_candidate_names_are_unique_and_private_across_attempts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); observed=[]
+            def reject_publish(source,*_args,**_kwargs):
+                path=Path(source); observed.append((path.name,path.stat().st_mode&0o777))
+                raise OSError("bounded")
+            with mock.patch("flop_agent.engagement_scheduler.os.link",side_effect=reject_publish):
+                results=[provision_disabled(root,now=NOW),provision_disabled(root,now=NOW)]
+            self.assertEqual(len({name for name,_mode in observed}),2)
+            self.assertEqual({mode for _name,mode in observed},{0o600})
+            self.assertTrue(all(item["commit_state"]=="PRE_PUBLISH" for item in results))
+            self.assertEqual(list((root/"runtime/engagement").glob(".*.candidate-*")),[])
+
+    def test_provision_result_rejects_contradictory_combinations(self):
+        with self.assertRaises(ValueError):
+            _provision_result(success=True,commit_state="PRE_PUBLISH")
+        with self.assertRaises(ValueError):
+            _provision_result(success=True,commit_state="PUBLISHED")
+        with self.assertRaises(ValueError):
+            _provision_result(success=False,commit_state="DURABLE")
+        with self.assertRaises(ValueError):
+            _provision_result(success=False,commit_state="UNKNOWN",error_class="BOUNDED")
 
     def test_provision_disabled_has_no_activation_or_external_effect_surface(self):
         source=(Path(__file__).resolve().parents[1]/"src/flop_agent/engagement_scheduler.py").read_text()
