@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import errno
 import json
 import os
 import stat
@@ -142,6 +143,98 @@ def write_state(path: Path, state: Mapping[str, Any], *, now: datetime | None = 
     finally:
         if descriptor >= 0: os.close(descriptor)
         temporary.unlink(missing_ok=True)
+
+
+def _safe_directory(path: Path, *, create: bool) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        if not create:
+            raise SchedulerStateError("SCHEDULER_STATE_PATH_UNSAFE") from None
+        try: os.mkdir(path, 0o700)
+        except FileExistsError: pass
+        except OSError:
+            raise SchedulerStateError("SCHEDULER_STATE_PATH_UNSAFE") from None
+        metadata = path.lstat()
+    if (not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o022):
+        raise SchedulerStateError("SCHEDULER_STATE_PATH_UNSAFE")
+
+
+def _prepare_runtime_directory(root: Path) -> Path:
+    """Create only private runtime components without following symlinks."""
+    _safe_directory(root, create=False)
+    runtime = root / "runtime"
+    _safe_directory(runtime, create=True)
+    engagement = runtime / "engagement"
+    _safe_directory(engagement, create=True)
+    return engagement
+
+
+def _write_initial_state(path: Path, state: Mapping[str, Any], *, now: datetime) -> None:
+    """Persist a first state atomically, without replacing a concurrent file."""
+    state = validate_state(state, now=now)
+    payload = (json.dumps(state, sort_keys=True, separators=(",", ":"),
+                          allow_nan=False) + "\n").encode()
+    temporary = path.with_name(f".{path.name}.candidate-{os.getpid()}")
+    descriptor = -1
+    try:
+        descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        written = 0
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0: raise OSError("short scheduler state write")
+            written += count
+        os.fsync(descriptor)
+        os.close(descriptor); descriptor = -1
+        try: os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError:
+            raise SchedulerStateError("SCHEDULER_STATE_ALREADY_EXISTS") from None
+        directory = os.open(path.parent, os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    finally:
+        if descriptor >= 0: os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
+def provision_disabled(root: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    """Provision exactly one disabled initial state; never collect or activate."""
+    now = (now or utc_now()).astimezone(timezone.utc)
+    result = {"success":False, "action":"PROVISION_DISABLED", "state_created":False,
+              "scheduler_enabled":False, "circuit_state":"READY_DISABLED",
+              "network_requests":0, "collector_invocations":0}
+    try:
+        directory = _prepare_runtime_directory(root)
+        state_path = directory / "scheduler-state.json"
+        lock_path = directory / "scheduler-state.lock"
+        if state_path.exists() or state_path.is_symlink():
+            metadata = state_path.lstat()
+            if stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+                return {**result, "outcome":"SCHEDULER_STATE_ALREADY_EXISTS"}
+            return {**result, "outcome":"SCHEDULER_STATE_PATH_UNSAFE"}
+        state = validate_state(disabled_state(), now=now)
+        with scheduler_lock(lock_path, blocking=True):
+            if state_path.exists() or state_path.is_symlink():
+                metadata = state_path.lstat()
+                outcome = ("SCHEDULER_STATE_ALREADY_EXISTS"
+                           if stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
+                           else "SCHEDULER_STATE_PATH_UNSAFE")
+                return {**result, "outcome":outcome}
+            _write_initial_state(state_path, state, now=now)
+            saved = load_state(state_path, now=now)
+            if saved != state:
+                raise SchedulerStateError("SCHEDULER_STATE_VALIDATION_FAILED")
+        return {**result, "success":True, "state_created":True,
+                "outcome":"SCHEDULER_STATE_PROVISIONED_DISABLED"}
+    except SchedulerStateError as error:
+        outcome = error.code
+        if outcome == "SCHEDULER_RUN_ALREADY_ACTIVE": outcome = "SCHEDULER_STATE_LOCK_FAILED"
+        return {**result, "outcome":outcome}
+    except OSError as error:
+        outcome = ("SCHEDULER_STATE_ALREADY_EXISTS" if error.errno == errno.EEXIST
+                   else "SCHEDULER_STATE_WRITE_FAILED")
+        return {**result, "outcome":outcome}
 
 
 @contextmanager

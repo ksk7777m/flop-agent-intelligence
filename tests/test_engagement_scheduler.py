@@ -1,4 +1,5 @@
-import json, os, subprocess, sys, tempfile, unittest
+import io, json, os, subprocess, sys, tempfile, threading, unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -7,9 +8,9 @@ from flop_agent.engagement import build_sample
 from flop_agent.engagement_scheduler import (
     DAILY_WINDOW, FAILURE_CLASSES, MAX_REQUESTS_PER_DAY, MINIMUM_INTERVAL, NORMAL_INTERVAL,
     SchedulerStateError, approve_reset, disabled_state, dry_run, evaluate, load_state,
-    run_once, scheduler_lock, validate_state, write_state,
+    provision_disabled, run_once, scheduler_lock, validate_state, write_state,
 )
-from scripts.engagement_scheduler import CODE_ROOT, REVIEWED_COLLECTOR, _collector, _validated_result
+from scripts.engagement_scheduler import CODE_ROOT, REVIEWED_COLLECTOR, _collector, _validated_result, main
 
 NOW=datetime(2026,9,1,12,0,0,tzinfo=timezone.utc)
 
@@ -363,6 +364,112 @@ class EngagementSchedulerTests(unittest.TestCase):
             self.assertNotIn(forbidden,combined)
         self.assertNotIn("--ignore",combined); self.assertNotIn("--force",combined)
         self.assertEqual(list((root/".github/workflows").glob("*scheduler*")),[])
+
+    def test_provision_disabled_creates_exact_private_initial_state_offline(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with mock.patch("scripts.engagement_scheduler._collector",side_effect=AssertionError), \
+                 mock.patch("scripts.engagement_scheduler.subprocess.run",side_effect=AssertionError), \
+                 mock.patch("flop_agent.engagement_scheduler.os.open",wraps=os.open) as opened:
+                result=provision_disabled(root,now=NOW)
+            self.assertEqual(result,{"success":True,"action":"PROVISION_DISABLED",
+                "state_created":True,"scheduler_enabled":False,"circuit_state":"READY_DISABLED",
+                "network_requests":0,"collector_invocations":0,
+                "outcome":"SCHEDULER_STATE_PROVISIONED_DISABLED"})
+            state_path,lock_path=self.paths(root)
+            self.assertEqual(state_path.stat().st_mode&0o777,0o600)
+            self.assertEqual(lock_path.stat().st_mode&0o777,0o600)
+            self.assertIn(0o600,[call.args[2] for call in opened.call_args_list if len(call.args)>2])
+            state=load_state(state_path,now=NOW)
+            self.assertEqual(state,disabled_state())
+            self.assertEqual(evaluate(state,now=NOW)["outcome"],"SCHEDULER_DISABLED")
+            self.assertEqual(dry_run(state_path,lock_path,now=NOW)["outcome"],"SCHEDULER_DISABLED")
+
+    def test_provision_disabled_existing_state_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); state_path,_=self.paths(root)
+            write_state(state_path,ready_state(),now=NOW); before=state_path.read_bytes()
+            result=provision_disabled(root,now=NOW)
+            self.assertEqual(result["outcome"],"SCHEDULER_STATE_ALREADY_EXISTS")
+            self.assertFalse(result["state_created"]); self.assertEqual(state_path.read_bytes(),before)
+
+    def test_provision_disabled_rejects_symlinks_and_unsafe_types(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); state_path,_=self.paths(root); state_path.parent.mkdir(parents=True)
+            target=root/"target"; target.write_text("evidence")
+            state_path.symlink_to(target)
+            self.assertEqual(provision_disabled(root,now=NOW)["outcome"],"SCHEDULER_STATE_PATH_UNSAFE")
+            self.assertEqual(target.read_text(),"evidence")
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); runtime=root/"runtime"; target=root/"outside"
+            target.mkdir(); runtime.symlink_to(target,target_is_directory=True)
+            self.assertEqual(provision_disabled(root,now=NOW)["outcome"],"SCHEDULER_STATE_PATH_UNSAFE")
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); state_path,_=self.paths(root); state_path.mkdir(parents=True)
+            self.assertEqual(provision_disabled(root,now=NOW)["outcome"],"SCHEDULER_STATE_PATH_UNSAFE")
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); _,lock_path=self.paths(root); lock_path.parent.mkdir(parents=True)
+            target=root/"target"; target.touch(); lock_path.symlink_to(target)
+            self.assertEqual(provision_disabled(root,now=NOW)["outcome"],"SCHEDULER_STATE_INVALID")
+            self.assertFalse(self.paths(root)[0].exists())
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); runtime=root/"runtime"; runtime.mkdir(); os.chmod(runtime,0o777)
+            self.assertEqual(provision_disabled(root,now=NOW)["outcome"],"SCHEDULER_STATE_PATH_UNSAFE")
+
+    def test_concurrent_provision_disabled_initializes_once(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); results=[]; barrier=threading.Barrier(2)
+            def provision():
+                barrier.wait(); results.append(provision_disabled(root,now=NOW))
+            threads=[threading.Thread(target=provision) for _ in range(2)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join()
+            self.assertEqual(sum(item["state_created"] for item in results),1)
+            self.assertEqual({item["outcome"] for item in results},
+                             {"SCHEDULER_STATE_PROVISIONED_DISABLED","SCHEDULER_STATE_ALREADY_EXISTS"})
+            self.assertEqual(load_state(self.paths(root)[0],now=NOW),disabled_state())
+
+    def test_failed_initial_atomic_write_leaves_no_partial_state(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with mock.patch("flop_agent.engagement_scheduler.os.link",side_effect=OSError("bounded")):
+                result=provision_disabled(root,now=NOW)
+            state_path,_=self.paths(root)
+            self.assertEqual(result["outcome"],"SCHEDULER_STATE_WRITE_FAILED")
+            self.assertFalse(state_path.exists())
+            self.assertEqual(list(state_path.parent.glob(".*.candidate-*")),[])
+
+    def test_provision_disabled_has_no_activation_or_external_effect_surface(self):
+        source=(Path(__file__).resolve().parents[1]/"src/flop_agent/engagement_scheduler.py").read_text()
+        section=source[source.index("def provision_disabled"):source.index("def scheduler_lock")]
+        for forbidden in ("run_once(", "_collector(", "subprocess", "urllib", "requests.",
+                          "launchctl", "crontab", "git ", "READY\"", "scheduler_enabled=True"):
+            self.assertNotIn(forbidden,section)
+
+    def test_temp_provision_does_not_mutate_real_history(self):
+        real=CODE_ROOT/"runtime/engagement/history.jsonl"
+        before=real.read_bytes() if real.exists() else None
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertTrue(provision_disabled(Path(folder),now=NOW)["success"])
+        after=real.read_bytes() if real.exists() else None
+        self.assertEqual(after,before)
+
+    def test_temporary_cli_provision_integrates_with_status_and_dry_run(self):
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch("scripts.engagement_scheduler._collector",side_effect=AssertionError), \
+             mock.patch("scripts.engagement_scheduler.subprocess.run",side_effect=AssertionError):
+            outputs=[]
+            for command in ("provision-disabled","status","dry-run"):
+                stream=io.StringIO()
+                with mock.patch.object(sys,"argv",["engagement_scheduler.py",command,"--root",folder]), \
+                     redirect_stdout(stream):
+                    main()
+                outputs.append(json.loads(stream.getvalue()))
+            self.assertEqual(outputs[0]["outcome"],"SCHEDULER_STATE_PROVISIONED_DISABLED")
+            self.assertEqual((outputs[1]["circuit_state"],outputs[1]["scheduler_enabled"]),
+                             ("READY_DISABLED",False))
+            self.assertEqual(outputs[2]["outcome"],"SCHEDULER_DISABLED")
+            self.assertEqual(outputs[2]["requests_24h"],0)
 
 
 if __name__ == "__main__": unittest.main()

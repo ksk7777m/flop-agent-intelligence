@@ -13,7 +13,9 @@ import sys
 from pathlib import Path
 
 from flop_agent.engagement_history import validate as validate_engagement_sample
-from flop_agent.engagement_scheduler import FAILURE_CLASSES, approve_reset, dry_run, evaluate, load_state, run_once
+from flop_agent.engagement_scheduler import (
+    FAILURE_CLASSES, approve_reset, dry_run, evaluate, load_state, provision_disabled, run_once,
+)
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 REVIEWED_COLLECTOR = CODE_ROOT / "scripts/collect_engagement.py"
@@ -158,12 +160,14 @@ def _collector(root: Path) -> dict:
 
 def main() -> None:
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command",choices=("status","dry-run","run-once","approve-reset"))
+    parser.add_argument("command",choices=("status","dry-run","run-once","approve-reset","provision-disabled"))
     parser.add_argument("--root",type=Path,default=Path(__file__).resolve().parents[1])
-    args=parser.parse_args(); root=args.root.resolve()
+    args=parser.parse_args()
+    root=(Path(os.path.abspath(args.root)) if args.command == "provision-disabled" else args.root.resolve())
     state_path=root/"runtime/engagement/scheduler-state.json"
     lock_path=root/"runtime/engagement/scheduler-state.lock"
-    if args.command == "status":
+    if args.command == "provision-disabled": result=provision_disabled(root)
+    elif args.command == "status":
         try: result={"success":True,**evaluate(load_state(state_path))}
         except Exception as error: result={"success":False,"outcome":getattr(error,"code","SCHEDULER_STATE_INVALID")}
     elif args.command == "dry-run": result=dry_run(state_path,lock_path)

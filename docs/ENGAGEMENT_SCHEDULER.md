@@ -66,12 +66,16 @@ bounded `WORKER_CRASHED` failure and makes no request.
 
 ## CLI surface
 
-`status`, `dry-run`, `run-once`, and `approve-reset` are the only commands.
+`status`, `dry-run`, `run-once`, `approve-reset`, and `provision-disabled` are
+the only commands. `provision-disabled` is the Approval A utility: it can only
+create the exact initial `READY_DISABLED` state with `scheduler_enabled=false`.
+It makes zero network requests and zero collector calls. It fails closed rather
+than overwriting any existing state. Provisioning is not activation, and
+activation remains separately unauthorized.
 `dry-run` reports allowance, spacing, rolling budget, circuit state, overlap,
 and next eligibility without invoking the collector. `run-once` applies every
 safety gate and has no bypass flag. `approve-reset` never invokes the collector.
-No command initializes or enables scheduling; those remain future reviewed
-operations.
+No command enables scheduling; enablement remains a future reviewed operation.
 
 ## Execution environment review
 
