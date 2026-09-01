@@ -33,7 +33,7 @@ PREVIEW_STATES = {"NOT_ATTEMPTED", "UPDATED", "FAILED"}
 DURABILITY_WARNINGS = {None, "POST_COMMIT_DURABILITY_WARNING"}
 PREVIEW_WARNINGS = {None, "POST_COMMIT_PREVIEW_WARNING"}
 CLEANUP_ERRORS = {None, "WORKER_CLEANUP_FAILED", "WORKER_CLEANUP_UNVERIFIED"}
-RESULT_ERRORS = {None, "TOTAL_DEADLINE_EXCEEDED", "POST_COMMIT_WARNING"}
+RESULT_ERRORS = {None, "TOTAL_DEADLINE_EXCEEDED", "POST_COMMIT_WARNING", "PRE_COMMIT_FAILURE"}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -211,6 +211,22 @@ def _structured_result(sample: dict, transaction: dict[str, str], *,
             "cleanup_state": cleanup_state, "deadline_cleanup_overrun": deadline_cleanup_overrun,
             "error_class": error, "durability_warning": durability_warning,
             "preview_warning": preview_warning, "cleanup_error": cleanup_error}
+
+
+def _merge_cleanup_failure(result: dict, cleanup_error: str = "WORKER_CLEANUP_FAILED") -> dict:
+    """Return a revalidated result without discarding an earlier cleanup error."""
+    transaction = {
+        "state": result["commit_state"], "preview_state": result["preview_state"],
+        "error_class": result["error_class"],
+        "durability_warning": result["durability_warning"],
+        "preview_warning": result["preview_warning"],
+    }
+    return _structured_result(
+        result["sample"], transaction,
+        deadline_cleanup_overrun=result["deadline_cleanup_overrun"],
+        cleanup_state="FAILED", cleanup_error=result.get("cleanup_error") or cleanup_error,
+        success=result["success"],
+    )
 
 
 def _git_revision(root: Path, deadline_at: float) -> str | None:
@@ -407,7 +423,22 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
                           args=(worker_target, child_connection, str(root), timeout, revision,
                                 max(0.001, deadline_at - time.monotonic()), session_setup))
     ownership = WorkerOwnership()
-    process.start(); child_connection.close()
+    transaction = {"state":"PRE_COMMIT", "preview_state":"NOT_ATTEMPTED",
+                   "durability_warning":None, "preview_warning":None}
+    final_result = None
+    result_sample = None
+    process.start()
+    try: child_connection.close()
+    except Exception:
+        cleanup_error = "WORKER_CLEANUP_FAILED"
+        try: _cleanup_unowned(process)
+        except CollectionError as error: cleanup_error = error.code
+        except Exception: pass
+        try: parent_connection.close()
+        except Exception: pass
+        transaction["error_class"] = "PRE_COMMIT_FAILURE"
+        return _structured_result(None, transaction, cleanup_state="FAILED",
+                                  cleanup_error=cleanup_error, success=False)
     try:
         startup_budget = deadline_at - time.monotonic()
         if startup_budget <= 0 or not parent_connection.poll(startup_budget):
@@ -428,11 +459,10 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
         if process.is_alive(): _cleanup_owned(process, ownership)
         else: ownership.state = OwnershipState.REAPED; ownership.release()
         envelope = _decode_worker_result(payload, process.exitcode)
+        result_sample = envelope.get("sample")
         if not envelope["ok"]: raise CollectionError(None, code=envelope["error_class"])
         remaining = deadline_at - time.monotonic()
         if remaining < MIN_COMMIT_BUDGET_SECONDS: raise TotalDeadlineExceeded({})
-        transaction = {"state":"PRE_COMMIT", "preview_state":"NOT_ATTEMPTED",
-                       "durability_warning":None, "preview_warning":None}
         try:
             with _commit_alarm(remaining):
                 commit(root, envelope["sample"], deadline_at=deadline_at, transaction=transaction)
@@ -441,8 +471,9 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
             if transaction["state"] in {"COMMITTED","DURABLE","DEDUPED"}:
                 transaction["error_class"] = "TOTAL_DEADLINE_EXCEEDED"
                 if transaction["state"] == "DEDUPED": transaction["state"] = "DURABLE"
-                return _structured_result(envelope["sample"], transaction,
-                                          deadline_cleanup_overrun=True)
+                final_result = _structured_result(envelope["sample"], transaction,
+                                                  deadline_cleanup_overrun=True)
+                return final_result
             raise TotalDeadlineExceeded({}) from None
         except Exception:
             if transaction["state"] in {"COMMITTED", "DURABLE", "DEDUPED"}:
@@ -452,23 +483,27 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
                     transaction["preview_warning"] = "POST_COMMIT_PREVIEW_WARNING"
                 else:
                     transaction["error_class"] = "POST_COMMIT_WARNING"
-                return _structured_result(envelope["sample"], transaction,
-                                          deadline_cleanup_overrun=time.monotonic() > deadline_at)
+                final_result = _structured_result(envelope["sample"], transaction,
+                                                  deadline_cleanup_overrun=time.monotonic() > deadline_at)
+                return final_result
             raise
         if transaction["state"] == "DEDUPED": transaction["state"] = "DURABLE"
         if post_commit_cleanup is not None:
             try: post_commit_cleanup()
             except CollectionError as error:
-                return _structured_result(envelope["sample"], transaction,
-                                          deadline_cleanup_overrun=time.monotonic() > deadline_at,
-                                          cleanup_state="FAILED", cleanup_error=error.code)
+                final_result = _structured_result(envelope["sample"], transaction,
+                                                  deadline_cleanup_overrun=time.monotonic() > deadline_at,
+                                                  cleanup_state="FAILED", cleanup_error=error.code)
+                return final_result
             except Exception:
-                return _structured_result(envelope["sample"], transaction,
-                                          deadline_cleanup_overrun=time.monotonic() > deadline_at,
-                                          cleanup_state="FAILED", cleanup_error="WORKER_CLEANUP_FAILED")
+                final_result = _structured_result(envelope["sample"], transaction,
+                                                  deadline_cleanup_overrun=time.monotonic() > deadline_at,
+                                                  cleanup_state="FAILED", cleanup_error="WORKER_CLEANUP_FAILED")
+                return final_result
         overrun = time.monotonic() > deadline_at
-        return _structured_result(envelope["sample"], transaction,
-                                  deadline_cleanup_overrun=overrun)
+        final_result = _structured_result(envelope["sample"], transaction,
+                                          deadline_cleanup_overrun=overrun)
+        return final_result
     except TotalDeadlineExceeded as error:
         if ownership.state == OwnershipState.OWNED: _cleanup_owned(process, ownership)
         elif ownership.state == OwnershipState.STARTING: _cleanup_unowned(process)
@@ -477,14 +512,34 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
             "configured_total_deadline": deadline, "collector_version": VERSION, "git_revision": revision,
         }) from None
     finally:
-        parent_connection.close()
-        if ownership.state == OwnershipState.OWNED:
-            if process.is_alive():
-                _cleanup_owned(process, ownership)
+        close_failed = False
+        try: parent_connection.close()
+        except Exception: close_failed = True
+        final_cleanup_error = "WORKER_CLEANUP_FAILED" if close_failed else None
+        try:
+            if ownership.state == OwnershipState.OWNED:
+                if process.is_alive():
+                    _cleanup_owned(process, ownership)
+                else:
+                    process.join(0); ownership.state = OwnershipState.REAPED; ownership.release()
+            elif ownership.state == OwnershipState.STARTING and process.is_alive():
+                _cleanup_unowned(process)
+        except CollectionError as error:
+            final_cleanup_error = error.code
+        except Exception:
+            final_cleanup_error = "WORKER_CLEANUP_FAILED"
+        if final_cleanup_error is not None:
+            if final_result is None:
+                transaction["state"] = "PRE_COMMIT"
+                transaction["preview_state"] = "NOT_ATTEMPTED"
+                transaction["error_class"] = "PRE_COMMIT_FAILURE"
+                final_result = _structured_result(
+                    result_sample, transaction, cleanup_state="FAILED",
+                    cleanup_error=final_cleanup_error, success=False,
+                )
             else:
-                process.join(0); ownership.state = OwnershipState.REAPED; ownership.release()
-        elif ownership.state == OwnershipState.STARTING and process.is_alive():
-            _cleanup_unowned(process)
+                final_result = _merge_cleanup_failure(final_result, final_cleanup_error)
+            return final_result
 
 
 def main() -> None:
@@ -500,6 +555,7 @@ def main() -> None:
         print(json.dumps({"error_class": error.code, "collector_version": VERSION,
                           "git_revision": None}, indent=2)); raise SystemExit(1) from None
     print(json.dumps(result, indent=2))
+    if not result["success"]: raise SystemExit(1)
 
 
 if __name__ == "__main__": main()

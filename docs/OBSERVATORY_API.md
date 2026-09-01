@@ -36,7 +36,10 @@ update. Result `success` means the history sample was committed; durability,
 preview, and cleanup outcomes use independent strictly validated fields so
 simultaneous warnings remain visible. `DURABLE` cannot carry a durability
 warning, `FAILED` preview means publication began and carries its preview
-warning, and cleanup errors require cleanup state `FAILED`. On platforms
+warning, and cleanup errors require cleanup state `FAILED`. Final IPC and
+process cleanup is completed before result finalization; a bounded cleanup
+failure is merged into the result and revalidated without obscuring an existing
+commit, durability, or preview outcome. On platforms
 without POSIX `setitimer`, the worker deadline and lock
 budget remain bounded, but a complete local atomic file operation may finish
 after the nominal crossing; no partial history file is exposed. The collector

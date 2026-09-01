@@ -77,6 +77,22 @@ class Response:
     def geturl(self): return self.url
 
 
+class CloseFailConnection:
+    def __init__(self, connection): self.connection = connection
+    def __getattr__(self, name): return getattr(self.connection, name)
+    def close(self):
+        self.connection.close()
+        raise OSError("private close detail")
+
+
+class CloseFailContext:
+    def __init__(self): self.base = __import__("multiprocessing").get_context("fork")
+    def Pipe(self, duplex=True):
+        parent, child = self.base.Pipe(duplex=duplex)
+        return CloseFailConnection(parent), child
+    def Process(self, *args, **kwargs): return self.base.Process(*args, **kwargs)
+
+
 class EngagementMonitorTests(unittest.TestCase):
     def sample(self, when="2026-08-29T00:00:00Z"):
         return build_sample({"rooms":[{"room":"a","window":0}],"engagement":{}}, fetched_at=when,
@@ -409,6 +425,65 @@ class EngagementMonitorTests(unittest.TestCase):
             self.assertEqual(result["durability_warning"],"POST_COMMIT_DURABILITY_WARNING")
             self.assertEqual(result["cleanup_state"],"FAILED")
             self.assertEqual(result["cleanup_error"],"WORKER_CLEANUP_FAILED")
+
+    def test_real_parent_close_failure_after_durable_is_merged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker,
+                                           context=CloseFailContext())
+            self.assertTrue(result["success"]); self.assertEqual(result["commit_state"],"DURABLE")
+            self.assertEqual(result["preview_state"],"UPDATED")
+            self.assertEqual(result["cleanup_state"],"FAILED")
+            self.assertEqual(result["cleanup_error"],"WORKER_CLEANUP_FAILED")
+            self.assertNotIn("private close detail",json.dumps(result))
+
+    def test_real_parent_close_failure_preserves_committed_durability_warning(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); real_fsync=os.fsync; calls=0
+            def fail_directory(descriptor):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError("durability detail")
+                return real_fsync(descriptor)
+            with mock.patch("flop_agent.engagement_history.os.fsync",side_effect=fail_directory):
+                result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker,
+                                               context=CloseFailContext())
+            self.assertEqual(result["commit_state"],"COMMITTED")
+            self.assertEqual(result["durability_warning"],"POST_COMMIT_DURABILITY_WARNING")
+            self.assertEqual(result["cleanup_state"],"FAILED")
+            self.assertEqual(result["cleanup_error"],"WORKER_CLEANUP_FAILED")
+
+    def test_precommit_failure_and_real_parent_close_failure_are_structured(self):
+        with tempfile.TemporaryDirectory() as folder:
+            result=run_with_total_deadline(Path(folder),total_deadline=1,worker_target=crashed_worker,
+                                           context=CloseFailContext())
+            self.assertFalse(result["success"]); self.assertEqual(result["commit_state"],"PRE_COMMIT")
+            self.assertEqual(result["preview_state"],"NOT_ATTEMPTED")
+            self.assertEqual(result["cleanup_state"],"FAILED")
+            self.assertEqual(result["cleanup_error"],"WORKER_CLEANUP_FAILED")
+
+    def test_preview_and_real_parent_close_failures_coexist(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with mock.patch("scripts.collect_engagement._atomic_preview",side_effect=OSError("preview detail")):
+                result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker,
+                                               context=CloseFailContext())
+            self.assertEqual(result["commit_state"],"DURABLE")
+            self.assertEqual(result["preview_state"],"FAILED")
+            self.assertEqual(result["preview_warning"],"POST_COMMIT_PREVIEW_WARNING")
+            self.assertEqual(result["cleanup_state"],"FAILED")
+            self.assertEqual(result["cleanup_error"],"WORKER_CLEANUP_FAILED")
+
+    def test_deadline_during_preview_preserves_durable_failed_preview(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with mock.patch("scripts.collect_engagement._atomic_preview",side_effect=HistoryDeadlineExceeded()):
+                result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker)
+            self.assertEqual(result["commit_state"],"DURABLE")
+            self.assertEqual(result["preview_state"],"FAILED")
+            self.assertEqual(result["preview_warning"],"POST_COMMIT_PREVIEW_WARNING")
+            self.assertEqual(result["error_class"],"TOTAL_DEADLINE_EXCEEDED")
+            self.assertTrue(result["deadline_cleanup_overrun"])
 
     def test_recovery_tail_and_previews_are_atomic_private_files(self):
         with tempfile.TemporaryDirectory() as folder:
