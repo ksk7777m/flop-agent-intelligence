@@ -38,6 +38,11 @@ private lock prevents overlap without terminating the legitimate active run.
 Spacing and rolling-budget refusal do not count as network failures because no
 collector is invoked.
 
+The scheduler accepts only the current stage-specific `HTTP_OPEN_*` and
+`HTTP_BODY_*` diagnostic contracts. The collector's legacy generic
+`HTTP_TIMEOUT` class is not a Scheduler V0.1 failure class and fails closed as
+an invalid collector result.
+
 ## State and recovery
 
 State is local at `runtime/engagement/scheduler-state.json` with mode `0600`.

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+from flop_agent.engagement import build_sample
 from flop_agent.engagement_scheduler import (
     DAILY_WINDOW, FAILURE_CLASSES, MAX_REQUESTS_PER_DAY, MINIMUM_INTERVAL, NORMAL_INTERVAL,
     SchedulerStateError, approve_reset, disabled_state, dry_run, evaluate, load_state,
@@ -28,7 +29,9 @@ def diagnostics():
 
 
 def success_result():
-    return {"ok":True,"success":True,"sample":{"schema":"engagement-sample-v1"},
+    sample=build_sample({"rooms":[],"engagement":{}},fetched_at="2026-09-01T12:00:00Z",
+                        source_sha256="0"*64,collector_version="0.1.0")
+    return {"ok":True,"success":True,"sample":sample,
             "commit_state":"DURABLE","preview_state":"UPDATED","cleanup_state":"COMPLETED",
             "deadline_cleanup_overrun":False,"error_class":None,"durability_warning":None,
             "preview_warning":None,"cleanup_error":None,"network_diagnostics":diagnostics()}
@@ -38,7 +41,7 @@ def failure_result(error="HTTP_BODY_TIMEOUT"):
     network = None
     if error in {"HTTP_OPEN_TIMEOUT","HTTP_OPEN_FAILED","HTTP_BODY_TIMEOUT","HTTP_BODY_FAILED"}:
         network=diagnostics(); network.update(failure_stage="HTTP_OPEN" if error.startswith("HTTP_OPEN") else "HTTP_BODY",
-                                              http_status=None,response_bytes=None)
+                                              http_status=None if error=="HTTP_OPEN_TIMEOUT" else 500,response_bytes=None)
         if error.startswith("HTTP_OPEN"): network["body_elapsed_seconds"]=None
     return {"success":False,"commit_state":"PRE_COMMIT","preview_state":"NOT_ATTEMPTED",
             "cleanup_state":"COMPLETED","deadline_cleanup_overrun":False,"error_class":error,
@@ -239,6 +242,63 @@ class EngagementSchedulerTests(unittest.TestCase):
         self.assertEqual(_validated_result(item,0)["error_class"],"COLLECTOR_RESULT_NOT_DURABLE")
         item=success_result(); item["preview_state"]="FAILED"; item["preview_warning"]="POST_COMMIT_PREVIEW_WARNING"
         self.assertEqual(_validated_result(item,0)["error_class"],"COLLECTOR_PREVIEW_FAILED")
+
+    def test_success_sample_schema_and_version_are_strict(self):
+        self.assertTrue(_validated_result(success_result(),0)["success"])
+        invalid_samples=[{}, {"schema":"engagement-sample-v1"}]
+        for field,value in (("schema",None),("schema","wrong"),("collector_version",None),
+                            ("collector_version","wrong"),("returned_rooms","bad")):
+            sample=dict(success_result()["sample"])
+            if value is None: sample.pop(field)
+            else: sample[field]=value
+            invalid_samples.append(sample)
+        sample=dict(success_result()["sample"]); sample["dangerous"]="unexpected"; invalid_samples.append(sample)
+        for sample in invalid_samples:
+            with self.subTest(sample=sample):
+                result=success_result(); result["sample"]=sample
+                self.assertEqual(_validated_result(result,0)["error_class"],"COLLECTOR_RESULT_INVALID")
+        with tempfile.TemporaryDirectory() as folder:
+            state_path,lock_path=self.paths(Path(folder)); write_state(state_path,ready_state(),now=NOW)
+            malformed=success_result(); malformed["sample"]={}
+            result=run_once(state_path,lock_path,lambda:_validated_result(malformed,0),now=NOW)
+            saved=load_state(state_path,now=NOW)
+            self.assertEqual((result["success"],saved["last_success_at"],saved["last_error_class"]),
+                             (False,None,"COLLECTOR_RESULT_INVALID"))
+
+    def test_failure_diagnostic_semantic_matrix(self):
+        for error in ("HTTP_OPEN_TIMEOUT","HTTP_OPEN_FAILED","HTTP_BODY_TIMEOUT","HTTP_BODY_FAILED"):
+            self.assertEqual(_validated_result(failure_result(error),1)["error_class"],error)
+            wrong=failure_result(error)
+            wrong["network_diagnostics"]["failure_stage"]=(
+                "HTTP_BODY" if error.startswith("HTTP_OPEN") else "HTTP_OPEN")
+            self.assertEqual(_validated_result(wrong,1)["error_class"],"COLLECTOR_RESULT_INVALID")
+        invalid=[]
+        for error in ("HTTP_BODY_TIMEOUT","HTTP_BODY_FAILED"):
+            item=failure_result(error); item["network_diagnostics"]["http_status"]=None; invalid.append(item)
+            item=failure_result(error); item["network_diagnostics"]["response_bytes"]=1; invalid.append(item)
+        for error in ("HTTP_OPEN_TIMEOUT","HTTP_OPEN_FAILED"):
+            item=failure_result(error); item["network_diagnostics"]["body_elapsed_seconds"]=.1; invalid.append(item)
+            item=failure_result(error); item["network_diagnostics"]["response_bytes"]=1; invalid.append(item)
+        item=failure_result(); item["network_diagnostics"].update(total_elapsed_seconds=.1,
+                                                                   open_elapsed_seconds=.2,
+                                                                   body_elapsed_seconds=.3); invalid.append(item)
+        for value in (float("nan"),float("inf"),-1,30.02):
+            item=failure_result(); item["network_diagnostics"]["total_elapsed_seconds"]=value; invalid.append(item)
+        for item in invalid:
+            self.assertEqual(_validated_result(item,1)["error_class"],"COLLECTOR_RESULT_INVALID")
+        self.assertEqual(_validated_result(failure_result("HTTP_TIMEOUT"),1)["error_class"],
+                         "COLLECTOR_RESULT_INVALID")
+
+    def test_cleanup_state_error_matrix(self):
+        invalid=[]
+        for state,error in (("COMPLETED","WORKER_CLEANUP_FAILED"),("FAILED",None),
+                            ("UNKNOWN",None),("FAILED","UNKNOWN")):
+            item=success_result(); item.update(cleanup_state=state,cleanup_error=error); invalid.append(item)
+        for item in invalid:
+            self.assertEqual(_validated_result(item,0)["error_class"],"COLLECTOR_RESULT_INVALID")
+        for error in ("WORKER_CLEANUP_FAILED","WORKER_CLEANUP_UNVERIFIED"):
+            item=success_result(); item.update(cleanup_state="FAILED",cleanup_error=error)
+            self.assertEqual(_validated_result(item,0)["error_class"],error)
 
     def test_lock_is_private_from_creation_and_rejects_symlink(self):
         with tempfile.TemporaryDirectory() as folder:
