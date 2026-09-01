@@ -99,7 +99,9 @@ def validate_state(value: Mapping[str, Any], *, now: datetime | None = None) -> 
     if not isinstance(value,Mapping): raise SchedulerStateError("SCHEDULER_STATE_INVALID")
     if set(value)==legacy_keys and value.get("schema")==LEGACY_SCHEMA:
         legacy=dict(value)
-        if legacy.get("scheduler_enabled") is not False or legacy.get("circuit_state")!="READY_DISABLED":
+        if (legacy.get("scheduler_enabled") is not False
+                or legacy.get("circuit_state")!="READY_DISABLED"
+                or legacy.get("run_in_progress") is not False):
             raise SchedulerStateError("SCHEDULER_STATE_INVALID")
         value={**legacy,"schema":SCHEMA,"not_before_at":None}
     keys=legacy_keys|{"not_before_at"}

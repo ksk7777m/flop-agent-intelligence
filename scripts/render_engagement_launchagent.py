@@ -10,6 +10,7 @@ import plistlib
 import re
 import stat
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -19,6 +20,7 @@ TEMPLATE=CODE_ROOT/"launchd/com.flop-agent-intelligence.engagement-scheduler.pli
 LAUNCHER=CODE_ROOT/"scripts/engagement_scheduler_launcher.py"
 SAFE_ENV={"PATH":"/usr/bin:/bin","LC_ALL":"C","TMPDIR":"/tmp"}
 Runner=Callable[[list[str],Path,int],subprocess.CompletedProcess[bytes]]
+COMMIT_STATES={"PRE_PUBLISH","PUBLISHED","DURABLE"}
 
 
 def _run(command: list[str],cwd: Path,timeout: int) -> subprocess.CompletedProcess[bytes]:
@@ -42,52 +44,112 @@ def _safe_directory(path: Path, *, private: bool = False) -> bool:
             and safe_mode and path.resolve()==path)
 
 
+def _result(*,success: bool,outcome: str,commit_state: str="PRE_PUBLISH",
+            error_class: str | None=None) -> dict[str,object]:
+    if commit_state not in COMMIT_STATES: raise ValueError("invalid plist commit state")
+    created=commit_state!="PRE_PUBLISH"; durable=commit_state=="DURABLE"
+    if not success and error_class is None: error_class=outcome
+    if success!=(durable and error_class is None):
+        raise ValueError("contradictory plist result")
+    return {"success":success,"outcome":outcome,"error_class":error_class,
+            "plist_created":created,"commit_state":commit_state,
+            "durability_confirmed":durable,"installed":False,"loaded":False,
+            "network_requests":0,"collector_invocations":0}
+
+
+def _valid_payload(payload: bytes,expected_revision: str,runtime_root: Path) -> bool:
+    try: value=plistlib.loads(payload)
+    except plistlib.InvalidFileException: return False
+    arguments=["/usr/bin/python3","-I",str(LAUNCHER),"--expected-revision",
+               expected_revision,"--runtime-root",str(runtime_root)]
+    keys={"Label","ProgramArguments","StartInterval","RunAtLoad",
+          "StandardOutPath","StandardErrorPath"}
+    if (not isinstance(value,dict) or set(value)!=keys
+            or value.get("Label")!="com.flop-agent-intelligence.engagement-scheduler"
+            or value.get("ProgramArguments")!=arguments
+            or value.get("StartInterval")!=3600 or value.get("RunAtLoad") is not False
+            or value.get("StandardOutPath")!="/dev/null"
+            or value.get("StandardErrorPath")!="/dev/null"):
+        return False
+    def strings(item: object):
+        if isinstance(item,str): yield item
+        elif isinstance(item,list):
+            for child in item: yield from strings(child)
+        elif isinstance(item,dict):
+            for key,child in item.items(): yield key; yield from strings(child)
+    return not any(re.search(r"<[^<>]+>",item) for item in strings(value))
+
+
 def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runner=_run,
            code_root: Path=CODE_ROOT) -> dict[str,object]:
-    base={"success":False,"outcome":"PLIST_RENDER_INVALID","plist_created":False,
-          "installed":False,"loaded":False,"network_requests":0,"collector_invocations":0}
     output=output.absolute(); runtime_root=runtime_root.absolute()
     active=(Path.home()/"Library/LaunchAgents").absolute()
-    if not re.fullmatch(r"[0-9a-f]{40}",expected_revision): return {**base,"outcome":"CODE_REVISION_MISMATCH"}
+    if not re.fullmatch(r"[0-9a-f]{40}",expected_revision):
+        return _result(success=False,outcome="CODE_REVISION_MISMATCH")
     if (output.parent==active or code_root!=CODE_ROOT or not _safe_directory(code_root)
             or not _safe_directory(runtime_root,private=True)
             or not _safe_file(TEMPLATE,code_root) or not _safe_file(LAUNCHER,code_root)
             or not _safe_directory(output.parent,private=True)):
-        return {**base,"outcome":"CODE_PATH_UNSAFE"}
-    if output.exists() or output.is_symlink(): return {**base,"outcome":"PLIST_ALREADY_EXISTS"}
+        return _result(success=False,outcome="CODE_PATH_UNSAFE")
+    if output.exists() or output.is_symlink():
+        return _result(success=False,outcome="PLIST_ALREADY_EXISTS")
+    candidate: Path | None=None; descriptor=-1; published=False
     try:
         revision=runner([str(GIT),"rev-parse","HEAD"],code_root,5)
         dirty=runner([str(GIT),"diff-index","--quiet","HEAD","--"],code_root,5)
         if (revision.returncode or revision.stderr or len(revision.stdout)>64
                 or revision.stdout.decode("ascii").strip()!=expected_revision):
-            return {**base,"outcome":"CODE_REVISION_MISMATCH"}
-        if dirty.returncode: return {**base,"outcome":"CODE_TREE_DIRTY"}
+            return _result(success=False,outcome="CODE_REVISION_MISMATCH")
+        if dirty.returncode: return _result(success=False,outcome="CODE_TREE_DIRTY")
         value=plistlib.loads(TEMPLATE.read_bytes())
         arguments=value.get("ProgramArguments")
         expected=["/usr/bin/python3","-I","<APPROVED_REPOSITORY_ROOT>/scripts/engagement_scheduler_launcher.py",
                   "--expected-revision","<APPROVED_GIT_REVISION>","--runtime-root","<PRIVATE_RUNTIME_ROOT>"]
-        if arguments!=expected: return base
+        if arguments!=expected: return _result(success=False,outcome="PLIST_RENDER_INVALID")
         value["ProgramArguments"]=["/usr/bin/python3","-I",str(LAUNCHER),"--expected-revision",
                                    expected_revision,"--runtime-root",str(runtime_root)]
         payload=plistlib.dumps(value,fmt=plistlib.FMT_XML,sort_keys=True)
-        if b"<APPROVED_" in payload or b"<PRIVATE_" in payload: return base
-        descriptor=os.open(output,os.O_CREAT|os.O_EXCL|os.O_WRONLY|getattr(os,"O_NOFOLLOW",0),0o600)
-        try:
-            written=0
-            while written<len(payload):
-                count=os.write(descriptor,payload[written:])
-                if count<=0: raise OSError
-                written+=count
-            os.fsync(descriptor)
-        finally: os.close(descriptor)
+        if not _valid_payload(payload,expected_revision,runtime_root):
+            return _result(success=False,outcome="PLIST_RENDER_INVALID")
+        descriptor,name=tempfile.mkstemp(prefix=f".{output.name}.candidate-",dir=output.parent)
+        candidate=Path(name)
+        metadata=os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode)!=0o600:
+            raise OSError("unsafe candidate")
+        written=0
+        while written<len(payload):
+            count=os.write(descriptor,payload[written:])
+            if count<=0: raise OSError("short candidate write")
+            written+=count
+        os.fsync(descriptor); os.close(descriptor); descriptor=-1
+        candidate_payload=candidate.read_bytes()
+        if candidate_payload!=payload or not _valid_payload(candidate_payload,expected_revision,runtime_root):
+            return _result(success=False,outcome="PLIST_CANDIDATE_INVALID")
+        try: os.link(candidate,output,follow_symlinks=False)
+        except FileExistsError:
+            return _result(success=False,outcome="PLIST_ALREADY_EXISTS")
+        published=True
+        candidate.unlink(); candidate=None
         directory=os.open(output.parent,os.O_RDONLY)
         try: os.fsync(directory)
         finally: os.close(directory)
+        try: visible=output.read_bytes()
+        except OSError:
+            return _result(success=False,outcome="PLIST_PUBLISHED_VALIDATION_FAILED",
+                           commit_state="DURABLE")
+        if visible!=payload or not _valid_payload(visible,expected_revision,runtime_root):
+            return _result(success=False,outcome="PLIST_PUBLISHED_VALIDATION_FAILED",
+                           commit_state="DURABLE")
+        return _result(success=True,outcome="PLIST_RENDERED",commit_state="DURABLE")
     except (OSError,UnicodeDecodeError,plistlib.InvalidFileException,subprocess.SubprocessError):
-        created=output.exists() and not output.is_symlink()
-        return {**base,"outcome":"PLIST_COMMITTED_NOT_DURABLE" if created else "PLIST_RENDER_FAILED",
-                "plist_created":created}
-    return {**base,"success":True,"outcome":"PLIST_RENDERED","plist_created":True}
+        return _result(success=False,outcome=("PLIST_COMMITTED_NOT_DURABLE" if published
+                                              else "PLIST_RENDER_FAILED"),
+                       commit_state="PUBLISHED" if published else "PRE_PUBLISH")
+    finally:
+        if descriptor>=0: os.close(descriptor)
+        if candidate is not None:
+            try: candidate.unlink(missing_ok=True)
+            except OSError: pass
 
 
 def main() -> None:

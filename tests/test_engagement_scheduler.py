@@ -77,6 +77,16 @@ class EngagementSchedulerTests(unittest.TestCase):
             self.assertEqual((loaded["schema"],loaded["not_before_at"]),(SCHEMA,None))
             self.assertEqual(state_path.read_bytes(),before)
 
+    def test_legacy_interrupted_run_is_rejected_without_rewrite(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state_path,_=self.paths(Path(folder)); legacy=disabled_state()
+            legacy.pop("not_before_at"); legacy.update(schema=LEGACY_SCHEMA,run_in_progress=True)
+            state_path.parent.mkdir(parents=True); state_path.write_text(json.dumps(legacy)+"\n")
+            os.chmod(state_path,0o600); before=state_path.read_bytes()
+            with self.assertRaisesRegex(SchedulerStateError,"SCHEDULER_STATE_INVALID"):
+                load_state(state_path,now=NOW)
+            self.assertEqual(state_path.read_bytes(),before)
+
     def test_enable_not_before_blocks_then_allows_one_synthetic_attempt(self):
         with tempfile.TemporaryDirectory() as folder:
             state_path,lock_path=self.paths(Path(folder)); write_state(state_path,disabled_state(),now=NOW)

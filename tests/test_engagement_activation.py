@@ -1,5 +1,6 @@
-import plistlib, subprocess, tempfile, unittest
+import os, plistlib, subprocess, tempfile, threading, unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import render_engagement_launchagent as renderer
 
@@ -25,7 +26,8 @@ class EngagementActivationTests(unittest.TestCase):
             root=Path(folder).resolve(); runtime=root/"runtime-root"; staged=root/"staged"
             runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"scheduler.plist"
             result=renderer.render(output,runtime,REVISION,runner=Runner())
-            self.assertEqual(result,{"success":True,"outcome":"PLIST_RENDERED","plist_created":True,
+            self.assertEqual(result,{"success":True,"outcome":"PLIST_RENDERED","error_class":None,
+                "plist_created":True,"commit_state":"DURABLE","durability_confirmed":True,
                 "installed":False,"loaded":False,"network_requests":0,"collector_invocations":0})
             self.assertEqual(output.stat().st_mode&0o777,0o600)
             value=plistlib.loads(output.read_bytes()); arguments=value["ProgramArguments"]
@@ -33,9 +35,99 @@ class EngagementActivationTests(unittest.TestCase):
                 "--expected-revision",REVISION,"--runtime-root",str(runtime)])
             self.assertEqual((value["StartInterval"],value["RunAtLoad"]),(3600,False))
             self.assertNotIn("KeepAlive",value); self.assertNotIn(b"APPROVED_",output.read_bytes())
-            before=output.read_bytes(); again=renderer.render(output,runtime,REVISION,runner=Runner())
+            before=output.read_bytes(); mode=output.stat().st_mode&0o777
+            again=renderer.render(output,runtime,REVISION,runner=Runner())
             self.assertEqual(again["outcome"],"PLIST_ALREADY_EXISTS")
             self.assertEqual(output.read_bytes(),before)
+            self.assertEqual(output.stat().st_mode&0o777,mode)
+
+    def test_prepublication_faults_never_expose_target_and_clean_owned_candidate(self):
+        stages=(
+            ("create",mock.patch.object(renderer.tempfile,"mkstemp",side_effect=OSError("bounded"))),
+            ("write",mock.patch.object(renderer.os,"write",side_effect=OSError("bounded"))),
+            ("candidate-fsync",mock.patch.object(renderer.os,"fsync",side_effect=OSError("bounded"))),
+            ("candidate-validation",mock.patch.object(renderer,"_valid_payload",side_effect=[True,False])),
+            ("publication",mock.patch.object(renderer.os,"link",side_effect=OSError("bounded"))),
+        )
+        for stage,patcher in stages:
+            with self.subTest(stage=stage),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+                runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"job.plist"
+                with patcher: result=renderer.render(output,runtime,REVISION,runner=Runner())
+                self.assertEqual((result["success"],result["plist_created"],result["commit_state"],
+                                  result["durability_confirmed"]),(False,False,"PRE_PUBLISH",False))
+                self.assertFalse(output.exists())
+                self.assertEqual(list(staged.glob(".job.plist.candidate-*")),[])
+
+    def test_directory_fsync_failure_preserves_complete_published_target(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"job.plist"
+            real_fsync=os.fsync; calls=[]
+            def fail_directory(descriptor):
+                calls.append(descriptor)
+                if len(calls)==2: raise OSError("bounded")
+                return real_fsync(descriptor)
+            with mock.patch.object(renderer.os,"fsync",side_effect=fail_directory):
+                result=renderer.render(output,runtime,REVISION,runner=Runner())
+            self.assertEqual((result["success"],result["outcome"],result["plist_created"],
+                              result["commit_state"],result["durability_confirmed"]),
+                             (False,"PLIST_COMMITTED_NOT_DURABLE",True,"PUBLISHED",False))
+            self.assertEqual(plistlib.loads(output.read_bytes())["Label"],
+                             "com.flop-agent-intelligence.engagement-scheduler")
+
+    def test_partial_candidate_write_never_exposes_final_target(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"job.plist"
+            real_write=os.write; calls=[]
+            def partial_then_fail(descriptor,payload):
+                calls.append(len(payload))
+                if len(calls)==1: return real_write(descriptor,payload[:17])
+                raise OSError("bounded")
+            with mock.patch.object(renderer.os,"write",side_effect=partial_then_fail):
+                result=renderer.render(output,runtime,REVISION,runner=Runner())
+            self.assertGreaterEqual(len(calls),2)
+            self.assertEqual((result["plist_created"],result["commit_state"]),(False,"PRE_PUBLISH"))
+            self.assertFalse(output.exists())
+            self.assertEqual(list(staged.glob(".job.plist.candidate-*")),[])
+
+    def test_postpublish_validation_failure_is_durable_and_preserves_target(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"job.plist"
+            with mock.patch.object(renderer,"_valid_payload",side_effect=[True,True,False]):
+                result=renderer.render(output,runtime,REVISION,runner=Runner())
+            self.assertEqual((result["success"],result["outcome"],result["plist_created"],
+                              result["commit_state"],result["durability_confirmed"]),
+                             (False,"PLIST_PUBLISHED_VALIDATION_FAILED",True,"DURABLE",True))
+            self.assertTrue(output.exists())
+
+    def test_concurrent_render_publishes_once_without_candidate_cross_cleanup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"job.plist"
+            barrier=threading.Barrier(2); results=[]
+            def invoke(): barrier.wait(); results.append(renderer.render(output,runtime,REVISION,runner=Runner()))
+            threads=[threading.Thread(target=invoke) for _ in range(2)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join()
+            self.assertEqual(sum(result["success"] for result in results),1)
+            self.assertEqual(sorted(result["outcome"] for result in results),
+                             ["PLIST_ALREADY_EXISTS","PLIST_RENDERED"])
+            self.assertEqual(list(staged.glob(".job.plist.candidate-*")),[])
+
+    def test_result_contract_rejects_contradictions(self):
+        for arguments in ({"success":True,"outcome":"X"},
+                          {"success":True,"outcome":"X","commit_state":"PUBLISHED"},
+                          {"success":True,"outcome":"X","commit_state":"DURABLE",
+                           "error_class":"X"}):
+            with self.subTest(arguments=arguments),self.assertRaises(ValueError):
+                renderer._result(**arguments)
+
+    def test_production_plist_remains_absent(self):
+        production=Path.home()/"Library/LaunchAgents/com.flop-agent-intelligence.engagement-scheduler.plist"
+        self.assertFalse(production.exists())
 
     def test_renderer_revision_tree_and_path_checks_fail_closed(self):
         with tempfile.TemporaryDirectory() as folder:
