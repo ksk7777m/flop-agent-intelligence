@@ -14,7 +14,8 @@ from pathlib import Path
 
 from flop_agent.engagement_history import validate as validate_engagement_sample
 from flop_agent.engagement_scheduler import (
-    FAILURE_CLASSES, approve_reset, dry_run, evaluate, load_state, provision_disabled, run_once,
+    FAILURE_CLASSES, approve_reset, disable_scheduled, dry_run, enable_scheduled, evaluate,
+    load_state, provision_disabled, run_once,
 )
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
@@ -166,7 +167,8 @@ def _collector(root: Path) -> dict:
 
 def main() -> None:
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command",choices=("status","dry-run","run-once","approve-reset","provision-disabled"))
+    parser.add_argument("command",choices=("status","dry-run","run-once","approve-reset",
+                                           "provision-disabled","enable-scheduled","disable-scheduled"))
     parser.add_argument("--root",type=Path,default=Path(__file__).resolve().parents[1])
     args=parser.parse_args()
     root=(Path(os.path.abspath(args.root)) if args.command == "provision-disabled" else args.root.resolve())
@@ -178,6 +180,8 @@ def main() -> None:
         except Exception as error: result={"success":False,"outcome":getattr(error,"code","SCHEDULER_STATE_INVALID")}
     elif args.command == "dry-run": result=dry_run(state_path,lock_path)
     elif args.command == "approve-reset": result=approve_reset(state_path,lock_path)
+    elif args.command == "enable-scheduled": result=enable_scheduled(state_path,lock_path)
+    elif args.command == "disable-scheduled": result=disable_scheduled(state_path,lock_path)
     else: result=run_once(state_path,lock_path,lambda:_collector(root))
     print(json.dumps(result,indent=2))
     if result.get("success") is False and args.command not in {"status","dry-run"}: raise SystemExit(1)

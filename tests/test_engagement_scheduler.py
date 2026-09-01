@@ -6,9 +6,10 @@ from unittest import mock
 
 from flop_agent.engagement import build_sample
 from flop_agent.engagement_scheduler import (
-    DAILY_WINDOW, FAILURE_CLASSES, MAX_REQUESTS_PER_DAY, MINIMUM_INTERVAL, NORMAL_INTERVAL,
-    SchedulerStateError, approve_reset, disabled_state, dry_run, evaluate, load_state,
-    _provision_result, provision_disabled, run_once, scheduler_lock, validate_state, write_state,
+    DAILY_WINDOW, FAILURE_CLASSES, LEGACY_SCHEMA, MAX_REQUESTS_PER_DAY, MINIMUM_INTERVAL,
+    NORMAL_INTERVAL, SCHEMA, SchedulerStateError, approve_reset, disable_scheduled,
+    disabled_state, dry_run, enable_scheduled, evaluate, load_state, _provision_result,
+    provision_disabled, run_once, scheduler_lock, validate_state, write_state,
 )
 from scripts.engagement_scheduler import (CODE_ROOT, REVIEWED_COLLECTOR, REVIEWED_PYTHON,
                                           _collector, _validated_result, main)
@@ -20,7 +21,8 @@ def stamp(value): return value.isoformat().replace("+00:00","Z")
 
 
 def ready_state():
-    state=disabled_state(); state.update(scheduler_enabled=True,circuit_state="READY")
+    state=disabled_state(); state.update(scheduler_enabled=True,circuit_state="READY",
+                                         not_before_at=stamp(NOW))
     return state
 
 
@@ -64,6 +66,101 @@ class EngagementSchedulerTests(unittest.TestCase):
             calls=[]; result=run_once(state_path,lock_path,lambda:calls.append(1),now=NOW)
             self.assertEqual((result["outcome"],result["collector_invocations"]),("SCHEDULER_DISABLED",0))
             self.assertEqual(calls,[])
+
+    def test_legacy_disabled_state_migrates_in_memory_without_rewrite(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state_path,_=self.paths(Path(folder)); legacy=disabled_state()
+            legacy.pop("not_before_at"); legacy["schema"]=LEGACY_SCHEMA
+            state_path.parent.mkdir(parents=True); state_path.write_text(json.dumps(legacy)+"\n")
+            os.chmod(state_path,0o600); before=state_path.read_bytes()
+            loaded=load_state(state_path,now=NOW)
+            self.assertEqual((loaded["schema"],loaded["not_before_at"]),(SCHEMA,None))
+            self.assertEqual(state_path.read_bytes(),before)
+
+    def test_enable_not_before_blocks_then_allows_one_synthetic_attempt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state_path,lock_path=self.paths(Path(folder)); write_state(state_path,disabled_state(),now=NOW)
+            enabled=enable_scheduled(state_path,lock_path,now=NOW)
+            self.assertEqual((enabled["success"],enabled["outcome"],enabled["commit_state"]),
+                             (True,"SCHEDULER_ENABLE_SCHEDULED","DURABLE"))
+            self.assertEqual(enabled["not_before_at"],stamp(NOW+NORMAL_INTERVAL))
+            self.assertEqual((enabled["network_requests"],enabled["collector_invocations"]),(0,0))
+            before=state_path.read_bytes(); calls=[]
+            blocked=dry_run(state_path,lock_path,now=NOW+timedelta(minutes=1))
+            self.assertEqual((blocked["allowed"],blocked["outcome"]),(False,"SCHEDULER_NOT_BEFORE"))
+            run=run_once(state_path,lock_path,lambda:calls.append(1),now=NOW+timedelta(minutes=59))
+            self.assertEqual((run["outcome"],run["collector_invocations"],calls),
+                             ("SCHEDULER_NOT_BEFORE",0,[]))
+            self.assertEqual(state_path.read_bytes(),before)
+            self.assertTrue(dry_run(state_path,lock_path,now=NOW+NORMAL_INTERVAL)["allowed"])
+            run=run_once(state_path,lock_path,
+                         lambda:(calls.append(1) or {"success":True,"error_class":None}),
+                         now=NOW+NORMAL_INTERVAL)
+            self.assertEqual((run["outcome"],run["collector_invocations"],calls),
+                             ("SCHEDULER_COLLECTION_SUCCEEDED",1,[1]))
+            self.assertEqual(load_state(state_path,now=NOW+NORMAL_INTERVAL)["not_before_at"],
+                             stamp(NOW+NORMAL_INTERVAL))
+
+    def test_enable_rejects_invalid_states_and_is_concurrent_once(self):
+        invalid=[]
+        for state in (ready_state(),{**disabled_state(),"run_in_progress":True},
+                      {**disabled_state(),"circuit_state":"CIRCUIT_OPEN",
+                       "consecutive_failures":2,"last_error_class":"HTTP_OPEN_FAILED"}):
+            invalid.append(state)
+        for state in invalid:
+            with self.subTest(state=state),tempfile.TemporaryDirectory() as folder:
+                state_path,lock_path=self.paths(Path(folder)); write_state(state_path,state,now=NOW)
+                result=enable_scheduled(state_path,lock_path,now=NOW)
+                self.assertFalse(result["success"]); self.assertEqual(result["collector_invocations"],0)
+        with tempfile.TemporaryDirectory() as folder:
+            state_path,lock_path=self.paths(Path(folder)); write_state(state_path,disabled_state(),now=NOW)
+            barrier=threading.Barrier(2); results=[]
+            def enable(): barrier.wait(); results.append(enable_scheduled(state_path,lock_path,now=NOW))
+            threads=[threading.Thread(target=enable) for _ in range(2)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join()
+            self.assertEqual(sum(item["success"] for item in results),1)
+            self.assertEqual(load_state(state_path,now=NOW)["not_before_at"],stamp(NOW+NORMAL_INTERVAL))
+
+    def test_disable_preserves_forensics_and_reenable_sets_fresh_boundary(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state_path,lock_path=self.paths(Path(folder)); state=ready_state()
+            attempt=stamp(NOW-timedelta(hours=1)); state.update(
+                last_error_class="HTTP_OPEN_FAILED",
+                last_attempt_at=attempt,attempts_24h=[attempt])
+            write_state(state_path,state,now=NOW)
+            disabled=disable_scheduled(state_path,lock_path,now=NOW)
+            self.assertTrue(disabled["success"]); saved=load_state(state_path,now=NOW)
+            self.assertEqual((saved["last_attempt_at"],saved["attempts_24h"],saved["last_error_class"]),
+                             (attempt,[attempt],"HTTP_OPEN_FAILED"))
+            self.assertFalse(saved["scheduler_enabled"])
+            reenabled=enable_scheduled(state_path,lock_path,now=NOW+timedelta(minutes=5))
+            self.assertTrue(reenabled["success"])
+            self.assertEqual(reenabled["not_before_at"],stamp(NOW+timedelta(minutes=65)))
+
+    def test_malformed_not_before_fails_closed(self):
+        for value in ("not-a-time","2026-09-01T13:00:00",stamp(NOW+timedelta(days=2)),None):
+            with self.subTest(value=value):
+                state=ready_state(); state["not_before_at"]=value
+                with self.assertRaises(SchedulerStateError): validate_state(state,now=NOW)
+        with tempfile.TemporaryDirectory() as folder:
+            state_path,lock_path=self.paths(Path(folder)); write_state(state_path,disabled_state(),now=NOW)
+            self.assertEqual(enable_scheduled(state_path,lock_path,now=NOW.replace(tzinfo=None))["outcome"],
+                             "SCHEDULER_CLOCK_INVALID")
+
+    def test_enable_directory_fsync_failure_reports_visible_commit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state_path,lock_path=self.paths(Path(folder)); write_state(state_path,disabled_state(),now=NOW)
+            real_fsync=os.fsync; calls=[]
+            def fail_directory(descriptor):
+                calls.append(descriptor)
+                if len(calls)==2: raise OSError("bounded")
+                return real_fsync(descriptor)
+            with mock.patch("flop_agent.engagement_scheduler.os.fsync",side_effect=fail_directory):
+                result=enable_scheduled(state_path,lock_path,now=NOW)
+            self.assertEqual((result["success"],result["commit_state"],result["outcome"]),
+                             (False,"PUBLISHED","SCHEDULER_STATE_COMMITTED_NOT_DURABLE"))
+            self.assertTrue(load_state(state_path,now=NOW)["scheduler_enabled"])
 
     def test_dry_run_never_invokes_collector_and_reports_status(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -590,6 +687,22 @@ class EngagementSchedulerTests(unittest.TestCase):
                              ("READY_DISABLED",False))
             self.assertEqual(outputs[2]["outcome"],"SCHEDULER_DISABLED")
             self.assertEqual(outputs[2]["requests_24h"],0)
+
+    def test_enable_disable_cli_are_offline_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); state_path,_=self.paths(root); write_state(state_path,disabled_state())
+            with mock.patch("scripts.engagement_scheduler._collector",side_effect=AssertionError), \
+                 mock.patch("scripts.engagement_scheduler.subprocess.run",side_effect=AssertionError):
+                outputs=[]
+                for command in ("enable-scheduled","disable-scheduled"):
+                    stream=io.StringIO()
+                    with mock.patch.object(sys,"argv",["engagement_scheduler.py",command,"--root",folder]), \
+                         redirect_stdout(stream): main()
+                    outputs.append(json.loads(stream.getvalue()))
+            self.assertEqual([item["outcome"] for item in outputs],
+                             ["SCHEDULER_ENABLE_SCHEDULED","SCHEDULER_DISABLED_OFFLINE"])
+            self.assertTrue(all(item["network_requests"]==item["collector_invocations"]==0
+                                for item in outputs))
 
 
 if __name__ == "__main__": unittest.main()

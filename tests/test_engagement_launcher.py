@@ -260,6 +260,9 @@ class EngagementLauncherTests(unittest.TestCase):
               "circuit_state":"CIRCUIT_OPEN"},"OK_SCHEDULER_INVOKED"),
             ({"success":False,"outcome":"SCHEDULER_MIN_INTERVAL","collector_invocations":0,
               "circuit_state":"READY"},"OK_SCHEDULER_INVOKED"),
+            ({"success":False,"outcome":"SCHEDULER_NOT_BEFORE","collector_invocations":0,
+              "circuit_state":"READY","not_before_at":"2026-09-01T13:00:00Z"},
+             "OK_SCHEDULER_INVOKED"),
         ]
         invalid=[]
         for value in (valid[0][0],valid[1][0],valid[3][0]):

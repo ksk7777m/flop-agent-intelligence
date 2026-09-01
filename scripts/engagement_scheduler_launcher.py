@@ -33,6 +33,7 @@ SAFE_ENV = {"PATH":"/usr/bin:/bin", "LC_ALL":"C", "TMPDIR":"/tmp",
             "PYTHONDONTWRITEBYTECODE":"1"}
 SCHEDULER_OUTCOMES = {
     "SCHEDULER_DISABLED", "SCHEDULER_READY", "SCHEDULER_MIN_INTERVAL",
+    "SCHEDULER_NOT_BEFORE",
     "SCHEDULER_DAILY_BUDGET_EXCEEDED", "SCHEDULER_CIRCUIT_OPEN",
     "SCHEDULER_RUN_ALREADY_ACTIVE", "SCHEDULER_COLLECTION_SUCCEEDED",
     "SCHEDULER_COLLECTION_FAILED", "SCHEDULER_RECOVERED_INTERRUPTED_RUN",
@@ -92,13 +93,14 @@ def _validated_scheduler_result(value: object, returncode: int) -> dict[str, Any
         return None
     allowed_keys={"success","allowed","outcome","overlap_active","circuit_state",
         "scheduler_enabled","last_attempt_at","last_success_at","consecutive_failures",
+        "not_before_at",
         "last_error_class","normal_interval_minutes","minimum_interval_minutes",
         "next_eligible_at","requests_24h","collector_invocations","error_class"}
     if not set(value)<=allowed_keys or returncode!=(0 if value["success"] else 1): return None
     outcome=value.get("outcome"); invocations=value.get("collector_invocations")
     circuit=value.get("circuit_state")
     if type(invocations) is not int or invocations not in {0,1}: return None
-    precollector={"SCHEDULER_DISABLED","SCHEDULER_MIN_INTERVAL",
+    precollector={"SCHEDULER_DISABLED","SCHEDULER_NOT_BEFORE","SCHEDULER_MIN_INTERVAL",
         "SCHEDULER_DAILY_BUDGET_EXCEEDED","SCHEDULER_RUN_ALREADY_ACTIVE",
         "SCHEDULER_STATE_MISSING","SCHEDULER_STATE_INVALID","SCHEDULER_STATE_PATH_UNSAFE",
         "SCHEDULER_STATE_PERMISSIONS","SCHEDULER_STATE_LOCK_FAILED"}

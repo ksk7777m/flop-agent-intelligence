@@ -12,7 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Mapping, Any
 
-SCHEMA = "engagement-scheduler-v0.1"
+LEGACY_SCHEMA = "engagement-scheduler-v0.1"
+SCHEMA = "engagement-scheduler-v0.2"
 NORMAL_INTERVAL = timedelta(minutes=60)
 MINIMUM_INTERVAL = timedelta(minutes=30)
 DAILY_WINDOW = timedelta(hours=24)
@@ -30,6 +31,7 @@ FAILURE_CLASSES = {
 }
 OUTCOMES = {
     "SCHEDULER_DISABLED", "SCHEDULER_READY", "SCHEDULER_MIN_INTERVAL",
+    "SCHEDULER_NOT_BEFORE",
     "SCHEDULER_DAILY_BUDGET_EXCEEDED", "SCHEDULER_RUN_ALREADY_ACTIVE",
     "SCHEDULER_CIRCUIT_OPEN", "SCHEDULER_STATE_MISSING", "SCHEDULER_STATE_INVALID",
     "SCHEDULER_STATE_PERMISSIONS", "SCHEDULER_COLLECTION_SUCCEEDED",
@@ -69,21 +71,39 @@ def _parse_stamp(value: object, now: datetime) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_not_before(value: object, now: datetime) -> datetime:
+    if not isinstance(value,str) or len(value)!=20 or not value.endswith("Z"):
+        raise SchedulerStateError("SCHEDULER_STATE_INVALID")
+    try: parsed=datetime.fromisoformat(value.replace("Z","+00:00"))
+    except ValueError: raise SchedulerStateError("SCHEDULER_STATE_INVALID") from None
+    if (parsed.tzinfo is None or parsed.microsecond or parsed > now+DAILY_WINDOW):
+        raise SchedulerStateError("SCHEDULER_STATE_INVALID")
+    return parsed.astimezone(timezone.utc)
+
+
 def disabled_state() -> dict[str, Any]:
     return {
         "schema": SCHEMA, "scheduler_enabled": False, "circuit_state": "READY_DISABLED",
         "normal_interval_minutes": 60,
         "last_attempt_at": None, "last_success_at": None, "consecutive_failures": 0,
         "last_error_class": None, "attempts_24h": [], "run_in_progress": False,
+        "not_before_at": None,
     }
 
 
 def validate_state(value: Mapping[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     now = (now or utc_now()).astimezone(timezone.utc)
-    keys = {"schema", "scheduler_enabled", "circuit_state", "last_attempt_at",
+    legacy_keys = {"schema", "scheduler_enabled", "circuit_state", "last_attempt_at",
             "last_success_at", "consecutive_failures", "last_error_class",
             "attempts_24h", "run_in_progress", "normal_interval_minutes"}
-    if (not isinstance(value, Mapping) or set(value) != keys or value.get("schema") != SCHEMA
+    if not isinstance(value,Mapping): raise SchedulerStateError("SCHEDULER_STATE_INVALID")
+    if set(value)==legacy_keys and value.get("schema")==LEGACY_SCHEMA:
+        legacy=dict(value)
+        if legacy.get("scheduler_enabled") is not False or legacy.get("circuit_state")!="READY_DISABLED":
+            raise SchedulerStateError("SCHEDULER_STATE_INVALID")
+        value={**legacy,"schema":SCHEMA,"not_before_at":None}
+    keys=legacy_keys|{"not_before_at"}
+    if (set(value) != keys or value.get("schema") != SCHEMA
             or type(value.get("scheduler_enabled")) is not bool
             or value.get("circuit_state") not in STATES
             or type(value.get("run_in_progress")) is not bool
@@ -98,6 +118,8 @@ def validate_state(value: Mapping[str, Any], *, now: datetime | None = None) -> 
     parsed = {}
     for field in ("last_attempt_at", "last_success_at"):
         parsed[field] = None if value[field] is None else _parse_stamp(value[field], now)
+    not_before=(None if value["not_before_at"] is None
+                else _parse_not_before(value["not_before_at"],now))
     attempts = [_parse_stamp(item, now) for item in value["attempts_24h"]]
     if attempts != sorted(attempts) or len(set(attempts)) != len(attempts):
         raise SchedulerStateError("SCHEDULER_STATE_INVALID")
@@ -106,7 +128,7 @@ def validate_state(value: Mapping[str, Any], *, now: datetime | None = None) -> 
     failures = value["consecutive_failures"]
     error = value["last_error_class"]
     if ((state == "READY_DISABLED" and (enabled or failures != 0))
-            or (state == "READY" and (not enabled or failures != 0 or error is not None))
+            or (state == "READY" and (not enabled or failures != 0))
             or (state == "DEGRADED" and (not enabled or failures != 1 or error is None))
             or (state == "CIRCUIT_OPEN" and (enabled or failures != FAILURE_THRESHOLD or error is None))
             or (parsed["last_success_at"] is not None and parsed["last_attempt_at"] is None)
@@ -114,7 +136,8 @@ def validate_state(value: Mapping[str, Any], *, now: datetime | None = None) -> 
                 and parsed["last_success_at"] > parsed["last_attempt_at"])
             or (parsed["last_attempt_at"] is not None
                 and parsed["last_attempt_at"] > now - DAILY_WINDOW and not attempts)
-            or (attempts and parsed["last_attempt_at"] != attempts[-1])):
+            or (attempts and parsed["last_attempt_at"] != attempts[-1])
+            or (enabled and not_before is None)):
         raise SchedulerStateError("SCHEDULER_STATE_INVALID")
     return dict(value)
 
@@ -325,9 +348,12 @@ def evaluate(state: Mapping[str, Any], *, now: datetime | None = None) -> dict[s
     configured_interval = timedelta(minutes=max(30,state["normal_interval_minutes"]))
     next_spacing = now if last_attempt is None else last_attempt + configured_interval
     next_budget = now if len(attempts) < MAX_REQUESTS_PER_DAY else attempts[0] + DAILY_WINDOW
-    next_eligible = max(now, next_spacing, next_budget)
+    not_before=(now if state["not_before_at"] is None
+                else _parse_not_before(state["not_before_at"],now))
+    next_eligible = max(now, not_before, next_spacing, next_budget)
     if state["circuit_state"] == "CIRCUIT_OPEN": outcome = "SCHEDULER_CIRCUIT_OPEN"
     elif not state["scheduler_enabled"]: outcome = "SCHEDULER_DISABLED"
+    elif now < not_before: outcome = "SCHEDULER_NOT_BEFORE"
     elif now < next_spacing: outcome = "SCHEDULER_MIN_INTERVAL"
     elif len(attempts) >= MAX_REQUESTS_PER_DAY: outcome = "SCHEDULER_DAILY_BUDGET_EXCEEDED"
     else: outcome = "SCHEDULER_READY"
@@ -335,6 +361,7 @@ def evaluate(state: Mapping[str, Any], *, now: datetime | None = None) -> dict[s
             "overlap_active":False,
             "circuit_state":state["circuit_state"], "scheduler_enabled":state["scheduler_enabled"],
             "last_attempt_at":state["last_attempt_at"], "last_success_at":state["last_success_at"],
+            "not_before_at":state["not_before_at"],
             "consecutive_failures":state["consecutive_failures"],
             "last_error_class":state["last_error_class"],
             "normal_interval_minutes":state["normal_interval_minutes"],
@@ -356,6 +383,79 @@ def _record_failure(state: dict[str, Any], error_class: str) -> None:
     state.update(consecutive_failures=failures, last_error_class=error_class,
                  run_in_progress=False, scheduler_enabled=failures < FAILURE_THRESHOLD,
                  circuit_state="DEGRADED" if failures < FAILURE_THRESHOLD else "CIRCUIT_OPEN")
+
+
+def _transition_result(*,success: bool,outcome: str,commit_state: str="PRE_COMMIT",
+                       state: Mapping[str,Any] | None=None) -> dict[str,Any]:
+    return {"success":success,"outcome":outcome,"commit_state":commit_state,
+            "durability_confirmed":commit_state=="DURABLE",
+            "scheduler_enabled":None if state is None else state["scheduler_enabled"],
+            "circuit_state":None if state is None else state["circuit_state"],
+            "not_before_at":None if state is None else state["not_before_at"],
+            "collector_invocations":0,"network_requests":0}
+
+
+def _transition_now(value: datetime | None) -> datetime:
+    value=value or utc_now()
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise SchedulerStateError("SCHEDULER_CLOCK_INVALID")
+    return value.astimezone(timezone.utc)
+
+
+def _persist_transition(state_path: Path, desired: Mapping[str,Any], *, now: datetime,
+                        success_outcome: str) -> dict[str,Any]:
+    try:
+        write_state(state_path,desired,now=now)
+    except OSError:
+        try: visible=load_state(state_path,now=now)
+        except SchedulerStateError:
+            return _transition_result(success=False,outcome="SCHEDULER_STATE_WRITE_FAILED")
+        if visible==dict(desired):
+            return _transition_result(success=False,outcome="SCHEDULER_STATE_COMMITTED_NOT_DURABLE",
+                                      commit_state="PUBLISHED",state=visible)
+        return _transition_result(success=False,outcome="SCHEDULER_STATE_WRITE_FAILED",state=visible)
+    try: visible=load_state(state_path,now=now)
+    except SchedulerStateError:
+        return _transition_result(success=False,outcome="SCHEDULER_STATE_PUBLISHED_VALIDATION_FAILED",
+                                  commit_state="DURABLE")
+    if visible!=dict(desired):
+        return _transition_result(success=False,outcome="SCHEDULER_STATE_PUBLISHED_VALIDATION_FAILED",
+                                  commit_state="DURABLE",state=visible)
+    return _transition_result(success=True,outcome=success_outcome,commit_state="DURABLE",state=visible)
+
+
+def enable_scheduled(state_path: Path,lock_path: Path,*,now: datetime | None=None) -> dict[str,Any]:
+    try:
+        now=_transition_now(now)
+        with scheduler_lock(lock_path,blocking=True):
+            state=load_state(state_path,now=now)
+            if (state["circuit_state"]!="READY_DISABLED" or state["scheduler_enabled"]
+                    or state["run_in_progress"] or state["consecutive_failures"]!=0):
+                return _transition_result(success=False,outcome="SCHEDULER_ENABLE_REJECTED",state=state)
+            desired=dict(state)
+            desired.update(schema=SCHEMA,scheduler_enabled=True,circuit_state="READY",
+                           not_before_at=_stamp(now+NORMAL_INTERVAL))
+            validate_state(desired,now=now)
+            return _persist_transition(state_path,desired,now=now,
+                                       success_outcome="SCHEDULER_ENABLE_SCHEDULED")
+    except SchedulerStateError as error:
+        return _transition_result(success=False,outcome=error.code)
+
+
+def disable_scheduled(state_path: Path,lock_path: Path,*,now: datetime | None=None) -> dict[str,Any]:
+    try:
+        now=_transition_now(now)
+        with scheduler_lock(lock_path,blocking=True):
+            state=load_state(state_path,now=now)
+            if (state["circuit_state"]!="READY"
+                    or not state["scheduler_enabled"] or state["run_in_progress"]):
+                return _transition_result(success=False,outcome="SCHEDULER_DISABLE_REJECTED",state=state)
+            desired=dict(state); desired.update(scheduler_enabled=False,circuit_state="READY_DISABLED")
+            validate_state(desired,now=now)
+            return _persist_transition(state_path,desired,now=now,
+                                       success_outcome="SCHEDULER_DISABLED_OFFLINE")
+    except SchedulerStateError as error:
+        return _transition_result(success=False,outcome=error.code)
 
 
 def run_once(state_path: Path, lock_path: Path, collector: Callable[[], Mapping[str, Any]],
