@@ -26,6 +26,8 @@ MAX_TOTAL_COLLECTION_DEADLINE_SECONDS = 30.0
 TERMINATION_GRACE_SECONDS = 0.1
 MAX_IPC_BYTES = 256 * 1024
 MIN_COMMIT_BUDGET_SECONDS = 0.5
+TIMING_EPSILON_SECONDS = 0.01
+MAX_NETWORK_ELAPSED_SECONDS = MAX_TOTAL_COLLECTION_DEADLINE_SECONDS + TIMING_EPSILON_SECONDS
 WORKER_ERRORS = {"HTTP_TIMEOUT", "HTTP_OPEN_TIMEOUT", "HTTP_BODY_TIMEOUT",
                  "HTTP_OPEN_FAILED", "HTTP_BODY_FAILED", "VALIDATION_FAILED",
                  "RESPONSE_TOO_LARGE"}
@@ -104,15 +106,66 @@ def _validate_network_diagnostics(value: dict) -> dict:
             "body_elapsed_seconds","http_status","response_bytes","configured_socket_timeout"}
     if not isinstance(value, dict) or set(value) != keys or value["failure_stage"] not in {None,"HTTP_OPEN","HTTP_BODY"}:
         raise ValueError("invalid network diagnostics")
-    for name in ("total_elapsed_seconds","open_elapsed_seconds","body_elapsed_seconds","configured_socket_timeout"):
+    for name in ("total_elapsed_seconds","open_elapsed_seconds","body_elapsed_seconds"):
         number=value[name]
-        if number is not None and (type(number) not in (int,float) or not math.isfinite(number) or not 0 <= number <= 60):
+        if number is not None and (type(number) not in (int,float) or not math.isfinite(number)
+                                   or not 0 <= number <= MAX_NETWORK_ELAPSED_SECONDS):
             raise ValueError("invalid network diagnostics")
+    socket_timeout=value["configured_socket_timeout"]
+    if (type(socket_timeout) not in (int,float) or not math.isfinite(socket_timeout)
+            or not 0 < socket_timeout <= MAX_TOTAL_COLLECTION_DEADLINE_SECONDS):
+        raise ValueError("invalid network diagnostics")
     status=value["http_status"]
     if status is not None and (type(status) is not int or not 100 <= status <= 599): raise ValueError("invalid network diagnostics")
     size=value["response_bytes"]
     if size is not None and (type(size) is not int or not 0 <= size <= MAX_RESPONSE_BYTES): raise ValueError("invalid network diagnostics")
     return dict(value)
+
+
+def _validate_worker_diagnostics(value: dict, *, ok: bool, error_class: str | None = None) -> dict:
+    diagnostics = _validate_network_diagnostics(value)
+    stage = diagnostics["failure_stage"]
+    total = diagnostics["total_elapsed_seconds"]
+    opened = diagnostics["open_elapsed_seconds"]
+    body = diagnostics["body_elapsed_seconds"]
+    status = diagnostics["http_status"]
+    size = diagnostics["response_bytes"]
+    complete = (stage is None and total is not None and opened is not None and body is not None
+                and status is not None and size is not None)
+    timing_consistent = (total is not None and opened is not None
+                         and total + TIMING_EPSILON_SECONDS >= opened
+                         and (body is None or total + TIMING_EPSILON_SECONDS >= opened + body))
+    if ok:
+        if error_class is not None or not complete or not 200 <= status < 300 or not timing_consistent:
+            raise ValueError("invalid network diagnostics")
+        return diagnostics
+    if error_class in {"HTTP_OPEN_TIMEOUT", "HTTP_OPEN_FAILED"}:
+        if (stage != "HTTP_OPEN" or opened is None or total is None or body is not None
+                or size is not None or not timing_consistent
+                or (error_class == "HTTP_OPEN_TIMEOUT" and status is not None)):
+            raise ValueError("invalid network diagnostics")
+    elif error_class in {"HTTP_BODY_TIMEOUT", "HTTP_BODY_FAILED"}:
+        if (stage != "HTTP_BODY" or opened is None or body is None or total is None
+                or status is None or size is not None or not timing_consistent):
+            raise ValueError("invalid network diagnostics")
+    elif error_class == "HTTP_TIMEOUT":
+        if (stage is not None or any(item is not None for item in (total, opened, body, status, size))):
+            raise ValueError("invalid network diagnostics")
+    elif error_class == "VALIDATION_FAILED":
+        empty = stage is None and all(item is None for item in (total, opened, body, status, size))
+        if not empty and (not complete or not 200 <= status < 300 or not timing_consistent):
+            raise ValueError("invalid network diagnostics")
+    elif error_class == "RESPONSE_TOO_LARGE":
+        header_rejection = (stage is None and opened is not None and body is None and total is None
+                            and status is not None and size is None)
+        completed_oversize_read = (stage is None and opened is not None and body is not None
+                                   and total is not None and status is not None and size is None
+                                   and timing_consistent)
+        if not header_rejection and not completed_oversize_read:
+            raise ValueError("invalid network diagnostics")
+    else:
+        raise ValueError("invalid network diagnostics")
+    return diagnostics
 
 
 def fetch(*, timeout: float = 20.0, opener=None, diagnostics: dict | None = None) -> tuple[bytes, int, object]:
@@ -304,7 +357,9 @@ def _merge_cleanup_failure(result: dict, cleanup_error: str = "WORKER_CLEANUP_FA
 
 
 def _precommit_failure_result(error: CollectionError, total_deadline: float) -> dict:
-    diagnostics = _validate_network_diagnostics(error.diagnostics) if error.diagnostics is not None else None
+    diagnostics = (_validate_worker_diagnostics(error.diagnostics, ok=False, error_class=error.code)
+                   if error.diagnostics is not None and error.code in WORKER_ERRORS
+                   else _validate_network_diagnostics(error.diagnostics) if error.diagnostics is not None else None)
     if diagnostics is not None: diagnostics["configured_total_deadline"] = total_deadline
     return {"success":False, "commit_state":"PRE_COMMIT",
             "durability_warning":None, "preview_state":"NOT_ATTEMPTED",
@@ -470,7 +525,8 @@ def _decode_worker_result(payload: bytes, exit_code: int | None) -> dict:
     else:
         if set(envelope) != {"ok", "error_class", "network_diagnostics"} or envelope.get("error_class") not in WORKER_ERRORS:
             raise CollectionError(None, code="WORKER_PROTOCOL_ERROR")
-    try: envelope["network_diagnostics"] = _validate_network_diagnostics(envelope["network_diagnostics"])
+    try: envelope["network_diagnostics"] = _validate_worker_diagnostics(
+        envelope["network_diagnostics"], ok=envelope["ok"], error_class=envelope.get("error_class"))
     except ValueError: raise CollectionError(None, code="WORKER_PROTOCOL_ERROR") from None
     return envelope
 

@@ -23,10 +23,22 @@ def _worker_sample(when="2026-08-29T00:00:00Z"):
                         source_sha256="0"*64, collector_version="test")
 
 
+def _complete_diagnostics(timeout=20, *, total=.31, opened=.1, body=.2):
+    diagnostics=_network_diagnostics(timeout)
+    diagnostics.update(total_elapsed_seconds=total,open_elapsed_seconds=opened,
+                       body_elapsed_seconds=body,http_status=200,response_bytes=2)
+    return diagnostics
+
+
 def successful_worker(connection, root, timeout, revision):
     connection.send_bytes(json.dumps({"ok":True,"sample":_worker_sample(),
-                                      "network_diagnostics":_network_diagnostics(timeout)}).encode())
+                                      "network_diagnostics":_complete_diagnostics(timeout)}).encode())
     connection.close()
+
+
+def diagnostic_failure_worker(connection, root, timeout, revision):
+    envelope=json.loads((Path(root)/"failure-envelope.json").read_text())
+    connection.send_bytes(json.dumps(envelope).encode()); connection.close()
 
 
 def slow_successful_worker(connection, root, timeout, revision):
@@ -181,6 +193,74 @@ class EngagementMonitorTests(unittest.TestCase):
             fetch(opener=lambda req, timeout: oversized)
         self.assertEqual(caught.exception.code,"RESPONSE_TOO_LARGE")
 
+    def test_diagnostic_ipc_semantic_matrix_and_timing_invariants(self):
+        sample=_worker_sample()
+        valid_success={"ok":True,"sample":sample,"network_diagnostics":_complete_diagnostics()}
+        self.assertTrue(_decode_worker_result(json.dumps(valid_success).encode(),0)["ok"])
+        near_epsilon={"ok":True,"sample":sample,
+                      "network_diagnostics":_complete_diagnostics(total=.291)}
+        self.assertTrue(_decode_worker_result(json.dumps(near_epsilon).encode(),0)["ok"])
+
+        mismatches=(("HTTP_OPEN_TIMEOUT","HTTP_BODY"),("HTTP_OPEN_FAILED","HTTP_BODY"),
+                    ("HTTP_BODY_TIMEOUT","HTTP_OPEN"),("HTTP_BODY_FAILED","HTTP_OPEN"))
+        for error,stage in mismatches:
+            diagnostics=_complete_diagnostics(); diagnostics["failure_stage"]=stage
+            diagnostics["response_bytes"]=None
+            envelope={"ok":False,"error_class":error,"network_diagnostics":diagnostics}
+            with self.subTest(error=error),self.assertRaises(CollectionError) as caught:
+                _decode_worker_result(json.dumps(envelope).encode(),0)
+            self.assertEqual(caught.exception.code,"WORKER_PROTOCOL_ERROR")
+
+        invalid=[]
+        for field in ("open_elapsed_seconds","body_elapsed_seconds","total_elapsed_seconds",
+                      "http_status","response_bytes"):
+            diagnostics=_complete_diagnostics(); diagnostics[field]=None
+            invalid.append(diagnostics)
+        for total,opened,body in ((0,1,1),(1,10,0),(.1,.1,.2)):
+            invalid.append(_complete_diagnostics(total=total,opened=opened,body=body))
+        for value in (-1,math.nan,math.inf,31):
+            diagnostics=_complete_diagnostics(); diagnostics["open_elapsed_seconds"]=value
+            invalid.append(diagnostics)
+        diagnostics=_complete_diagnostics(); diagnostics["failure_stage"]="DNS"
+        invalid.append(diagnostics)
+        diagnostics=_complete_diagnostics(); diagnostics["http_status"]=302
+        invalid.append(diagnostics)
+        diagnostics=_complete_diagnostics(); diagnostics["response_bytes"]=MAX_RESPONSE_BYTES+1
+        invalid.append(diagnostics)
+        diagnostics=_complete_diagnostics(); diagnostics["extra"]="forbidden"
+        invalid.append(diagnostics)
+        for diagnostics in invalid:
+            envelope={"ok":True,"sample":sample,"network_diagnostics":diagnostics}
+            with self.subTest(diagnostics=diagnostics),self.assertRaises(CollectionError) as caught:
+                _decode_worker_result(json.dumps(envelope).encode(),0)
+            self.assertEqual(caught.exception.code,"WORKER_PROTOCOL_ERROR")
+
+        body_failure=_complete_diagnostics(total=.1,opened=.1,body=.2)
+        body_failure.update(failure_stage="HTTP_BODY",response_bytes=None)
+        with self.assertRaises(CollectionError) as caught:
+            _decode_worker_result(json.dumps({"ok":False,"error_class":"HTTP_BODY_TIMEOUT",
+                                              "network_diagnostics":body_failure}).encode(),0)
+        self.assertEqual(caught.exception.code,"WORKER_PROTOCOL_ERROR")
+
+    def test_network_failures_are_precommit_and_do_not_mutate_history(self):
+        cases=(("HTTP_OPEN_TIMEOUT","HTTP_OPEN",None),("HTTP_OPEN_FAILED","HTTP_OPEN",None),
+               ("HTTP_BODY_TIMEOUT","HTTP_BODY",200),("HTTP_BODY_FAILED","HTTP_BODY",200))
+        for error,stage,status in cases:
+            with self.subTest(error=error),tempfile.TemporaryDirectory() as folder:
+                root=Path(folder); diagnostics=_network_diagnostics(20)
+                diagnostics.update(failure_stage=stage,open_elapsed_seconds=.1,
+                                   body_elapsed_seconds=.2 if stage=="HTTP_BODY" else None,
+                                   total_elapsed_seconds=.31 if stage=="HTTP_BODY" else .1,
+                                   http_status=status,response_bytes=None)
+                envelope={"ok":False,"error_class":error,"network_diagnostics":diagnostics}
+                (root/"failure-envelope.json").write_text(json.dumps(envelope))
+                with self.assertRaises(CollectionError) as caught:
+                    run_with_total_deadline(root,total_deadline=1,worker_target=diagnostic_failure_worker)
+                result=_precommit_failure_result(caught.exception,1)
+                self.assertFalse(result["success"]); self.assertEqual(result["commit_state"],"PRE_COMMIT")
+                self.assertEqual(result["preview_state"],"NOT_ATTEMPTED")
+                self.assertFalse((root/"runtime/engagement/history.jsonl").exists())
+
     def test_total_deadline_configuration_and_fast_offline_success(self):
         self.assertEqual(SOCKET_TIMEOUT_SECONDS,20.0)
         self.assertEqual(TOTAL_COLLECTION_DEADLINE_SECONDS,30.0)
@@ -225,7 +305,7 @@ class EngagementMonitorTests(unittest.TestCase):
 
     def test_ipc_protocol_and_crash_fail_closed(self):
         sample=_worker_sample()
-        valid=json.dumps({"ok":True,"sample":sample,"network_diagnostics":_network_diagnostics(20)}).encode()
+        valid=json.dumps({"ok":True,"sample":sample,"network_diagnostics":_complete_diagnostics()}).encode()
         self.assertTrue(_decode_worker_result(valid,0)["ok"])
         failure=json.dumps({"ok":False,"error_class":"HTTP_TIMEOUT","network_diagnostics":_network_diagnostics(20)}).encode()
         self.assertEqual(_decode_worker_result(failure,0)["error_class"],"HTTP_TIMEOUT")
@@ -559,6 +639,11 @@ class EngagementMonitorTests(unittest.TestCase):
             root=Path(folder)
             result=run_with_total_deadline(root,total_deadline=1,worker_target=offline_prepare_worker)
             self.assertTrue(result["ok"]); self.assertEqual((root/"request-count").read_text(),"1")
+            diagnostics=result["network_diagnostics"]
+            self.assertIsNone(result["error_class"]); self.assertIsNone(diagnostics["failure_stage"])
+            self.assertEqual(diagnostics["http_status"],200); self.assertGreater(diagnostics["response_bytes"],0)
+            self.assertGreaterEqual(diagnostics["total_elapsed_seconds"]+.01,
+                                    diagnostics["open_elapsed_seconds"]+diagnostics["body_elapsed_seconds"])
             self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
             self.assertEqual(len(list((root/"runtime/engagement/public-preview").glob("*.json"))),3)
 

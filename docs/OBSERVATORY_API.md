@@ -20,6 +20,10 @@ use `HTTP_OPEN_FAILED` or `HTTP_BODY_FAILED`. These stages do not claim DNS,
 TCP, TLS, or server substage precision. IPC accepts only fixed enums, finite
 non-negative elapsed timings, safe status, bounded byte count, and configured
 budgets; exception text, headers, and partial bodies are not retained.
+Network elapsed values are capped at the 30-second maximum total deadline plus
+a 0.01-second measurement tolerance, and the parent rejects inconsistent
+open/body/total relationships. The generic `HTTP_TIMEOUT` fallback is limited
+to cases with no safely known stage or phase measurements.
 Before collection, the internal worker must prove `PID = PGID = SID` and wait
 for the parent's READY acknowledgment; failed session setup is
 `WORKER_STARTUP_FAILED` and performs no request. The worker cannot be selected
