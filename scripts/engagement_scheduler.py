@@ -19,6 +19,7 @@ from flop_agent.engagement_scheduler import (
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 REVIEWED_COLLECTOR = CODE_ROOT / "scripts/collect_engagement.py"
+REVIEWED_PYTHON = Path("/usr/bin/python3")
 RESULT_KEYS = {
     "ok", "success", "sample", "commit_state", "preview_state", "cleanup_state",
     "deadline_cleanup_overrun", "error_class", "durability_warning", "preview_warning",
@@ -145,7 +146,12 @@ def _collector(root: Path) -> dict:
             return {"success":False,"error_class":"COLLECTOR_RESULT_INVALID"}
     except (OSError, RuntimeError):
         return {"success":False,"error_class":"COLLECTOR_RESULT_INVALID"}
-    command = [sys.executable, str(collector), "--root", str(root)]
+    source=CODE_ROOT/"src"
+    isolated_entry=("import runpy,sys;"
+        f"sys.path.insert(0,{str(source)!r});"
+        f"sys.argv[0]={str(collector)!r};"
+        f"runpy.run_path({str(collector)!r},run_name='__main__')")
+    command = [str(REVIEWED_PYTHON),"-I","-c",isolated_entry,"--root",str(root)]
     try:
         completed = subprocess.run(command, cwd=root, capture_output=True, timeout=35, check=False)
     except (OSError, subprocess.TimeoutExpired):

@@ -29,7 +29,8 @@ LOG_KEYS = {"timestamp","outcome","circuit_state","requests_24h","collector_invo
 LOG_OUTCOMES = {"PREFLIGHT_READY","OK_DISABLED","OK_SCHEDULER_INVOKED",
                 "LAUNCHER_INTERNAL_ERROR","LOG_UNAVAILABLE"}
 CIRCUIT_STATES = {"READY_DISABLED","READY","DEGRADED","CIRCUIT_OPEN",None}
-SAFE_ENV = {"PATH":"/usr/bin:/bin", "LC_ALL":"C", "PYTHONDONTWRITEBYTECODE":"1"}
+SAFE_ENV = {"PATH":"/usr/bin:/bin", "LC_ALL":"C", "TMPDIR":"/tmp",
+            "PYTHONDONTWRITEBYTECODE":"1"}
 SCHEDULER_OUTCOMES = {
     "SCHEDULER_DISABLED", "SCHEDULER_READY", "SCHEDULER_MIN_INTERVAL",
     "SCHEDULER_DAILY_BUDGET_EXCEEDED", "SCHEDULER_CIRCUIT_OPEN",
@@ -68,6 +69,51 @@ def _scheduler_command(action: str, runtime_root: Path) -> list[str]:
                f"sys.argv[0]={str(SCHEDULER)!r};"
                f"runpy.run_path({str(SCHEDULER)!r},run_name='__main__')")
     return [str(PYTHON),"-I","-c",isolated_entry,action,"--root",str(runtime_root)]
+
+
+def _ignored_code_present(output: bytes, code_root: Path) -> bool:
+    try: names=output.decode("utf-8").split("\0")
+    except UnicodeDecodeError: return True
+    dangerous={".py",".pyc",".pyo",".so",".dylib"}
+    for name in filter(None,names):
+        path=Path(name)
+        if (path.is_absolute() or ".." in path.parts or "__pycache__" in path.parts
+                or path.suffix.lower() in dangerous):
+            return True
+        try:
+            metadata=os.lstat(code_root/path)
+            if stat.S_ISREG(metadata.st_mode) and metadata.st_mode&0o111: return True
+        except OSError: return True
+    return False
+
+
+def _validated_scheduler_result(value: object, returncode: int) -> dict[str, Any] | None:
+    if not isinstance(value,dict) or type(value.get("success")) is not bool:
+        return None
+    allowed_keys={"success","allowed","outcome","overlap_active","circuit_state",
+        "scheduler_enabled","last_attempt_at","last_success_at","consecutive_failures",
+        "last_error_class","normal_interval_minutes","minimum_interval_minutes",
+        "next_eligible_at","requests_24h","collector_invocations","error_class"}
+    if not set(value)<=allowed_keys or returncode!=(0 if value["success"] else 1): return None
+    outcome=value.get("outcome"); invocations=value.get("collector_invocations")
+    circuit=value.get("circuit_state")
+    if type(invocations) is not int or invocations not in {0,1}: return None
+    precollector={"SCHEDULER_DISABLED","SCHEDULER_MIN_INTERVAL",
+        "SCHEDULER_DAILY_BUDGET_EXCEEDED","SCHEDULER_RUN_ALREADY_ACTIVE",
+        "SCHEDULER_STATE_MISSING","SCHEDULER_STATE_INVALID","SCHEDULER_STATE_PATH_UNSAFE",
+        "SCHEDULER_STATE_PERMISSIONS","SCHEDULER_STATE_LOCK_FAILED"}
+    valid=(
+        outcome=="SCHEDULER_COLLECTION_SUCCEEDED" and value["success"] and invocations==1
+        and circuit=="READY"
+        or outcome=="SCHEDULER_COLLECTION_FAILED" and not value["success"] and invocations==1
+        and circuit in {"DEGRADED","CIRCUIT_OPEN"}
+        or outcome=="SCHEDULER_CIRCUIT_OPEN" and not value["success"] and invocations==0
+        and circuit=="CIRCUIT_OPEN"
+        or outcome=="SCHEDULER_RECOVERED_INTERRUPTED_RUN" and not value["success"]
+        and invocations==0 and circuit in {"DEGRADED","CIRCUIT_OPEN"}
+        or outcome in precollector and not value["success"] and invocations==0
+        and circuit in CIRCUIT_STATES)
+    return value if valid else None
 
 
 def _safe_regular(path: Path, root: Path) -> bool:
@@ -188,7 +234,8 @@ def launch(runtime_root: Path, expected_revision: str, *, runner: Runner = _run,
             return _result("CODE_TREE_DIRTY")
         ignored_code=runner([str(GIT),"ls-files","--others","--ignored","--exclude-standard",
                              "-z","--","scripts","src"],code_root,5)
-        if ignored_code.returncode!=0 or ignored_code.stderr or ignored_code.stdout:
+        if (ignored_code.returncode!=0 or ignored_code.stderr
+                or _ignored_code_present(ignored_code.stdout,code_root)):
             return _result("CODE_TREE_DIRTY")
         status=runner(_scheduler_command("status",runtime_root),code_root,10)
         state=_bounded_json(status)
@@ -206,18 +253,15 @@ def launch(runtime_root: Path, expected_revision: str, *, runner: Runner = _run,
                        log_error_class="LOG_UNAVAILABLE") if 'state' in locals() else _result("LAUNCHER_INTERNAL_ERROR")
     command=_scheduler_command("run-once",runtime_root)
     try: completed=runner(command,code_root,40)
-    except (OSError,subprocess.SubprocessError): return _result("LAUNCHER_INTERNAL_ERROR")
-    value=_bounded_json(completed)
+    except (OSError,subprocess.SubprocessError):
+        return _result("LAUNCHER_INTERNAL_ERROR",scheduler_invoked=True,
+                       scheduler_outcome="SCHEDULER_RESULT_INVALID")
+    value=_validated_scheduler_result(_bounded_json(completed),completed.returncode)
     if not value: result=_result("LAUNCHER_INTERNAL_ERROR",scheduler_invoked=True,
-                                 scheduler_outcome="SCHEDULER_RESULT_INVALID")
+                                 scheduler_outcome="SCHEDULER_RESULT_INVALID",log_persisted=True)
     else:
-        invocations=value.get("collector_invocations")
-        invocations=invocations if type(invocations) is int and 0<=invocations<=1 else 0
+        invocations=value["collector_invocations"]
         scheduler_outcome=value.get("outcome")
-        if (value.get("circuit_state") not in CIRCUIT_STATES
-                or scheduler_outcome not in SCHEDULER_OUTCOMES):
-            return _result("LAUNCHER_INTERNAL_ERROR",scheduler_invoked=True,
-                           scheduler_outcome="SCHEDULER_RESULT_INVALID")
         disabled=(value.get("outcome")=="SCHEDULER_DISABLED" and invocations==0)
         result=_result("OK_DISABLED" if disabled else "OK_SCHEDULER_INVOKED",
                        success=disabled or value.get("success") is True,scheduler_invoked=True,

@@ -1,4 +1,4 @@
-import json, os, plistlib, subprocess, tempfile, unittest
+import json, os, plistlib, shutil, subprocess, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -24,7 +24,8 @@ class FakeRunner:
         if command[1:3]==["diff-index","--quiet"]: return completed(returncode=1 if self.dirty else 0)
         if command[1:3]==["ls-files","--others"]: return completed()
         if "status" in command: return completed(json.dumps(self.status).encode())
-        if "run-once" in command: return completed(json.dumps(self.run).encode(),returncode=1)
+        if "run-once" in command:
+            return completed(json.dumps(self.run).encode(),returncode=0 if self.run.get("success") else 1)
         raise AssertionError(command)
 
 
@@ -158,6 +159,47 @@ class EngagementLauncherTests(unittest.TestCase):
         self.assertEqual((isolation["isolated"],isolation["no_user_site"]),(1,1))
         self.assertNotIn(str(Path(folder)/"hostile"),isolation["path"])
 
+    def test_exact_production_launcher_command_passes_git_and_disabled_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); (root/"scripts").mkdir(); (root/"src/flop_agent").mkdir(parents=True)
+            shutil.copy2(launcher.__file__,root/"scripts/engagement_scheduler_launcher.py")
+            (root/"scripts/collect_engagement.py").write_text("raise AssertionError('collector invoked')\n")
+            scheduler=root/"scripts/engagement_scheduler.py"
+            scheduler.write_text("import json,sys\na='status' if 'status' in sys.argv else 'run-once'\n"
+                "print(json.dumps({'success':a=='status','outcome':'SCHEDULER_DISABLED',"
+                "'scheduler_enabled':False,'circuit_state':'READY_DISABLED','requests_24h':0,"
+                "'collector_invocations':0}))\nraise SystemExit(0 if a=='status' else 1)\n")
+            (root/"src/flop_agent/engagement_scheduler.py").write_text("# reviewed fixture\n")
+            (root/".gitignore").write_text("runtime/\n.DS_Store\nscripts/json.py\n")
+            runtime=root/"runtime/engagement"; runtime.mkdir(parents=True)
+            subprocess.run(["git","init","-q"],cwd=root,check=True)
+            subprocess.run(["git","add","."],cwd=root,check=True)
+            subprocess.run(["git","-c","user.name=Test","-c","user.email=test@example.invalid",
+                            "commit","-qm","fixture"],cwd=root,check=True)
+            revision=subprocess.run(["git","rev-parse","HEAD"],cwd=root,capture_output=True,
+                                    check=True,text=True).stdout.strip()
+            (root/"src/.DS_Store").write_bytes(b"metadata")
+            hostile=root/"runtime/hostile"; hostile.mkdir(); marker=root/"runtime/hostile-marker"
+            (hostile/"json.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+            command=["/usr/bin/python3","-I",str(root/"scripts/engagement_scheduler_launcher.py"),
+                     "--expected-revision",revision,"--runtime-root",str(root)]
+            completed=subprocess.run(command,cwd=hostile,
+                env={**os.environ,"PYTHONPATH":str(hostile),"PYTHONUSERBASE":str(hostile)},
+                capture_output=True,text=True)
+            self.assertEqual(completed.returncode,0,(completed.stdout,completed.stderr))
+            result=json.loads(completed.stdout)
+            self.assertEqual((result["outcome"],result["collector_invocations"]),("OK_DISABLED",0))
+            self.assertFalse(marker.exists())
+            wrong=subprocess.run(command[:4]+["0"*40]+command[5:],cwd=hostile,
+                env={**os.environ,"PYTHONPATH":str(hostile)},capture_output=True,text=True)
+            self.assertEqual(json.loads(wrong.stdout)["outcome"],"CODE_REVISION_MISMATCH")
+            adjacent=root/"scripts/json.py"
+            adjacent.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+            blocked=subprocess.run(command,cwd=hostile,env={**os.environ,"PYTHONPATH":str(hostile)},
+                                   capture_output=True,text=True)
+            self.assertEqual(json.loads(blocked.stdout)["outcome"],"CODE_TREE_DIRTY")
+            self.assertFalse(marker.exists())
+
     def test_isolated_python_ignores_adjacent_and_pythonpath_shadow_modules(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); adjacent=root/"adjacent"; hostile=root/"pythonpath"
@@ -195,6 +237,49 @@ class EngagementLauncherTests(unittest.TestCase):
             result=launcher.launch(root,REVISION,runner=runner)
         self.assertEqual(result["outcome"],"CODE_TREE_DIRTY")
         self.assertFalse(any("status" in call or "run-once" in call for call in runner.calls))
+
+    def test_ignored_harmless_metadata_is_allowed(self):
+        class MetadataRunner(FakeRunner):
+            def __call__(self,command,cwd,timeout):
+                if "--ignored" in command:
+                    self.calls.append(command); return completed(b"src/.DS_Store\0")
+                return super().__call__(command,cwd,timeout)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); self.runtime(root); runner=MetadataRunner()
+            self.assertEqual(launcher.launch(root,REVISION,runner=runner)["outcome"],"OK_DISABLED")
+
+    def test_scheduler_result_semantic_matrix(self):
+        valid=[
+            ({"success":False,"outcome":"SCHEDULER_DISABLED","collector_invocations":0,
+              "circuit_state":"READY_DISABLED"},"OK_DISABLED"),
+            ({"success":True,"outcome":"SCHEDULER_COLLECTION_SUCCEEDED","collector_invocations":1,
+              "circuit_state":"READY"},"OK_SCHEDULER_INVOKED"),
+            ({"success":False,"outcome":"SCHEDULER_COLLECTION_FAILED","collector_invocations":1,
+              "circuit_state":"DEGRADED"},"OK_SCHEDULER_INVOKED"),
+            ({"success":False,"outcome":"SCHEDULER_CIRCUIT_OPEN","collector_invocations":0,
+              "circuit_state":"CIRCUIT_OPEN"},"OK_SCHEDULER_INVOKED"),
+            ({"success":False,"outcome":"SCHEDULER_MIN_INTERVAL","collector_invocations":0,
+              "circuit_state":"READY"},"OK_SCHEDULER_INVOKED"),
+        ]
+        invalid=[]
+        for value in (valid[0][0],valid[1][0],valid[3][0]):
+            item=dict(value); item["collector_invocations"]=1-item["collector_invocations"]; invalid.append(item)
+        item=dict(valid[1][0]); item["request_count"]=0; invalid.append(item)
+        item=dict(valid[1][0]); item["circuit_state"]="CIRCUIT_OPEN"; invalid.append(item)
+        item=dict(valid[0][0]); item["outcome"]="UNKNOWN"; invalid.append(item)
+        item=dict(valid[0][0]); item["collector_invocations"]=True; invalid.append(item)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); self.runtime(root)
+            for value,expected in valid:
+                with self.subTest(valid=value):
+                    result=launcher.launch(root,REVISION,runner=FakeRunner(run=value))
+                    self.assertEqual(result["outcome"],expected)
+            for value in invalid:
+                with self.subTest(invalid=value):
+                    result=launcher.launch(root,REVISION,runner=FakeRunner(run=value))
+                    self.assertEqual((result["outcome"],result["scheduler_invoked"],
+                                      result["scheduler_outcome"],result["collector_invocations"]),
+                                     ("LAUNCHER_INTERNAL_ERROR",True,"SCHEDULER_RESULT_INVALID",0))
 
     def test_pre_and_post_run_log_failures_have_distinct_truthful_results(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -10,7 +10,8 @@ from flop_agent.engagement_scheduler import (
     SchedulerStateError, approve_reset, disabled_state, dry_run, evaluate, load_state,
     _provision_result, provision_disabled, run_once, scheduler_lock, validate_state, write_state,
 )
-from scripts.engagement_scheduler import CODE_ROOT, REVIEWED_COLLECTOR, _collector, _validated_result, main
+from scripts.engagement_scheduler import (CODE_ROOT, REVIEWED_COLLECTOR, REVIEWED_PYTHON,
+                                          _collector, _validated_result, main)
 
 NOW=datetime(2026,9,1,12,0,0,tzinfo=timezone.utc)
 
@@ -207,7 +208,10 @@ class EngagementSchedulerTests(unittest.TestCase):
         self.assertEqual(result,{"success":False,"error_class":"HTTP_BODY_TIMEOUT"})
         called.assert_called_once()
         command=called.call_args.args[0]
-        self.assertEqual(command[1:],[str(REVIEWED_COLLECTOR),'--root','/repo'])
+        self.assertEqual(command[:3],[str(REVIEWED_PYTHON),'-I','-c'])
+        self.assertIn(str(REVIEWED_COLLECTOR),command[3])
+        self.assertIn(str(CODE_ROOT/'src'),command[3])
+        self.assertEqual(command[4:],['--root','/repo'])
         self.assertNotIn("curl"," ".join(command)); self.assertNotIn("http"," ".join(command))
         completed=mock.Mock(stdout=b'{"success":true,"error_class":null}',returncode=7)
         with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed):
@@ -220,8 +224,25 @@ class EngagementSchedulerTests(unittest.TestCase):
             completed=mock.Mock(stdout=json.dumps(failure_result()).encode(),returncode=1)
             with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed) as called:
                 _collector(root)
-            self.assertEqual(called.call_args.args[0][1],str(CODE_ROOT/"scripts/collect_engagement.py"))
+            command=called.call_args.args[0]
+            self.assertEqual(command[1:3],["-I","-c"])
+            self.assertIn(str(CODE_ROOT/"scripts/collect_engagement.py"),command[3])
+            self.assertNotIn(str(malicious),command[3])
             self.assertFalse(marker.exists())
+
+    def test_collector_child_isolated_flags_and_hostile_environment(self):
+        completed=mock.Mock(stdout=json.dumps(failure_result()).encode(),returncode=1)
+        with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed) as called:
+            _collector(Path("/repo"))
+        command=called.call_args.args[0]
+        self.assertEqual(command[:3],[str(REVIEWED_PYTHON),"-I","-c"])
+        probe=subprocess.run([sys.executable,"-I","-c",
+            "import json,sys;print(json.dumps([sys.flags.isolated,sys.flags.no_user_site,sys.flags.ignore_environment,sys.path]))"],
+            env={**os.environ,"PYTHONPATH":"/private/tmp/hostile","PYTHONUSERBASE":"/private/tmp/hostile"},
+            capture_output=True,check=True,text=True)
+        isolated,no_user_site,ignore_environment,path=json.loads(probe.stdout)
+        self.assertEqual((isolated,no_user_site,ignore_environment),(1,1,1))
+        self.assertNotIn("/private/tmp/hostile",path)
 
     def test_strict_collector_result_matrix(self):
         self.assertEqual(_validated_result(success_result(),0),{"success":True,"error_class":None})
