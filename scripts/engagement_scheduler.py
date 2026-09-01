@@ -92,6 +92,12 @@ def _validated_result(result: object, returncode: int) -> dict:
         return invalid
     diagnostics = result.get("network_diagnostics")
     error_class = result.get("error_class")
+    preview_state = result.get("preview_state")
+    preview_warning = result.get("preview_warning")
+    if (preview_state not in {"NOT_ATTEMPTED", "UPDATED", "FAILED"}
+            or preview_warning not in {None, "POST_COMMIT_PREVIEW_WARNING"}
+            or (preview_state == "FAILED") != (preview_warning == "POST_COMMIT_PREVIEW_WARNING")):
+        return invalid
     if diagnostics is not None and not _valid_diagnostics(
             diagnostics, success=success, error_class=error_class):
         return invalid
@@ -106,20 +112,23 @@ def _validated_result(result: object, returncode: int) -> dict:
                     and result.get("durability_warning") == "POST_COMMIT_DURABILITY_WARNING"):
                 return {"success":False, "error_class":"COLLECTOR_RESULT_NOT_DURABLE"}
             return invalid
-        if result.get("preview_state") != "UPDATED" or result.get("preview_warning") is not None:
+        if preview_state != "UPDATED":
             return {"success":False, "error_class":"COLLECTOR_PREVIEW_FAILED"}
         if cleanup_state == "FAILED":
             return {"success":False, "error_class":cleanup_error}
         if result["deadline_cleanup_overrun"] or diagnostics is None:
             return {"success":False, "error_class":"TOTAL_DEADLINE_EXCEEDED" if result["deadline_cleanup_overrun"] else "COLLECTOR_RESULT_INVALID"}
         return {"success":True, "error_class":None}
-    if (returncode == 0 or result.get("commit_state") != "PRE_COMMIT"
-            or result.get("preview_state") != "NOT_ATTEMPTED" or result.get("preview_warning") is not None
-            or result.get("durability_warning") is not None or cleanup_state != "COMPLETED"
+    expected_returncode = 2 if error_class == "TOTAL_DEADLINE_EXCEEDED" else 1
+    if (returncode != expected_returncode or result.get("commit_state") != "PRE_COMMIT"
+            or preview_state != "NOT_ATTEMPTED"
+            or result.get("durability_warning") is not None
             or result["deadline_cleanup_overrun"]
             or result.get("collector_version") != "0.1.0"
             or result.get("git_revision") is not None):
         return invalid
+    if cleanup_state == "FAILED":
+        return {"success":False, "error_class":cleanup_error}
     if error_class in {"HTTP_OPEN_TIMEOUT", "HTTP_OPEN_FAILED", "HTTP_BODY_TIMEOUT", "HTTP_BODY_FAILED"}:
         if diagnostics is None: return invalid
     return {"success":False, "error_class":error_class if error_class in FAILURE_CLASSES else "COLLECTOR_RESULT_INVALID"}

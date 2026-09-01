@@ -1,4 +1,4 @@
-import json, os, tempfile, unittest
+import json, os, subprocess, sys, tempfile, unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -299,6 +299,49 @@ class EngagementSchedulerTests(unittest.TestCase):
         for error in ("WORKER_CLEANUP_FAILED","WORKER_CLEANUP_UNVERIFIED"):
             item=success_result(); item.update(cleanup_state="FAILED",cleanup_error=error)
             self.assertEqual(_validated_result(item,0)["error_class"],error)
+
+    def test_real_collector_cli_deadline_contract(self):
+        program=("from scripts.collect_engagement import main,TotalDeadlineExceeded\n"
+                 "def deadline(*args,**kwargs): raise TotalDeadlineExceeded({})\n"
+                 "main(run=deadline)\n")
+        completed=subprocess.run([sys.executable,"-c",program],cwd=CODE_ROOT,
+                                 capture_output=True,timeout=5,check=False)
+        self.assertEqual((completed.returncode,completed.stderr),(2,b""))
+        envelope=json.loads(completed.stdout)
+        self.assertEqual((envelope["success"],envelope["commit_state"],envelope["error_class"]),
+                         (False,"PRE_COMMIT","TOTAL_DEADLINE_EXCEEDED"))
+        self.assertNotIn("elapsed_seconds",envelope)
+        self.assertEqual(_validated_result(envelope,completed.returncode)["error_class"],
+                         "TOTAL_DEADLINE_EXCEEDED")
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed):
+                self.assertEqual(_collector(Path(folder))["error_class"],"TOTAL_DEADLINE_EXCEEDED")
+        compact={"error_class":"TOTAL_DEADLINE_EXCEEDED","configured_total_deadline":30.0}
+        self.assertEqual(_validated_result(compact,2)["error_class"],"COLLECTOR_RESULT_INVALID")
+        self.assertEqual(_validated_result(envelope,1)["error_class"],"COLLECTOR_RESULT_INVALID")
+        self.assertEqual(_validated_result(success_result(),2)["error_class"],"COLLECTOR_RESULT_INVALID")
+        cleanup_program=("from scripts.collect_engagement import main,_structured_result\n"
+                         "def failure(*args,**kwargs):\n"
+                         " return _structured_result(None,{'state':'PRE_COMMIT','preview_state':'NOT_ATTEMPTED','error_class':'PRE_COMMIT_FAILURE'},cleanup_state='FAILED',cleanup_error='WORKER_CLEANUP_FAILED',success=False)\n"
+                         "main(run=failure)\n")
+        cleanup=subprocess.run([sys.executable,"-c",cleanup_program],cwd=CODE_ROOT,
+                               capture_output=True,timeout=5,check=False)
+        self.assertEqual((cleanup.returncode,cleanup.stderr),(1,b""))
+        self.assertEqual(_validated_result(json.loads(cleanup.stdout),1)["error_class"],
+                         "WORKER_CLEANUP_FAILED")
+
+    def test_preview_state_warning_matrix(self):
+        invalid=[]
+        for state,warning in (("UNKNOWN",None),("FAILED",None),
+                              ("UPDATED","POST_COMMIT_PREVIEW_WARNING"),
+                              ("NOT_ATTEMPTED","POST_COMMIT_PREVIEW_WARNING"),
+                              ("FAILED","UNKNOWN")):
+            item=success_result(); item.update(preview_state=state,preview_warning=warning); invalid.append(item)
+        for item in invalid:
+            self.assertEqual(_validated_result(item,0)["error_class"],"COLLECTOR_RESULT_INVALID")
+        valid=success_result(); valid.update(preview_state="FAILED",
+                                             preview_warning="POST_COMMIT_PREVIEW_WARNING")
+        self.assertEqual(_validated_result(valid,0)["error_class"],"COLLECTOR_PREVIEW_FAILED")
 
     def test_lock_is_private_from_creation_and_rejects_symlink(self):
         with tempfile.TemporaryDirectory() as folder:

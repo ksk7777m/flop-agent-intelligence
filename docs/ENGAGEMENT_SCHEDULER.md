@@ -43,6 +43,13 @@ The scheduler accepts only the current stage-specific `HTTP_OPEN_*` and
 `HTTP_TIMEOUT` class is not a Scheduler V0.1 failure class and fails closed as
 an invalid collector result.
 
+The collector CLI emits the same bounded structured envelope for every
+scheduler-consumed outcome. Clean success exits zero, ordinary structured
+failure exits one, and structured `TOTAL_DEADLINE_EXCEEDED` exits two. The
+scheduler validates envelope and exit-code compatibility. Unknown or
+contradictory preview state/warning pairs are invalid results; only a valid
+`FAILED` plus `POST_COMMIT_PREVIEW_WARNING` pair is a preview failure.
+
 ## State and recovery
 
 State is local at `runtime/engagement/scheduler-state.json` with mode `0600`.

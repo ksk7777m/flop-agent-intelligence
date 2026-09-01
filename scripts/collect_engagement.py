@@ -369,6 +369,18 @@ def _precommit_failure_result(error: CollectionError, total_deadline: float) -> 
             "git_revision":None}
 
 
+def _cli_failure_result(result: dict) -> dict:
+    """Normalize an already-validated internal failure for CLI consumers."""
+    return {"success":False, "commit_state":result["commit_state"],
+            "durability_warning":result["durability_warning"],
+            "preview_state":result["preview_state"], "preview_warning":result["preview_warning"],
+            "cleanup_state":result["cleanup_state"], "cleanup_error":result["cleanup_error"],
+            "deadline_cleanup_overrun":result["deadline_cleanup_overrun"],
+            "error_class":result["error_class"],
+            "network_diagnostics":result.get("network_diagnostics"),
+            "collector_version":VERSION, "git_revision":None}
+
+
 def _git_revision(root: Path, deadline_at: float) -> str | None:
     remaining = deadline_at - time.monotonic()
     if remaining <= 0: raise TotalDeadlineExceeded({})
@@ -653,7 +665,7 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
         final_result = _structured_result(envelope["sample"], transaction,
                                           deadline_cleanup_overrun=overrun)
         return final_result
-    except TotalDeadlineExceeded as error:
+    except TotalDeadlineExceeded:
         if ownership.state == OwnershipState.OWNED: _cleanup_owned(process, ownership)
         elif ownership.state == OwnershipState.STARTING: _cleanup_unowned(process)
         raise TotalDeadlineExceeded({
@@ -691,18 +703,21 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
             return final_result
 
 
-def main() -> None:
+def main(*, run=run_with_total_deadline) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--timeout", type=float, default=SOCKET_TIMEOUT_SECONDS)
     parser.add_argument("--total-deadline", type=float, default=TOTAL_COLLECTION_DEADLINE_SECONDS)
     args = parser.parse_args()
-    try: result = run_with_total_deadline(args.root, timeout=args.timeout, total_deadline=args.total_deadline)
+    try: result = run(args.root, timeout=args.timeout, total_deadline=args.total_deadline)
     except TotalDeadlineExceeded as error:
-        print(json.dumps(error.metadata, indent=2)); raise SystemExit(2) from None
+        failure = CollectionError(None, code="TOTAL_DEADLINE_EXCEEDED")
+        print(json.dumps(_precommit_failure_result(failure,args.total_deadline),indent=2))
+        raise SystemExit(2) from None
     except CollectionError as error:
         print(json.dumps(_precommit_failure_result(error,args.total_deadline),indent=2))
         raise SystemExit(1) from None
+    if not result["success"]: result = _cli_failure_result(result)
     if result.get("network_diagnostics") is not None:
         result["network_diagnostics"]["configured_total_deadline"] = args.total_deadline
     print(json.dumps(result, indent=2))
