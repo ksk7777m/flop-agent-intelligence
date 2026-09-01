@@ -28,6 +28,12 @@ MAX_IPC_BYTES = 256 * 1024
 MIN_COMMIT_BUDGET_SECONDS = 0.5
 WORKER_ERRORS = {"HTTP_TIMEOUT", "VALIDATION_FAILED", "RESPONSE_TOO_LARGE"}
 STARTUP_IPC_BYTES = 1024
+COMMIT_STATES = {"PRE_COMMIT", "COMMITTED", "DURABLE"}
+PREVIEW_STATES = {"NOT_ATTEMPTED", "UPDATED", "FAILED"}
+POST_COMMIT_ERRORS = {
+    None, "TOTAL_DEADLINE_EXCEEDED", "POST_COMMIT_DURABILITY_WARNING",
+    "POST_COMMIT_PREVIEW_WARNING", "WORKER_CLEANUP_FAILED", "WORKER_CLEANUP_UNVERIFIED",
+}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -137,16 +143,51 @@ def _atomic_preview(path: Path, payload: bytes) -> None:
 def commit_sample(root: Path, sample: dict, *, deadline_at: float | None = None,
                   transaction: dict[str, str] | None = None) -> bool:
     sample = validate(sample)
+    transaction = transaction if transaction is not None else {}
+    transaction["preview_state"] = "NOT_ATTEMPTED"
     history_path = root / "runtime/engagement/history.jsonl"
     before = load(history_path)
     committed = append(history_path, sample, deadline_at=deadline_at, transaction=transaction)
-    rows = load(history_path)
-    output = root / "runtime/engagement/public-preview"; output.mkdir(parents=True, exist_ok=True)
-    _atomic_preview(output / "engagement-sample.json", (json.dumps(sample, indent=2) + "\n").encode())
-    _atomic_preview(output / "engagement-diff.json", (json.dumps(diff(before[-1] if before else None, sample), indent=2) + "\n").encode())
-    stamp = datetime.fromisoformat(sample["fetched_at"].replace("Z", "+00:00"))
-    _atomic_preview(output / "engagement-series.json", (json.dumps(series(range_rows(rows, now=stamp)), indent=2) + "\n").encode())
+    if transaction.get("error_class") == "POST_COMMIT_DURABILITY_WARNING":
+        return committed
+    if deadline_at is not None and time.monotonic() >= deadline_at:
+        raise HistoryDeadlineExceeded("TOTAL_DEADLINE_EXCEEDED")
+    try:
+        rows = load(history_path)
+        output = root / "runtime/engagement/public-preview"; output.mkdir(parents=True, exist_ok=True)
+        _atomic_preview(output / "engagement-sample.json", (json.dumps(sample, indent=2) + "\n").encode())
+        _atomic_preview(output / "engagement-diff.json", (json.dumps(diff(before[-1] if before else None, sample), indent=2) + "\n").encode())
+        stamp = datetime.fromisoformat(sample["fetched_at"].replace("Z", "+00:00"))
+        _atomic_preview(output / "engagement-series.json", (json.dumps(series(range_rows(rows, now=stamp)), indent=2) + "\n").encode())
+    except HistoryDeadlineExceeded:
+        raise
+    except Exception:
+        transaction["preview_state"] = "FAILED"
+        transaction.setdefault("error_class", "POST_COMMIT_PREVIEW_WARNING")
+    else:
+        transaction["preview_state"] = "UPDATED"
     return committed
+
+
+def _structured_result(sample: dict, transaction: dict[str, str], *,
+                       deadline_cleanup_overrun: bool = False,
+                       cleanup_state: str = "COMPLETED") -> dict:
+    state = transaction.get("state", "PRE_COMMIT")
+    preview = transaction.get("preview_state", "NOT_ATTEMPTED")
+    error = transaction.get("error_class")
+    success = state in {"COMMITTED", "DURABLE"}
+    if (state not in COMMIT_STATES or preview not in PREVIEW_STATES
+            or cleanup_state not in {"COMPLETED", "FAILED"}
+            or error not in POST_COMMIT_ERRORS
+            or (state == "PRE_COMMIT" and preview != "NOT_ATTEMPTED")
+            or (preview == "UPDATED" and state != "DURABLE")
+            or (cleanup_state == "FAILED" and error not in
+                {"WORKER_CLEANUP_FAILED", "WORKER_CLEANUP_UNVERIFIED"})):
+        raise ValueError("invalid collection result state")
+    return {"ok": success, "success": success, "sample": sample,
+            "commit_state": state, "preview_state": preview,
+            "cleanup_state": cleanup_state, "deadline_cleanup_overrun": deadline_cleanup_overrun,
+            "error_class": error}
 
 
 def _git_revision(root: Path, deadline_at: float) -> str | None:
@@ -320,7 +361,7 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
                             total_deadline: float = TOTAL_COLLECTION_DEADLINE_SECONDS,
                             worker_target=_worker_entry,
                             context=None,
-                            commit=commit_sample,
+                            commit=commit_sample, post_commit_cleanup=None,
                             session_setup=os.setsid) -> dict:
     """Run one worker under a process deadline that also bounds blocking DNS."""
     deadline = total_deadline_seconds(total_deadline)
@@ -367,19 +408,44 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
         if not envelope["ok"]: raise CollectionError(None, code=envelope["error_class"])
         remaining = deadline_at - time.monotonic()
         if remaining < MIN_COMMIT_BUDGET_SECONDS: raise TotalDeadlineExceeded({})
-        transaction = {"state":"PRE_COMMIT"}
+        transaction = {"state":"PRE_COMMIT", "preview_state":"NOT_ATTEMPTED"}
         try:
             with _commit_alarm(remaining):
                 commit(root, envelope["sample"], deadline_at=deadline_at, transaction=transaction)
         except HistoryLockError: raise CollectionError(None, code="HISTORY_LOCK_TIMEOUT") from None
         except HistoryDeadlineExceeded:
             if transaction["state"] in {"COMMITTED","DURABLE","DEDUPED"}:
-                return {"ok":True,"sample":envelope["sample"],"commit_state":transaction["state"],
-                        "deadline_cleanup_overrun":True}
+                transaction["error_class"] = "TOTAL_DEADLINE_EXCEEDED"
+                if transaction["state"] == "DEDUPED": transaction["state"] = "DURABLE"
+                return _structured_result(envelope["sample"], transaction,
+                                          deadline_cleanup_overrun=True)
             raise TotalDeadlineExceeded({}) from None
+        except Exception:
+            if transaction["state"] in {"COMMITTED", "DURABLE", "DEDUPED"}:
+                if transaction["state"] == "DEDUPED": transaction["state"] = "DURABLE"
+                transaction["error_class"] = ("POST_COMMIT_DURABILITY_WARNING"
+                                              if transaction["state"] == "COMMITTED"
+                                              else "POST_COMMIT_PREVIEW_WARNING")
+                if transaction["state"] == "DURABLE": transaction["preview_state"] = "FAILED"
+                return _structured_result(envelope["sample"], transaction,
+                                          deadline_cleanup_overrun=time.monotonic() > deadline_at)
+            raise
+        if transaction["state"] == "DEDUPED": transaction["state"] = "DURABLE"
+        if post_commit_cleanup is not None:
+            try: post_commit_cleanup()
+            except CollectionError as error:
+                transaction["error_class"] = error.code
+                return _structured_result(envelope["sample"], transaction,
+                                          deadline_cleanup_overrun=time.monotonic() > deadline_at,
+                                          cleanup_state="FAILED")
+            except Exception:
+                transaction["error_class"] = "WORKER_CLEANUP_FAILED"
+                return _structured_result(envelope["sample"], transaction,
+                                          deadline_cleanup_overrun=time.monotonic() > deadline_at,
+                                          cleanup_state="FAILED")
         overrun = time.monotonic() > deadline_at
-        return {"ok":True,"sample":envelope["sample"],"commit_state":transaction["state"],
-                "deadline_cleanup_overrun":overrun}
+        return _structured_result(envelope["sample"], transaction,
+                                  deadline_cleanup_overrun=overrun)
     except TotalDeadlineExceeded as error:
         if ownership.state == OwnershipState.OWNED: _cleanup_owned(process, ownership)
         elif ownership.state == OwnershipState.STARTING: _cleanup_unowned(process)

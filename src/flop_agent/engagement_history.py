@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import fcntl
+import signal
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +23,18 @@ class HistoryCorruption(ValueError): pass
 class RecoverableTailTruncation(ValueError): pass
 class HistoryLockError(RuntimeError): pass
 class HistoryDeadlineExceeded(TimeoutError): pass
+
+
+def _replace_and_publish_committed(temporary: Path, path: Path,
+                                   transaction: dict[str, str] | None) -> None:
+    """Make rename and its in-memory commit state indivisible to SIGALRM."""
+    maskable = hasattr(signal, "pthread_sigmask") and hasattr(signal, "SIGALRM")
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM}) if maskable else None
+    try:
+        os.replace(temporary, path)
+        if transaction is not None: transaction["state"] = "COMMITTED"
+    finally:
+        if maskable: signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 def _write_atomic(path: Path, payload: bytes) -> None:
@@ -146,14 +159,20 @@ def append(path: Path, sample: Mapping[str, Any], *, deadline_at: float | None =
                 os.fsync(descriptor)
                 check_deadline()
                 os.close(descriptor); descriptor = -1
-                os.replace(temporary, path)
-                if transaction is not None: transaction["state"] = "COMMITTED"
-                os.chmod(path, 0o600)
-                directory = os.open(path.parent, os.O_RDONLY)
+                _replace_and_publish_committed(temporary, path, transaction)
+                directory = None
                 try:
+                    directory = os.open(path.parent, os.O_RDONLY)
                     os.fsync(directory)
                     if transaction is not None: transaction["state"] = "DURABLE"
-                finally: os.close(directory)
+                except OSError:
+                    if transaction is not None: transaction["error_class"] = "POST_COMMIT_DURABILITY_WARNING"
+                finally:
+                    if directory is not None:
+                        try: os.close(directory)
+                        except OSError:
+                            if transaction is not None and transaction.get("state") != "DURABLE":
+                                transaction["error_class"] = "POST_COMMIT_DURABILITY_WARNING"
             finally:
                 if descriptor >= 0: os.close(descriptor)
                 temporary.unlink(missing_ok=True)

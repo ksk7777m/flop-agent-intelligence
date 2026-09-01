@@ -12,7 +12,8 @@ from scripts.collect_engagement import (
     OwnershipState, WorkerOwnership,
     SOCKET_TIMEOUT_SECONDS, TOTAL_COLLECTION_DEADLINE_SECONDS,
     TotalDeadlineExceeded, _cleanup_owned, _decode_worker_result, backoff, commit_sample, fetch,
-    interval_minutes, prepare_sample, run_with_total_deadline, total_deadline_seconds, validate_endpoint,
+    _structured_result, interval_minutes, prepare_sample, run_with_total_deadline,
+    total_deadline_seconds, validate_endpoint,
 )
 import jsonschema
 
@@ -281,6 +282,75 @@ class EngagementMonitorTests(unittest.TestCase):
                 self.assertTrue(result["ok"]); self.assertTrue(result["deadline_cleanup_overrun"])
                 self.assertEqual(result["commit_state"],state); self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
 
+    def test_deadline_signal_after_rename_observes_committed_state(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); real_replace=os.replace
+            def replace_then_expire(source,target):
+                real_replace(source,target)
+                os.kill(os.getpid(),signal.SIGALRM)
+            with mock.patch("flop_agent.engagement_history.os.replace",side_effect=replace_then_expire):
+                result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker)
+            self.assertTrue(result["success"]); self.assertEqual(result["commit_state"],"COMMITTED")
+            self.assertEqual(result["preview_state"],"NOT_ATTEMPTED")
+            self.assertEqual(result["error_class"],"TOTAL_DEADLINE_EXCEEDED")
+            self.assertTrue(result["deadline_cleanup_overrun"]); self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
+
+    def test_directory_fsync_failure_is_structured_committed_warning(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); real_fsync=os.fsync; calls=0
+            def fail_directory(descriptor):
+                nonlocal calls
+                calls += 1
+                if calls == 2: raise OSError("must not escape")
+                return real_fsync(descriptor)
+            with mock.patch("flop_agent.engagement_history.os.fsync",side_effect=fail_directory):
+                result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker)
+            self.assertTrue(result["success"]); self.assertEqual(result["commit_state"],"COMMITTED")
+            self.assertEqual(result["preview_state"],"NOT_ATTEMPTED")
+            self.assertEqual(result["error_class"],"POST_COMMIT_DURABILITY_WARNING")
+            self.assertNotIn("must not escape",json.dumps(result)); self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
+
+    def test_preview_failure_preserves_durable_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with mock.patch("scripts.collect_engagement._atomic_preview",side_effect=OSError("private detail")):
+                result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker)
+            self.assertTrue(result["success"]); self.assertEqual(result["commit_state"],"DURABLE")
+            self.assertEqual(result["preview_state"],"FAILED")
+            self.assertEqual(result["error_class"],"POST_COMMIT_PREVIEW_WARNING")
+            self.assertNotIn("private detail",json.dumps(result)); self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
+
+    def test_deadline_before_preview_preserves_durable_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            def commit_then_expire(root,sample,deadline_at,transaction):
+                append(root/"runtime/engagement/history.jsonl",sample,transaction=transaction)
+                transaction["preview_state"]="NOT_ATTEMPTED"
+                raise HistoryDeadlineExceeded()
+            result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker,
+                                           commit=commit_then_expire)
+            self.assertEqual(result["commit_state"],"DURABLE"); self.assertEqual(result["preview_state"],"NOT_ATTEMPTED")
+            self.assertTrue(result["deadline_cleanup_overrun"]); self.assertEqual(len(load(root/"runtime/engagement/history.jsonl")),1)
+
+    def test_post_commit_cleanup_failure_preserves_commit_state(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            def failed_cleanup(): raise CollectionError(None,code="WORKER_CLEANUP_FAILED")
+            result=run_with_total_deadline(root,total_deadline=1,worker_target=successful_worker,
+                                           post_commit_cleanup=failed_cleanup)
+            self.assertTrue(result["success"]); self.assertEqual(result["commit_state"],"DURABLE")
+            self.assertEqual(result["cleanup_state"],"FAILED")
+            self.assertEqual(result["error_class"],"WORKER_CLEANUP_FAILED")
+
+    def test_structured_result_rejects_invalid_state_combinations(self):
+        with self.assertRaises(ValueError):
+            _structured_result(self.sample(),{"state":"PRE_COMMIT","preview_state":"UPDATED"})
+        with self.assertRaises(ValueError):
+            _structured_result(self.sample(),{"state":"UNKNOWN","preview_state":"NOT_ATTEMPTED"})
+        with self.assertRaises(ValueError):
+            _structured_result(self.sample(),{"state":"DURABLE","preview_state":"UPDATED",
+                                              "error_class":"RAW_EXCEPTION"})
+
     def test_recovery_tail_and_previews_are_atomic_private_files(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); history=root/"history.jsonl"
@@ -398,7 +468,7 @@ class EngagementMonitorTests(unittest.TestCase):
         result=diff(old,new); self.assertEqual(result["new_rooms"],["new"])
         self.assertEqual(result["not_observed_in_latest_snapshot"],["old"])
         encoded=json.dumps(series([old,new])); self.assertIn("NO_PERSISTENT_CHANGE_ESTABLISHED",encoded)
-        for prohibited in ("SPAM","BOT","DEAD","SYBIL","AIR_DROP_SCORE","REWARD_SCORE"):
+        for prohibited in ("SPAM","BOT","DEAD","SYBIL","AIRDROP_SCORE","REWARD_SCORE","OFFICIAL_REPUTATION"):
             self.assertNotIn(prohibited,encoded)
         same_old=self.sample(); same_new=self.sample("2026-08-29T01:00:00Z")
         same_new["per_room"][0]["window"]=20

@@ -24,9 +24,15 @@ within bounded waits, then reaps and releases ownership. This safety cleanup may
 slightly exceed the normal deadline; unverified cleanup fails explicitly and
 never signals a cached group after ownership release. Uncommitted work is
 discarded without rollback. History, recovery tails, and previews use complete
-`0600` fsynced candidates and atomic replacement. A deadline crossing after the
-history replace is reported as committed rather than as an unchanged-history
-timeout. On platforms without POSIX `setitimer`, the worker deadline and lock
+`0600` fsynced candidates and atomic replacement. History is `PRE_COMMIT` before
+replacement, `COMMITTED` immediately when replacement succeeds, and `DURABLE`
+only after the containing-directory fsync completes. SIGALRM is masked only
+across replacement and publication of `COMMITTED`; a deadline crossing there is
+therefore reported as committed rather than as unchanged history. Directory
+fsync failure reports `COMMITTED` with a safe durability warning and does not
+roll back. Preview state is separate (`NOT_ATTEMPTED`, `UPDATED`, or `FAILED`),
+and history remains authoritative if a deadline or preview failure prevents an
+update. On platforms without POSIX `setitimer`, the worker deadline and lock
 budget remain bounded, but a complete local atomic file operation may finish
 after the nominal crossing; no partial history file is exposed. The collector
 cannot disable the deadline and never retries. Scheduling remains disabled.
