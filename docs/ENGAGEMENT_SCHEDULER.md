@@ -22,7 +22,12 @@ GitHub Actions workflow.
 - Circuit breaker: the first consecutive failure is `DEGRADED`; the second is
   `CIRCUIT_OPEN`. Time never resets an open circuit. `approve-reset` moves it to
   `READY_DISABLED` without collecting; activation or execution is a separate
-  approval.
+  approval. Reset clears the consecutive count but preserves attempt timestamps,
+  last attempt, last success, and the most recent bounded forensic error class.
+- Scheduled success is deliberately stricter than collector history commitment:
+  only a durable history commit with an updated preview and completed cleanup is
+  clean success. Other committed outcomes remain authoritative in history but
+  count as a bounded scheduler failure requiring later review.
 - Collection and publication are separate. The wrapper can only create ignored
   private runtime history/previews through the collector. It cannot update API
   JSON, commit, push, deploy, post messages, or access Presence/KV writers.

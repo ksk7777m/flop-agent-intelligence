@@ -8,7 +8,7 @@ from flop_agent.engagement_scheduler import (
     SchedulerStateError, approve_reset, disabled_state, dry_run, evaluate, load_state,
     run_once, scheduler_lock, validate_state, write_state,
 )
-from scripts.engagement_scheduler import _collector
+from scripts.engagement_scheduler import CODE_ROOT, REVIEWED_COLLECTOR, _collector, _validated_result
 
 NOW=datetime(2026,9,1,12,0,0,tzinfo=timezone.utc)
 
@@ -19,6 +19,31 @@ def stamp(value): return value.isoformat().replace("+00:00","Z")
 def ready_state():
     state=disabled_state(); state.update(scheduler_enabled=True,circuit_state="READY")
     return state
+
+
+def diagnostics():
+    return {"failure_stage":None,"total_elapsed_seconds":1.0,"open_elapsed_seconds":.4,
+            "body_elapsed_seconds":.5,"http_status":200,"response_bytes":100,
+            "configured_socket_timeout":20.0,"configured_total_deadline":30.0}
+
+
+def success_result():
+    return {"ok":True,"success":True,"sample":{"schema":"engagement-sample-v1"},
+            "commit_state":"DURABLE","preview_state":"UPDATED","cleanup_state":"COMPLETED",
+            "deadline_cleanup_overrun":False,"error_class":None,"durability_warning":None,
+            "preview_warning":None,"cleanup_error":None,"network_diagnostics":diagnostics()}
+
+
+def failure_result(error="HTTP_BODY_TIMEOUT"):
+    network = None
+    if error in {"HTTP_OPEN_TIMEOUT","HTTP_OPEN_FAILED","HTTP_BODY_TIMEOUT","HTTP_BODY_FAILED"}:
+        network=diagnostics(); network.update(failure_stage="HTTP_OPEN" if error.startswith("HTTP_OPEN") else "HTTP_BODY",
+                                              http_status=None,response_bytes=None)
+        if error.startswith("HTTP_OPEN"): network["body_elapsed_seconds"]=None
+    return {"success":False,"commit_state":"PRE_COMMIT","preview_state":"NOT_ATTEMPTED",
+            "cleanup_state":"COMPLETED","deadline_cleanup_overrun":False,"error_class":error,
+            "durability_warning":None,"preview_warning":None,"cleanup_error":None,
+            "network_diagnostics":network,"collector_version":"0.1.0","git_revision":None}
 
 
 class EngagementSchedulerTests(unittest.TestCase):
@@ -114,13 +139,18 @@ class EngagementSchedulerTests(unittest.TestCase):
     def test_explicit_reset_is_two_step_and_does_not_invoke(self):
         with tempfile.TemporaryDirectory() as folder:
             state_path,lock_path=self.paths(Path(folder)); state=disabled_state()
+            attempts=[stamp(NOW-timedelta(hours=2)),stamp(NOW-timedelta(hours=1))]
             state.update(circuit_state="CIRCUIT_OPEN",consecutive_failures=2,
-                         last_error_class="HTTP_BODY_TIMEOUT")
+                         last_error_class="HTTP_BODY_TIMEOUT",last_attempt_at=attempts[-1],
+                         last_success_at=attempts[0],attempts_24h=attempts)
             write_state(state_path,state,now=NOW)
             result=approve_reset(state_path,lock_path,now=NOW)
             self.assertEqual((result["outcome"],result["collector_invocations"]),("SCHEDULER_RESET_APPROVED",0))
             saved=load_state(state_path,now=NOW)
             self.assertEqual((saved["circuit_state"],saved["scheduler_enabled"]),("READY_DISABLED",False))
+            self.assertEqual(saved["last_error_class"],"HTTP_BODY_TIMEOUT")
+            self.assertEqual(saved["attempts_24h"],attempts)
+            self.assertEqual((saved["last_attempt_at"],saved["last_success_at"]),(attempts[-1],attempts[0]))
 
     def test_missing_corrupt_future_and_unsafe_state_fail_closed(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -160,23 +190,66 @@ class EngagementSchedulerTests(unittest.TestCase):
             result=run_once(state_path,lock_path,lambda:calls.append(1),now=NOW)
             self.assertEqual((result["outcome"],result["collector_invocations"],calls),
                              ("SCHEDULER_RECOVERED_INTERRUPTED_RUN",0,[]))
-            self.assertEqual(load_state(state_path,now=NOW)["circuit_state"],"DEGRADED")
+            recovered=load_state(state_path,now=NOW)
+            self.assertEqual(recovered["circuit_state"],"DEGRADED")
+            self.assertEqual(recovered["attempts_24h"],[stamp(NOW-timedelta(minutes=31))])
+            blocked=run_once(state_path,lock_path,lambda:calls.append(1),now=NOW+timedelta(minutes=28))
+            self.assertEqual((blocked["outcome"],calls),("SCHEDULER_MIN_INTERVAL",[]))
 
     def test_cli_collector_invocation_is_exactly_once_and_bounded(self):
-        completed=mock.Mock(stdout=b'{"success":false,"error_class":"HTTP_BODY_TIMEOUT"}',returncode=1)
+        completed=mock.Mock(stdout=json.dumps(failure_result()).encode(),returncode=1)
         with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed) as called:
             result=_collector(Path("/repo"))
         self.assertEqual(result,{"success":False,"error_class":"HTTP_BODY_TIMEOUT"})
         called.assert_called_once()
         command=called.call_args.args[0]
-        self.assertEqual(command[1:],['/repo/scripts/collect_engagement.py','--root','/repo'])
+        self.assertEqual(command[1:],[str(REVIEWED_COLLECTOR),'--root','/repo'])
         self.assertNotIn("curl"," ".join(command)); self.assertNotIn("http"," ".join(command))
-        completed=mock.Mock(stdout=b'{"success":true,"error_class":null,"cleanup_error":"WORKER_CLEANUP_FAILED"}',returncode=0)
-        with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed):
-            self.assertEqual(_collector(Path("/repo"))["error_class"],"WORKER_CLEANUP_FAILED")
         completed=mock.Mock(stdout=b'{"success":true,"error_class":null}',returncode=7)
         with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed):
-            self.assertEqual(_collector(Path("/repo"))["error_class"],"VALIDATION_FAILED")
+            self.assertEqual(_collector(Path("/repo"))["error_class"],"COLLECTOR_RESULT_INVALID")
+
+    def test_runtime_root_cannot_substitute_collector(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); malicious=root/"scripts/collect_engagement.py"; marker=root/"executed"
+            malicious.parent.mkdir(); malicious.write_text("from pathlib import Path\nPath(%r).touch()\n" % str(marker))
+            completed=mock.Mock(stdout=json.dumps(failure_result()).encode(),returncode=1)
+            with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed) as called:
+                _collector(root)
+            self.assertEqual(called.call_args.args[0][1],str(CODE_ROOT/"scripts/collect_engagement.py"))
+            self.assertFalse(marker.exists())
+
+    def test_strict_collector_result_matrix(self):
+        self.assertEqual(_validated_result(success_result(),0),{"success":True,"error_class":None})
+        self.assertEqual(_validated_result(failure_result(),1)["error_class"],"HTTP_BODY_TIMEOUT")
+        invalid=[]
+        underspecified={"success":True,"error_class":None}
+        invalid.append(underspecified)
+        for field,value in (("commit_state","PRE_COMMIT"),("cleanup_state","FAILED"),
+                            ("error_class","VALIDATION_FAILED")):
+            item=success_result(); item[field]=value; invalid.append(item)
+        item=failure_result(); item["commit_state"]="DURABLE"; invalid.append(item)
+        item=success_result(); item["network_diagnostics"]["failure_stage"]="UNKNOWN"; invalid.append(item)
+        item=success_result(); item["unknown"]="dangerous"; invalid.append(item)
+        for item in invalid:
+            with self.subTest(item=item):
+                self.assertEqual(_validated_result(item,0 if item.get("success") else 1)["error_class"],
+                                 "COLLECTOR_RESULT_INVALID")
+        item=success_result(); item["commit_state"]="COMMITTED"; item["durability_warning"]="POST_COMMIT_DURABILITY_WARNING"
+        self.assertEqual(_validated_result(item,0)["error_class"],"COLLECTOR_RESULT_NOT_DURABLE")
+        item=success_result(); item["preview_state"]="FAILED"; item["preview_warning"]="POST_COMMIT_PREVIEW_WARNING"
+        self.assertEqual(_validated_result(item,0)["error_class"],"COLLECTOR_PREVIEW_FAILED")
+
+    def test_lock_is_private_from_creation_and_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as folder:
+            lock=Path(folder)/"scheduler.lock"
+            with mock.patch("flop_agent.engagement_scheduler.os.open",wraps=os.open) as opened:
+                with scheduler_lock(lock):
+                    self.assertEqual(lock.stat().st_mode&0o777,0o600)
+            self.assertEqual(opened.call_args.args[2],0o600)
+            target=Path(folder)/"target"; target.touch(); lock.unlink(); lock.symlink_to(target)
+            with self.assertRaises(SchedulerStateError):
+                with scheduler_lock(lock): pass
 
     def test_no_publication_presence_kv_or_schedule_activation_surface(self):
         root=Path(__file__).resolve().parents[1]

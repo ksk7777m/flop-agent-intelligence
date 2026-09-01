@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import stat
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +23,8 @@ FAILURE_CLASSES = {
     "TOTAL_DEADLINE_EXCEEDED", "VALIDATION_FAILED", "HISTORY_LOCK_TIMEOUT",
     "WORKER_PROTOCOL_ERROR", "WORKER_CRASHED", "WORKER_STARTUP_FAILED",
     "WORKER_CLEANUP_FAILED", "WORKER_CLEANUP_UNVERIFIED",
+    "COLLECTOR_RESULT_INVALID", "COLLECTOR_RESULT_NOT_DURABLE",
+    "COLLECTOR_PREVIEW_FAILED",
 }
 OUTCOMES = {
     "SCHEDULER_DISABLED", "SCHEDULER_READY", "SCHEDULER_MIN_INTERVAL",
@@ -94,7 +97,7 @@ def validate_state(value: Mapping[str, Any], *, now: datetime | None = None) -> 
     enabled = value["scheduler_enabled"]
     failures = value["consecutive_failures"]
     error = value["last_error_class"]
-    if ((state == "READY_DISABLED" and (enabled or failures != 0 or error is not None))
+    if ((state == "READY_DISABLED" and (enabled or failures != 0))
             or (state == "READY" and (not enabled or failures != 0 or error is not None))
             or (state == "DEGRADED" and (not enabled or failures != 1 or error is None))
             or (state == "CIRCUIT_OPEN" and (enabled or failures != FAILURE_THRESHOLD or error is None))
@@ -144,13 +147,28 @@ def write_state(path: Path, state: Mapping[str, Any], *, now: datetime | None = 
 @contextmanager
 def scheduler_lock(path: Path, *, blocking: bool = False):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+b") as lock:
-        os.chmod(path, 0o600)
-        flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
-        try: fcntl.flock(lock.fileno(), flags)
-        except BlockingIOError: raise SchedulerStateError("SCHEDULER_RUN_ALREADY_ACTIVE") from None
-        try: yield
-        finally: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    flags = os.O_CREAT | os.O_RDWR
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError:
+        raise SchedulerStateError("SCHEDULER_STATE_INVALID") from None
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SchedulerStateError("SCHEDULER_STATE_INVALID")
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            raise SchedulerStateError("SCHEDULER_STATE_PERMISSIONS")
+        lock = os.fdopen(descriptor, "a+b")
+        descriptor = -1
+        with lock:
+            flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+            try: fcntl.flock(lock.fileno(), flags)
+            except BlockingIOError: raise SchedulerStateError("SCHEDULER_RUN_ALREADY_ACTIVE") from None
+            try: yield
+            finally: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    finally:
+        if descriptor >= 0: os.close(descriptor)
 
 
 def _recent_attempts(state: Mapping[str, Any], now: datetime) -> list[datetime]:
@@ -245,7 +263,7 @@ def approve_reset(state_path: Path, lock_path: Path, *, now: datetime | None = N
             if state["circuit_state"] != "CIRCUIT_OPEN":
                 return {"success":False,"outcome":"SCHEDULER_STATE_INVALID","collector_invocations":0}
             state.update(scheduler_enabled=False,circuit_state="READY_DISABLED",consecutive_failures=0,
-                         last_error_class=None,run_in_progress=False)
+                         run_in_progress=False)
             write_state(state_path,state,now=now)
             return {"success":True,"outcome":"SCHEDULER_RESET_APPROVED",
                     "circuit_state":"READY_DISABLED","collector_invocations":0}
