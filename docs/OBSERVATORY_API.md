@@ -13,6 +13,13 @@ and an actual bounded read. Runtime samples are schema-validated before append.
 The one-shot CLI uses one absolute monotonic budget (1–30 seconds, default 30)
 for bounded Git metadata, worker startup, IPC, and parent commit, while retaining
 the 20-second socket timeout. The process boundary also bounds blocking DNS.
+The existing urllib path records privacy-safe diagnostics outside sample/history:
+`HTTP_OPEN_TIMEOUT` occurs before response headers are available, while
+`HTTP_BODY_TIMEOUT` occurs during the bounded body read. Non-timeout failures
+use `HTTP_OPEN_FAILED` or `HTTP_BODY_FAILED`. These stages do not claim DNS,
+TCP, TLS, or server substage precision. IPC accepts only fixed enums, finite
+non-negative elapsed timings, safe status, bounded byte count, and configured
+budgets; exception text, headers, and partial bodies are not retained.
 Before collection, the internal worker must prove `PID = PGID = SID` and wait
 for the parent's READY acknowledgment; failed session setup is
 `WORKER_STARTUP_FAILED` and performs no request. The worker cannot be selected

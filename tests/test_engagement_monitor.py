@@ -12,7 +12,7 @@ from scripts.collect_engagement import (
     OwnershipState, WorkerOwnership,
     SOCKET_TIMEOUT_SECONDS, TOTAL_COLLECTION_DEADLINE_SECONDS,
     TotalDeadlineExceeded, _cleanup_owned, _decode_worker_result, backoff, commit_sample, fetch,
-    _structured_result, interval_minutes, prepare_sample, run_with_total_deadline,
+    _network_diagnostics, _precommit_failure_result, _structured_result, interval_minutes, prepare_sample, run_with_total_deadline,
     total_deadline_seconds, validate_endpoint,
 )
 import jsonschema
@@ -24,7 +24,8 @@ def _worker_sample(when="2026-08-29T00:00:00Z"):
 
 
 def successful_worker(connection, root, timeout, revision):
-    connection.send_bytes(json.dumps({"ok":True,"sample":_worker_sample()}).encode())
+    connection.send_bytes(json.dumps({"ok":True,"sample":_worker_sample(),
+                                      "network_diagnostics":_network_diagnostics(timeout)}).encode())
     connection.close()
 
 
@@ -62,9 +63,10 @@ def offline_prepare_worker(connection, root, timeout, revision):
     def opener(request, timeout):
         calls.write_text(str(int(calls.read_text())+1 if calls.exists() else 1))
         return Response(b'{"total":1,"rooms":[{"room":"safe","window":20}],"engagement":{}}')
-    sample=prepare_sample(Path(root),timeout=timeout,opener=opener,
+    diagnostics=_network_diagnostics(timeout)
+    sample=prepare_sample(Path(root),timeout=timeout,opener=opener,diagnostics=diagnostics,
                           fetched_at="2026-08-29T00:00:00Z",git_revision=revision)
-    connection.send_bytes(json.dumps({"ok":True,"sample":sample}).encode()); connection.close()
+    connection.send_bytes(json.dumps({"ok":True,"sample":sample,"network_diagnostics":diagnostics}).encode()); connection.close()
 
 
 class Response:
@@ -123,6 +125,57 @@ class EngagementMonitorTests(unittest.TestCase):
         with self.assertRaises(CollectionError) as caught:
             fetch(opener=lambda req, timeout: response)
         self.assertEqual(caught.exception.code,"RESPONSE_TOO_LARGE")
+
+    def test_safe_network_stage_diagnostics(self):
+        calls=[]
+        diagnostics=_network_diagnostics(20)
+        with self.assertRaises(CollectionError) as caught:
+            fetch(opener=lambda req,timeout:(calls.append(1),(_ for _ in ()).throw(TimeoutError("raw open secret")))[1],
+                  diagnostics=diagnostics)
+        self.assertEqual(caught.exception.code,"HTTP_OPEN_TIMEOUT")
+        self.assertEqual(diagnostics["failure_stage"],"HTTP_OPEN"); self.assertEqual(len(calls),1)
+        self.assertNotIn("raw open secret",json.dumps(diagnostics))
+
+        class ReadFailure(Response):
+            def __init__(self,error): super().__init__(b""); self.error=error
+            def read(self,size=-1): raise self.error
+        for error, code in ((TimeoutError("raw body secret"),"HTTP_BODY_TIMEOUT"),
+                            (OSError("raw read secret"),"HTTP_BODY_FAILED")):
+            diagnostics=_network_diagnostics(20)
+            with self.subTest(code=code),self.assertRaises(CollectionError) as caught:
+                fetch(opener=lambda req,timeout,e=error:ReadFailure(e),diagnostics=diagnostics)
+            self.assertEqual(caught.exception.code,code); self.assertEqual(diagnostics["failure_stage"],"HTTP_BODY")
+            self.assertNotIn("secret",json.dumps(diagnostics))
+
+        diagnostics=_network_diagnostics(20)
+        body,status,_=fetch(opener=lambda req,timeout:Response(b"{}"),diagnostics=diagnostics)
+        self.assertEqual((body,status),(b"{}",200)); self.assertIsNone(diagnostics["failure_stage"])
+        self.assertEqual(diagnostics["response_bytes"],2)
+        for field in ("open_elapsed_seconds","body_elapsed_seconds","total_elapsed_seconds"):
+            self.assertIsNotNone(diagnostics[field]); self.assertGreaterEqual(diagnostics[field],0)
+
+    def test_non_timeout_open_failure_is_bounded_and_diagnostics_are_strict(self):
+        diagnostics=_network_diagnostics(20)
+        with self.assertRaises(CollectionError) as caught:
+            fetch(opener=lambda req,timeout:(_ for _ in ()).throw(OSError("private dns detail")),
+                  diagnostics=diagnostics)
+        self.assertEqual(caught.exception.code,"HTTP_OPEN_FAILED")
+        self.assertEqual(diagnostics["failure_stage"],"HTTP_OPEN")
+        self.assertNotIn("private dns detail",json.dumps(diagnostics))
+        valid=json.dumps({"ok":False,"error_class":"HTTP_OPEN_TIMEOUT",
+                          "network_diagnostics":diagnostics}).encode()
+        self.assertEqual(_decode_worker_result(valid,0)["error_class"],"HTTP_OPEN_TIMEOUT")
+        bad=dict(diagnostics); bad["open_elapsed_seconds"]=float("inf")
+        invalid=json.dumps({"ok":False,"error_class":"HTTP_OPEN_TIMEOUT",
+                            "network_diagnostics":bad}).encode()
+        with self.assertRaises(CollectionError) as protocol:
+            _decode_worker_result(invalid,0)
+        self.assertEqual(protocol.exception.code,"WORKER_PROTOCOL_ERROR")
+        failure=_precommit_failure_result(CollectionError(None,code="HTTP_OPEN_FAILED",
+                                                          diagnostics=diagnostics),30)
+        self.assertFalse(failure["success"]); self.assertEqual(failure["commit_state"],"PRE_COMMIT")
+        self.assertEqual(failure["preview_state"],"NOT_ATTEMPTED")
+        self.assertNotIn("private dns detail",json.dumps(failure))
         oversized=Response(b"x" * (MAX_RESPONSE_BYTES + 1))
         with self.assertRaises(CollectionError) as caught:
             fetch(opener=lambda req, timeout: oversized)
@@ -172,9 +225,10 @@ class EngagementMonitorTests(unittest.TestCase):
 
     def test_ipc_protocol_and_crash_fail_closed(self):
         sample=_worker_sample()
-        valid=json.dumps({"ok":True,"sample":sample}).encode()
+        valid=json.dumps({"ok":True,"sample":sample,"network_diagnostics":_network_diagnostics(20)}).encode()
         self.assertTrue(_decode_worker_result(valid,0)["ok"])
-        self.assertEqual(_decode_worker_result(b'{"ok":false,"error_class":"HTTP_TIMEOUT"}',0)["error_class"],"HTTP_TIMEOUT")
+        failure=json.dumps({"ok":False,"error_class":"HTTP_TIMEOUT","network_diagnostics":_network_diagnostics(20)}).encode()
+        self.assertEqual(_decode_worker_result(failure,0)["error_class"],"HTTP_TIMEOUT")
         invalid=[b'{"ok":true}',b'{"safe":"result"}',b'{"ok":true,"sample":1}',
                  b'{"ok":true,"sample":{},"extra":1}',b'bad',b'',b'x'*(MAX_IPC_BYTES+1)]
         for payload in invalid:
@@ -524,7 +578,9 @@ class EngagementMonitorTests(unittest.TestCase):
         with self.assertRaises(CollectionError) as caught: fetch(opener=limited)
         self.assertEqual(caught.exception.retry_after,37)
         self.assertIsNone(backoff(429,retry_header="tomorrow")); self.assertEqual(backoff(503,99),21600)
-        with self.assertRaises(TimeoutError): fetch(opener=lambda req, timeout: (_ for _ in ()).throw(TimeoutError()))
+        with self.assertRaises(CollectionError) as timeout_error:
+            fetch(opener=lambda req, timeout: (_ for _ in ()).throw(TimeoutError()))
+        self.assertEqual(timeout_error.exception.code,"HTTP_OPEN_TIMEOUT")
 
     def test_interval_and_normalization(self):
         self.assertEqual(interval_minutes("15"),15)

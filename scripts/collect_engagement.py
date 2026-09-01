@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import argparse, hashlib, json, multiprocessing, os, signal, socket, subprocess, threading, time
+import argparse, hashlib, json, math, multiprocessing, os, signal, socket, subprocess, threading, time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -26,7 +26,9 @@ MAX_TOTAL_COLLECTION_DEADLINE_SECONDS = 30.0
 TERMINATION_GRACE_SECONDS = 0.1
 MAX_IPC_BYTES = 256 * 1024
 MIN_COMMIT_BUDGET_SECONDS = 0.5
-WORKER_ERRORS = {"HTTP_TIMEOUT", "VALIDATION_FAILED", "RESPONSE_TOO_LARGE"}
+WORKER_ERRORS = {"HTTP_TIMEOUT", "HTTP_OPEN_TIMEOUT", "HTTP_BODY_TIMEOUT",
+                 "HTTP_OPEN_FAILED", "HTTP_BODY_FAILED", "VALIDATION_FAILED",
+                 "RESPONSE_TOO_LARGE"}
 STARTUP_IPC_BYTES = 1024
 COMMIT_STATES = {"PRE_COMMIT", "COMMITTED", "DURABLE"}
 PREVIEW_STATES = {"NOT_ATTEMPTED", "UPDATED", "FAILED"}
@@ -42,10 +44,11 @@ class NoRedirect(HTTPRedirectHandler):
 
 class CollectionError(RuntimeError):
     def __init__(self, status: int | None, retry_after: int | None = None,
-                 code: str = "COLLECTION_FAILED"):
+                 code: str = "COLLECTION_FAILED", diagnostics: dict | None = None):
         super().__init__(code if code == "RESPONSE_TOO_LARGE"
                          else f"engagement collection failed: HTTP {status or 'NETWORK'}")
         self.status, self.retry_after, self.code = status, retry_after, code
+        self.diagnostics = diagnostics
 
 
 class TotalDeadlineExceeded(RuntimeError):
@@ -85,31 +88,98 @@ def backoff(status: int, failure_count: int = 1, retry_header: str | None = None
     return None
 
 
-def fetch(*, timeout: float = 20.0, opener=None) -> tuple[bytes, int, object]:
+def _network_diagnostics(timeout: float) -> dict:
+    return {"failure_stage":None, "total_elapsed_seconds":None,
+            "open_elapsed_seconds":None, "body_elapsed_seconds":None,
+            "http_status":None, "response_bytes":None,
+            "configured_socket_timeout":float(timeout)}
+
+
+def _elapsed(start: float, end: float | None = None) -> float:
+    return round(max(0.0, (time.monotonic() if end is None else end) - start), 6)
+
+
+def _validate_network_diagnostics(value: dict) -> dict:
+    keys = {"failure_stage","total_elapsed_seconds","open_elapsed_seconds",
+            "body_elapsed_seconds","http_status","response_bytes","configured_socket_timeout"}
+    if not isinstance(value, dict) or set(value) != keys or value["failure_stage"] not in {None,"HTTP_OPEN","HTTP_BODY"}:
+        raise ValueError("invalid network diagnostics")
+    for name in ("total_elapsed_seconds","open_elapsed_seconds","body_elapsed_seconds","configured_socket_timeout"):
+        number=value[name]
+        if number is not None and (type(number) not in (int,float) or not math.isfinite(number) or not 0 <= number <= 60):
+            raise ValueError("invalid network diagnostics")
+    status=value["http_status"]
+    if status is not None and (type(status) is not int or not 100 <= status <= 599): raise ValueError("invalid network diagnostics")
+    size=value["response_bytes"]
+    if size is not None and (type(size) is not int or not 0 <= size <= MAX_RESPONSE_BYTES): raise ValueError("invalid network diagnostics")
+    return dict(value)
+
+
+def fetch(*, timeout: float = 20.0, opener=None, diagnostics: dict | None = None) -> tuple[bytes, int, object]:
+    diagnostics = diagnostics if diagnostics is not None else _network_diagnostics(timeout)
+    request_start = open_start = time.monotonic()
     request = Request(validate_endpoint(SOURCE_URL), method="GET", headers={
         "Accept": "application/json",
         "User-Agent": f"flop-agent-intelligence/{VERSION} (+https://github.com/ksk7777m/flop-agent-intelligence)",
     })
     open_fn = opener or build_opener(NoRedirect()).open
     try:
-        with open_fn(request, timeout=timeout) as response:
-            if response.geturl() != SOURCE_URL: raise CollectionError(response.status)
+        try:
+            response = open_fn(request, timeout=timeout)
+        except (TimeoutError, socket.timeout):
+            diagnostics.update(failure_stage="HTTP_OPEN", open_elapsed_seconds=_elapsed(open_start),
+                               total_elapsed_seconds=_elapsed(request_start))
+            raise CollectionError(None, code="HTTP_OPEN_TIMEOUT", diagnostics=diagnostics) from None
+        except HTTPError as error:
+            diagnostics.update(failure_stage="HTTP_OPEN", open_elapsed_seconds=_elapsed(open_start),
+                               total_elapsed_seconds=_elapsed(request_start), http_status=error.code)
+            retry_after = error.headers.get("Retry-After") if error.headers is not None else None
+            raise CollectionError(error.code, backoff(error.code, retry_header=retry_after),
+                                  code="HTTP_OPEN_FAILED", diagnostics=diagnostics) from None
+        except URLError as error:
+            code = "HTTP_OPEN_TIMEOUT" if isinstance(error.reason, (TimeoutError, socket.timeout)) else "HTTP_OPEN_FAILED"
+            diagnostics.update(failure_stage="HTTP_OPEN", open_elapsed_seconds=_elapsed(open_start),
+                               total_elapsed_seconds=_elapsed(request_start))
+            raise CollectionError(None, code=code, diagnostics=diagnostics) from None
+        except OSError:
+            diagnostics.update(failure_stage="HTTP_OPEN", open_elapsed_seconds=_elapsed(open_start),
+                               total_elapsed_seconds=_elapsed(request_start))
+            raise CollectionError(None, code="HTTP_OPEN_FAILED", diagnostics=diagnostics) from None
+        open_end=time.monotonic(); diagnostics["open_elapsed_seconds"]=_elapsed(open_start,open_end)
+        with response:
+            diagnostics["http_status"] = response.status
+            if response.geturl() != SOURCE_URL:
+                diagnostics.update(failure_stage="HTTP_OPEN",
+                                   total_elapsed_seconds=_elapsed(request_start))
+                raise CollectionError(response.status, code="HTTP_OPEN_FAILED", diagnostics=diagnostics)
             declared = response.headers.get("Content-Length")
             if isinstance(declared, str) and declared.strip().isdigit() and int(declared) > MAX_RESPONSE_BYTES:
-                raise CollectionError(response.status, code="RESPONSE_TOO_LARGE")
-            body = response.read(MAX_RESPONSE_BYTES + 1)
+                raise CollectionError(response.status, code="RESPONSE_TOO_LARGE", diagnostics=diagnostics)
+            body_start=time.monotonic()
+            try: body = response.read(MAX_RESPONSE_BYTES + 1)
+            except (TimeoutError, socket.timeout):
+                diagnostics.update(failure_stage="HTTP_BODY", body_elapsed_seconds=_elapsed(body_start),
+                                   total_elapsed_seconds=_elapsed(request_start))
+                raise CollectionError(response.status, code="HTTP_BODY_TIMEOUT", diagnostics=diagnostics) from None
+            except Exception:
+                diagnostics.update(failure_stage="HTTP_BODY", body_elapsed_seconds=_elapsed(body_start),
+                                   total_elapsed_seconds=_elapsed(request_start))
+                raise CollectionError(response.status, code="HTTP_BODY_FAILED", diagnostics=diagnostics) from None
+            diagnostics.update(body_elapsed_seconds=_elapsed(body_start), total_elapsed_seconds=_elapsed(request_start))
             if len(body) > MAX_RESPONSE_BYTES:
-                raise CollectionError(response.status, code="RESPONSE_TOO_LARGE")
+                raise CollectionError(response.status, code="RESPONSE_TOO_LARGE", diagnostics=diagnostics)
+            diagnostics["response_bytes"] = len(body)
             return body, response.status, response.headers
     except HTTPError as error:
-        # Deliberately discard every error body and perform no retry.
-        raise CollectionError(error.code, backoff(error.code, retry_header=error.headers.get("Retry-After"))) from None
+        # Defensive fallback: discard every error body and perform no retry.
+        raise CollectionError(error.code, code="HTTP_OPEN_FAILED", diagnostics=diagnostics) from None
 
 
 def prepare_sample(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECONDS, opener=None,
-                   fetched_at: str | None = None, git_revision: str | None = None) -> dict:
+                   fetched_at: str | None = None, git_revision: str | None = None,
+                   diagnostics: dict | None = None) -> dict:
     interval_minutes()
-    body, status, _headers = fetch(timeout=timeout, opener=opener)
+    body, status, _headers = fetch(timeout=timeout, opener=opener, diagnostics=diagnostics)
     try: raw = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError): raise ValueError("official endpoint returned invalid JSON") from None
     if not isinstance(raw, dict): raise ValueError("official endpoint returned a non-object")
@@ -188,6 +258,8 @@ def _structured_result(sample: dict, transaction: dict[str, str], *,
     error = transaction.get("error_class")
     durability_warning = transaction.get("durability_warning")
     preview_warning = transaction.get("preview_warning")
+    network_diagnostics = transaction.get("network_diagnostics")
+    if network_diagnostics is not None: network_diagnostics = _validate_network_diagnostics(network_diagnostics)
     expected_success = state in {"COMMITTED", "DURABLE"}
     success = expected_success if success is None else success
     if (state not in COMMIT_STATES or preview not in PREVIEW_STATES
@@ -210,7 +282,8 @@ def _structured_result(sample: dict, transaction: dict[str, str], *,
             "commit_state": state, "preview_state": preview,
             "cleanup_state": cleanup_state, "deadline_cleanup_overrun": deadline_cleanup_overrun,
             "error_class": error, "durability_warning": durability_warning,
-            "preview_warning": preview_warning, "cleanup_error": cleanup_error}
+            "preview_warning": preview_warning, "cleanup_error": cleanup_error,
+            "network_diagnostics": network_diagnostics}
 
 
 def _merge_cleanup_failure(result: dict, cleanup_error: str = "WORKER_CLEANUP_FAILED") -> dict:
@@ -220,6 +293,7 @@ def _merge_cleanup_failure(result: dict, cleanup_error: str = "WORKER_CLEANUP_FA
         "error_class": result["error_class"],
         "durability_warning": result["durability_warning"],
         "preview_warning": result["preview_warning"],
+        "network_diagnostics": result.get("network_diagnostics"),
     }
     return _structured_result(
         result["sample"], transaction,
@@ -227,6 +301,17 @@ def _merge_cleanup_failure(result: dict, cleanup_error: str = "WORKER_CLEANUP_FA
         cleanup_state="FAILED", cleanup_error=result.get("cleanup_error") or cleanup_error,
         success=result["success"],
     )
+
+
+def _precommit_failure_result(error: CollectionError, total_deadline: float) -> dict:
+    diagnostics = _validate_network_diagnostics(error.diagnostics) if error.diagnostics is not None else None
+    if diagnostics is not None: diagnostics["configured_total_deadline"] = total_deadline
+    return {"success":False, "commit_state":"PRE_COMMIT",
+            "durability_warning":None, "preview_state":"NOT_ATTEMPTED",
+            "preview_warning":None, "cleanup_state":"COMPLETED", "cleanup_error":None,
+            "deadline_cleanup_overrun":False, "error_class":error.code,
+            "network_diagnostics":diagnostics, "collector_version":VERSION,
+            "git_revision":None}
 
 
 def _git_revision(root: Path, deadline_at: float) -> str | None:
@@ -245,17 +330,21 @@ def _error_envelope(error_class: str) -> dict:
 
 
 def _worker_entry(connection, root: str, timeout: float, revision: str | None) -> None:
+    diagnostics = _network_diagnostics(timeout)
     try:
         try:
             envelope = {"ok": True, "sample": prepare_sample(Path(root), timeout=timeout,
-                                                               git_revision=revision)}
-        except (TimeoutError, socket.timeout): envelope = _error_envelope("HTTP_TIMEOUT")
+                                                               git_revision=revision,
+                                                               diagnostics=diagnostics),
+                        "network_diagnostics":diagnostics}
+        except (TimeoutError, socket.timeout): envelope = {**_error_envelope("HTTP_TIMEOUT"), "network_diagnostics":diagnostics}
         except URLError as error:
-            envelope = _error_envelope("HTTP_TIMEOUT" if isinstance(error.reason, (TimeoutError, socket.timeout))
-                                       else "VALIDATION_FAILED")
+            envelope = {**_error_envelope("HTTP_TIMEOUT" if isinstance(error.reason, (TimeoutError, socket.timeout))
+                                          else "HTTP_OPEN_FAILED"), "network_diagnostics":diagnostics}
         except CollectionError as error:
-            envelope = _error_envelope(error.code if error.code in WORKER_ERRORS else "VALIDATION_FAILED")
-        except Exception: envelope = _error_envelope("VALIDATION_FAILED")
+            envelope = {**_error_envelope(error.code if error.code in WORKER_ERRORS else "VALIDATION_FAILED"),
+                        "network_diagnostics":error.diagnostics or diagnostics}
+        except Exception: envelope = {**_error_envelope("VALIDATION_FAILED"), "network_diagnostics":diagnostics}
         encoded = json.dumps(envelope, separators=(",", ":"), allow_nan=False).encode("utf-8")
         connection.send_bytes(encoded)
     except BaseException:
@@ -374,13 +463,15 @@ def _decode_worker_result(payload: bytes, exit_code: int | None) -> dict:
     if not isinstance(envelope, dict) or type(envelope.get("ok")) is not bool:
         raise CollectionError(None, code="WORKER_PROTOCOL_ERROR")
     if envelope["ok"]:
-        if set(envelope) != {"ok", "sample"} or not isinstance(envelope.get("sample"), dict):
+        if set(envelope) != {"ok", "sample", "network_diagnostics"} or not isinstance(envelope.get("sample"), dict):
             raise CollectionError(None, code="WORKER_PROTOCOL_ERROR")
         try: envelope["sample"] = validate(envelope["sample"])
         except ValueError: raise CollectionError(None, code="WORKER_PROTOCOL_ERROR") from None
     else:
-        if set(envelope) != {"ok", "error_class"} or envelope.get("error_class") not in WORKER_ERRORS:
+        if set(envelope) != {"ok", "error_class", "network_diagnostics"} or envelope.get("error_class") not in WORKER_ERRORS:
             raise CollectionError(None, code="WORKER_PROTOCOL_ERROR")
+    try: envelope["network_diagnostics"] = _validate_network_diagnostics(envelope["network_diagnostics"])
+    except ValueError: raise CollectionError(None, code="WORKER_PROTOCOL_ERROR") from None
     return envelope
 
 
@@ -460,7 +551,9 @@ def run_with_total_deadline(root: Path, *, timeout: float = SOCKET_TIMEOUT_SECON
         else: ownership.state = OwnershipState.REAPED; ownership.release()
         envelope = _decode_worker_result(payload, process.exitcode)
         result_sample = envelope.get("sample")
-        if not envelope["ok"]: raise CollectionError(None, code=envelope["error_class"])
+        transaction["network_diagnostics"] = envelope["network_diagnostics"]
+        if not envelope["ok"]:
+            raise CollectionError(None, code=envelope["error_class"], diagnostics=envelope["network_diagnostics"])
         remaining = deadline_at - time.monotonic()
         if remaining < MIN_COMMIT_BUDGET_SECONDS: raise TotalDeadlineExceeded({})
         try:
@@ -552,8 +645,10 @@ def main() -> None:
     except TotalDeadlineExceeded as error:
         print(json.dumps(error.metadata, indent=2)); raise SystemExit(2) from None
     except CollectionError as error:
-        print(json.dumps({"error_class": error.code, "collector_version": VERSION,
-                          "git_revision": None}, indent=2)); raise SystemExit(1) from None
+        print(json.dumps(_precommit_failure_result(error,args.total_deadline),indent=2))
+        raise SystemExit(1) from None
+    if result.get("network_diagnostics") is not None:
+        result["network_diagnostics"]["configured_total_deadline"] = args.total_deadline
     print(json.dumps(result, indent=2))
     if not result["success"]: raise SystemExit(1)
 
