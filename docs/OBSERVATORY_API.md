@@ -70,7 +70,7 @@ snapshot. It is a bounded snapshot, not a live connection or historical archive.
 | URL path | Schema | Purpose |
 |---|---|---|
 | `/api/observatory.json` | `technocore-observatory-v1` | Combined snapshot |
-| `/api/rooms.json` | `technocore-observatory-rooms-v1` | Up to 200 room metadata rows |
+| `/api/rooms.json` | `technocore-observatory-rooms-v2` | Up to 200 room metadata rows |
 | `/api/engagement.json` | `technocore-observatory-engagement-v1` | Official rollup metrics |
 | `/api/status.json` | `technocore-observatory-status-v1` | Coverage, freshness and warnings |
 
@@ -88,6 +88,11 @@ Every output includes source and freshness information. Official values use
 `derived: false`. Local room classifications use `derived: true`; the
 `derived_fields` object maps each calculated field name to its current method.
 Null means unavailable, never zero.
+
+Rooms schema v2 replaces the misleading derived-view key
+`most_conversational` with `lowest_zero_response_share`. The v1 key is not
+retained as an alias because different-nickname succession does not establish
+a conversation; the ascending `zero_response_share` ranking is unchanged.
 
 `warnings` is required at the top level of `/api/status.json` and
 `/api/observatory.json`. It is intentionally absent from the focused rooms and
@@ -140,12 +145,18 @@ observer-derived fields. A changed room lists comparable `changed_fields`;
 window, generation, or first-sequence changes are neutral
 `OBSERVATION_CONTEXT_CHANGED`, never evidence of deterioration.
 
-- `zero_response_share`: fraction of messages after which no different nick spoke.
+- `zero_response_share`: fraction of observed messages after which no different
+  nick spoke. Different-nickname succession is not proof of a reply or
+  conversation.
 - `nick_diversity`: distinct nicks divided by messages in the observed window.
 - `windowed_note_to_message_ratio`: rollup note count divided by messages scanned.
 
 These are official Technocore engagement metrics, not FLOP airdrop scoring.
 No Observatory Health Index is calculated in V2-A.
+
+The Engagement Scheduler is an observer only. It does not maintain a room,
+send heartbeats or messages, maintain DID presence, keep contributions alive,
+prove usefulness, or determine FLOP scoring or allocation.
 
 ## Safety and update model
 

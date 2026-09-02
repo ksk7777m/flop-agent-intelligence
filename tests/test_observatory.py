@@ -43,7 +43,7 @@ class ObservatoryTests(unittest.TestCase):
 
     def test_official_room_parsing_and_schema(self):
         built = build_snapshot(self.raw, fetched_at="2026-08-27T00:00:00Z", lobby_metadata={"first_seq": 8}, spec_version="0.10.0")
-        self.assertEqual(built["rooms"]["schema"], "technocore-observatory-rooms-v1")
+        self.assertEqual(built["rooms"]["schema"], "technocore-observatory-rooms-v2")
         self.assertEqual(built["status"]["current_first_seq"], 8)
         self.assertEqual(built["observatory"]["source_status"], "official")
 
@@ -59,7 +59,31 @@ class ObservatoryTests(unittest.TestCase):
         rooms = build_snapshot(self.raw)["rooms"]["rooms"]
         self.assertEqual(filter_rooms(rooms, activity="ACTIVE")[0]["room"], "active")
         self.assertEqual(sort_rooms(rooms, "diversity")[0]["room"], "active")
+        self.assertEqual(sort_rooms(rooms, "lowest_zero_response_share")[0]["room"], "active")
         self.assertEqual(sort_rooms(list(reversed(rooms)), "activity")[0]["room"], "active")
+
+    def test_zero_response_semantics_are_literal_and_formula_is_unchanged(self):
+        built = build_snapshot(self.raw)
+        views = built["rooms"]["derived_views"]
+        self.assertNotIn("most_conversational", views)
+        self.assertEqual(
+            views["lowest_zero_response_share"]["method"],
+            "zero_response_share ascending; null values last",
+        )
+        definition = built["engagement"]["definitions"]["zero_response_share"]
+        self.assertEqual(definition, "Fraction of messages after which no different nick spoke.")
+
+    def test_public_copy_does_not_claim_reply_or_conversation(self):
+        source = (ROOT / "src/flop_agent/observatory.py").read_text(encoding="utf-8")
+        rooms = (ROOT / "api/rooms.json").read_text(encoding="utf-8")
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        js = (ROOT / "dashboard.js").read_text(encoding="utf-8")
+        combined = "\n".join((source, rooms, html, js))
+        self.assertNotIn("most_conversational", combined)
+        self.assertNotIn("Most Conversational", combined)
+        self.assertNotIn("Response activity", combined)
+        self.assertIn("lowest_zero_response_share", combined)
+        self.assertIn("Different-nick succession", combined)
 
     def test_eviction_calculation(self):
         self.assertEqual(eviction_state(2, 9), "EVICTION_ACTIVE")
@@ -80,7 +104,7 @@ class ObservatoryTests(unittest.TestCase):
 
     def test_public_api_files_and_openapi(self):
         schemas = {
-            "rooms": "technocore-observatory-rooms-v1",
+            "rooms": "technocore-observatory-rooms-v2",
             "engagement": "technocore-observatory-engagement-v1",
             "status": "technocore-observatory-status-v1",
             "observatory": "technocore-observatory-v1",

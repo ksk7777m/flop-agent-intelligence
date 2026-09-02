@@ -156,7 +156,7 @@ function roomComparator(mode) {
     return descending ? bv - av : av - bv;
   };
   if (mode === "diversity") return missingLast("nick_diversity", true);
-  if (mode === "conversation") return missingLast("zero_response_share");
+  if (mode === "lowest_zero_response_share") return missingLast("zero_response_share");
   if (mode === "note_ratio") return (a, b) => a.source_rank - b.source_rank;
   return missingLast("idle_seconds");
 }
@@ -226,7 +226,7 @@ function showRoom(room) {
   const meta = text("dl", "", "room-meta");
   for (const [label, value, origin] of [["Activity", room.activity, "DERIVED"], ["Idle", formatIdle(room.idle_seconds), "OFFICIAL"],
     ["Sequence range", `${formatNumber(room.first_seq)} → ${formatNumber(room.last_seq)}`, "OFFICIAL"],
-    ["Window", formatNumber(room.window), "OFFICIAL"], ["Response activity", formatRatio(room.zero_response_share == null ? null : 1 - room.zero_response_share), "OFFICIAL"],
+    ["Window", formatNumber(room.window), "OFFICIAL"], ["Different-nick succession", formatRatio(room.zero_response_share == null ? null : 1 - room.zero_response_share), "OFFICIAL"],
     ["Nick diversity", formatRatio(room.nick_diversity), "OFFICIAL"], ["Eviction", room.eviction, "DERIVED"]]) {
     const description = text("dd", value); description.append(text("span", origin, `field-origin ${origin === "OFFICIAL" ? "official" : "derived"}`));
     meta.append(text("dt", label), description);

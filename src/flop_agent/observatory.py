@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Mapping
 
 
-ROOMS_SCHEMA = "technocore-observatory-rooms-v1"
+ROOMS_SCHEMA = "technocore-observatory-rooms-v2"
 STATUS_SCHEMA = "technocore-observatory-status-v1"
 ENGAGEMENT_SCHEMA = "technocore-observatory-engagement-v1"
 OBSERVATORY_SCHEMA = "technocore-observatory-v1"
@@ -151,7 +151,7 @@ def build_snapshot(
         "derived_views": {
             "most_active": {"derived": True, "method": "idle_seconds ascending; ties use official source order"},
             "most_diverse": {"derived": True, "method": "nick_diversity descending; null values last"},
-            "most_conversational": {"derived": True, "method": "zero_response_share ascending; null values last"},
+            "lowest_zero_response_share": {"derived": True, "method": "zero_response_share ascending; null values last"},
         },
     }
     observatory = {
@@ -183,6 +183,6 @@ def sort_rooms(rooms: Iterable[Mapping[str, Any]], mode: str) -> list[Mapping[st
         return sorted(rows, key=lambda r: (r.get("nick_diversity") is None, -(r.get("nick_diversity") or 0), r.get("source_rank", 0)))
     if mode == "note_ratio":
         return rows  # Official API publishes this only as a service rollup.
-    if mode == "conversation":
+    if mode == "lowest_zero_response_share":
         return sorted(rows, key=lambda r: (r.get("zero_response_share") is None, r.get("zero_response_share") or 0, r.get("source_rank", 0)))
     return sorted(rows, key=lambda r: (r.get("idle_seconds") is None, r.get("idle_seconds") or 0, r.get("source_rank", 0)))

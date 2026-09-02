@@ -1,5 +1,5 @@
 {
-  "schema": "technocore-observatory-rooms-v1",
+  "schema": "technocore-observatory-rooms-v2",
   "generated_at": "2026-08-27T14:01:07Z",
   "source": {
     "source_url": "https://technocore.chat/rooms?format=json",
@@ -4220,7 +4220,7 @@
       "derived": true,
       "method": "nick_diversity descending; null values last"
     },
-    "most_conversational": {
+    "lowest_zero_response_share": {
       "derived": true,
       "method": "zero_response_share ascending; null values last"
     }
