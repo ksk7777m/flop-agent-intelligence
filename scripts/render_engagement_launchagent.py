@@ -28,6 +28,7 @@ COMMIT_STATES={"PRE_PUBLISH","PUBLISHED","DURABLE"}
 RUNTIME_SCHEMA="engagement-production-runtime-v1"
 PRODUCTION_ELIGIBLE="PRODUCTION_ELIGIBLE"
 PREVIEW_ONLY="PREVIEW_ONLY_FEATURE_REVISION"
+VALIDATION_ONLY="VALIDATION_ONLY_LOCAL_MAIN"
 
 
 def _run(command: list[str],cwd: Path,timeout: int) -> subprocess.CompletedProcess[bytes]:
@@ -106,6 +107,10 @@ def _runtime_ready(runtime_root: Path, expected_revision: str, code_root: Path,
             and value.get("project_revision")==expected_revision
             and value.get("python")=="python/bin/python3"
             and value.get("project_root")==str(code_root))
+        if (require_production and (value.get("eligibility")!=PRODUCTION_ELIGIBLE
+                or value.get("approved_main_revision")!=expected_revision
+                or value.get("verified_origin_revision")!=expected_revision)):
+            return False
         if not structural: return False
         entry=("import json,sys;"+f"sys.path.insert(0,{str(code_root/'scripts')!r});"
                "import engagement_scheduler_launcher as l;"

@@ -22,7 +22,12 @@ not be uncontrolled links. Wheel files are user-owned `0600` regular files in a 
 ## Approval A — code only
 
 Merge the reviewed feature, run the complete offline validation, and push only if that is
-separately approved. Approval A does not authorize runtime provisioning or launchd changes.
+separately approved. Local `main` may be ahead of `origin/main` during this gate. The
+dedicated validator uses `VALIDATION_ONLY_LOCAL_MAIN`: it requires a clean matching local
+`main`, trusted account and production-root configuration, and the complete runtime contract,
+but builds only below a private disposable root. It neither claims production eligibility nor
+requires origin evidence, and it cannot publish a production generation or installable plist.
+Approval A does not authorize runtime provisioning or launchd changes.
 
 ## Approval B — runtime generation only
 

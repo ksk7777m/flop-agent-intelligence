@@ -71,6 +71,19 @@ class EngagementActivationTests(unittest.TestCase):
                         verified_origin_revision=verified)
                 self.assertEqual(result["outcome"],"PRODUCTION_REVISION_NOT_ELIGIBLE")
 
+    def test_validation_only_runtime_cannot_render_production_plist(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700)
+            def readiness(path,revision,code_root,require_production):
+                return not require_production
+            with mock.patch.object(renderer,"_runtime_ready",side_effect=readiness):
+                result=renderer.render(staged/"production.plist",runtime,REVISION,
+                    runner=Runner(),production=True,approved_main_revision=REVISION,
+                    verified_origin_revision=REVISION)
+            self.assertEqual(result["outcome"],"PRODUCTION_RUNTIME_NOT_READY")
+            self.assertFalse((staged/"production.plist").exists())
+
     def test_production_render_rejects_untracked_artifact(self):
         class Untracked(Runner):
             def __call__(self,command,cwd,timeout):

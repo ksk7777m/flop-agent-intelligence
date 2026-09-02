@@ -15,7 +15,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from provision_engagement_runtime import STATE_FILES, provision, verify_wheelhouse
+from provision_engagement_runtime import (STATE_FILES, VALIDATION_ONLY, ProvisionMode,
+    provision, verify_wheelhouse)
 from engagement_runtime_contract import resolve_account_home, trusted_production_runtime_root
 
 CODE_ROOT=Path(__file__).resolve().parents[1]
@@ -51,18 +52,22 @@ def validate(source_runtime: Path,wheelhouse: Path,expected_revision: str) -> di
         for name in STATE_FILES:
             shutil.copyfile(engagement/name,target/name); (target/name).chmod(0o600)
         before={name:_hash(target/name) for name in STATE_FILES}
-        result=provision(root,wheelhouse,expected_revision)
+        result=provision(root,wheelhouse,expected_revision,
+                         mode=ProvisionMode.VALIDATION_ONLY)
         after={name:_hash(target/name) for name in STATE_FILES}
         if not result.get("success") or before!=after:
             return {"success":False,"outcome":"PRODUCTION_RUNTIME_VALIDATION_FAILED",
-                    "network_requests":0,"collector_invocations":0}
+                    "network_requests":0,"collector_invocations":0,
+                    "eligibility":result.get("eligibility")}
         manifest=json.loads((Path(str(result["generation"]))/"production-runtime.json").read_text())
         if (manifest.get("readiness")!="READY" or manifest.get("project_revision")!=expected_revision):
             return {"success":False,"outcome":"PRODUCTION_RUNTIME_VALIDATION_FAILED",
-                    "network_requests":0,"collector_invocations":0}
+                    "network_requests":0,"collector_invocations":0,
+                    "eligibility":result.get("eligibility")}
         return {"success":True,"outcome":"PRODUCTION_RUNTIME_VALIDATION_PASSED",
                 "network_requests":0,"collector_invocations":0,"isolated":True,
-                "state_preserved":True,"wheel_count":len(manifest["wheels"])}
+                "state_preserved":True,"wheel_count":len(manifest["wheels"]),
+                "eligibility":VALIDATION_ONLY}
 
 def main() -> None:
     parser=argparse.ArgumentParser(description=__doc__)

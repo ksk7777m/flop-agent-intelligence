@@ -17,10 +17,12 @@ import time
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from engagement_runtime_contract import production_runtime_root, validate_scheduler_status_result
+from engagement_runtime_contract import (production_runtime_root, resolve_account_home,
+    trusted_production_runtime_root, validate_scheduler_status_result)
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 BASE_PYTHON = Path("/usr/bin/python3")
@@ -30,6 +32,12 @@ RUNTIME_SCHEMA = "engagement-production-runtime-v1"
 RUNTIME_VERSION = "0.1.0"
 PRODUCTION_ELIGIBLE = "PRODUCTION_ELIGIBLE"
 PREVIEW_ONLY = "PREVIEW_ONLY_FEATURE_REVISION"
+VALIDATION_ONLY = "VALIDATION_ONLY_LOCAL_MAIN"
+
+
+class ProvisionMode(Enum):
+    STANDARD = "STANDARD"
+    VALIDATION_ONLY = "VALIDATION_ONLY"
 WHEELS = {
     "attrs-25.4.0-py3-none-any.whl":"adcf7e2a1fb3b36ac48d97835bb6d8ade15b8dcce26aba8bf1d14847b57a3373",
     "cffi-2.0.0-cp39-cp39-macosx_11_0_arm64.whl":"de8dad4425a6ca6e4e5e297b27b5c824ecc7581910bf9aee86cb6835e6812aa7",
@@ -159,7 +167,9 @@ def _git(command: list[str]) -> subprocess.CompletedProcess[bytes]:
                           capture_output=True,check=False)
 
 def repository_eligibility(expected: str, approved_main_revision: str | None=None,
-                           verified_origin_revision: str | None=None) -> str:
+                           verified_origin_revision: str | None=None,
+                           *, mode: ProvisionMode=ProvisionMode.STANDARD) -> str:
+    if not isinstance(mode,ProvisionMode): return "PRODUCTION_INELIGIBLE_REVISION"
     if not re.fullmatch(r"[0-9a-f]{40}",expected): return "PRODUCTION_INELIGIBLE_REVISION"
     head=_git(["rev-parse","HEAD"]); dirty=_git(["diff-index","--quiet","HEAD","--"])
     untracked=_git(["ls-files","--others","--exclude-standard"])
@@ -167,7 +177,10 @@ def repository_eligibility(expected: str, approved_main_revision: str | None=Non
             or dirty.returncode or untracked.returncode or untracked.stdout):
         return "PRODUCTION_INELIGIBLE_REVISION"
     branch=_git(["symbolic-ref","--short","HEAD"])
-    if branch.returncode or branch.stdout.decode("ascii").strip()!="main": return PREVIEW_ONLY
+    is_main=not branch.returncode and branch.stdout.decode("ascii").strip()=="main"
+    if mode is ProvisionMode.VALIDATION_ONLY:
+        return VALIDATION_ONLY if is_main else "PRODUCTION_INELIGIBLE_REVISION"
+    if not is_main: return PREVIEW_ONLY
     origin=_git(["rev-parse","refs/remotes/origin/main"])
     if (not approved_main_revision or not verified_origin_revision
             or approved_main_revision!=expected or verified_origin_revision!=expected
@@ -177,12 +190,23 @@ def repository_eligibility(expected: str, approved_main_revision: str | None=Non
 
 def provision(runtime_root: Path, source_wheelhouse: Path, expected_revision: str,
               *, production: bool=False, approved_main_revision: str | None=None,
-              verified_origin_revision: str | None=None) -> dict[str, object]:
+              verified_origin_revision: str | None=None,
+              mode: ProvisionMode=ProvisionMode.STANDARD) -> dict[str, object]:
     runtime_root=runtime_root.absolute(); source_wheelhouse=source_wheelhouse.absolute()
     eligibility=repository_eligibility(expected_revision,approved_main_revision,
-                                       verified_origin_revision)
+                                       verified_origin_revision,mode=mode)
     if eligibility=="PRODUCTION_INELIGIBLE_REVISION":
         return _result(False,eligibility,eligibility=eligibility)
+    if mode is ProvisionMode.VALIDATION_ONLY:
+        account_home=resolve_account_home(); production_root=trusted_production_runtime_root()
+        if account_home is None:
+            return _result(False,"PRODUCTION_ACCOUNT_HOME_INVALID",eligibility=eligibility)
+        if production_root is None:
+            return _result(False,"PRODUCTION_RUNTIME_ROOT_INVALID",eligibility=eligibility)
+        try: unsafe_root=runtime_root==production_root or runtime_root.is_relative_to(production_root)
+        except (OSError,RuntimeError): unsafe_root=True
+        if production or unsafe_root:
+            return _result(False,"VALIDATION_ROOT_UNSAFE",eligibility=eligibility)
     if production and eligibility!=PRODUCTION_ELIGIBLE:
         return _result(False,"PRODUCTION_REVISION_NOT_ELIGIBLE",eligibility=eligibility)
     trusted_root=production_runtime_root() if production else runtime_root

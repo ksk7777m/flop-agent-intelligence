@@ -12,6 +12,19 @@ REVISION="1"*40
 
 
 class EngagementProductionRuntimeTests(unittest.TestCase):
+    @staticmethod
+    def nonproduction_mode():
+        branch=subprocess.run(["git","symbolic-ref","--short","HEAD"],
+            cwd=provisioner.CODE_ROOT,capture_output=True,check=True,text=True).stdout.strip()
+        return (provisioner.ProvisionMode.VALIDATION_ONLY if branch=="main"
+                else provisioner.ProvisionMode.STANDARD)
+
+    @classmethod
+    def nonproduction_eligibility(cls):
+        return (provisioner.VALIDATION_ONLY
+                if cls.nonproduction_mode() is provisioner.ProvisionMode.VALIDATION_ONLY
+                else provisioner.PREVIEW_ONLY)
+
     def test_account_home_is_environment_independent_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as folder:
             home=Path(folder).resolve(); uid=os.getuid()
@@ -216,7 +229,7 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
                 "dependency_lock":"requirements-engagement-production.txt",
                 "dependency_lock_sha256":hashlib.sha256((launcher.CODE_ROOT/"requirements-engagement-production.txt").read_bytes()).hexdigest(),
                 "packages":launcher.RUNTIME_PACKAGES,"wheels":launcher.RUNTIME_WHEELS,
-                "project_root":str(launcher.CODE_ROOT),"eligibility":"PREVIEW_ONLY_FEATURE_REVISION",
+                "project_root":str(launcher.CODE_ROOT),"eligibility":provisioner.VALIDATION_ONLY,
                 "previous_generations":[],"readiness":"READY","approved_main_revision":None,
                 "verified_origin_revision":None,
                 "interpreter_realpath":str(Path("/Library/Developer/CommandLineTools/usr/bin/python3").resolve()),
@@ -277,8 +290,10 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
             generations=root/"generations"; generations.mkdir(mode=0o700)
             old=generations/"old-reviewed-generation"; old.mkdir(mode=0o700)
             before={path.name:self.digest(path) for path in tracked}
-            result=provisioner.provision(root,wheelhouse,revision)
-            self.assertTrue(result["success"],result); self.assertEqual(result["eligibility"],provisioner.PREVIEW_ONLY)
+            result=provisioner.provision(root,wheelhouse,revision,
+                mode=self.nonproduction_mode())
+            self.assertTrue(result["success"],result)
+            self.assertEqual(result["eligibility"],self.nonproduction_eligibility())
             generation=Path(result["generation"]); manifest=json.loads((generation/"production-runtime.json").read_text())
             self.assertIn("old-reviewed-generation",manifest["previous_generations"])
             hostile=root/"hostile"; hostile.mkdir(); (hostile/"jsonschema.py").write_text("raise AssertionError\n")
@@ -308,7 +323,8 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command,1,b"",b"")
                 return real_run(command,*args,**kwargs)
             with mock.patch.object(provisioner.subprocess,"run",side_effect=fail_venv):
-                result=provisioner.provision(root,wheelhouse,revision)
+                result=provisioner.provision(root,wheelhouse,revision,
+                    mode=self.nonproduction_mode())
             self.assertEqual(result["outcome"],"RUNTIME_REPROVISION_FAILED")
             self.assertEqual(state.read_bytes(),b"authoritative"); self.assertTrue(old.exists())
             self.assertFalse((root/"generations"/revision).exists())
@@ -329,7 +345,8 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command,0,b'{"success":true}',b'')
                 return real_run(command,*args,**kwargs)
             with mock.patch.object(provisioner.subprocess,"run",side_effect=fail_status):
-                result=provisioner.provision(root,wheelhouse,revision)
+                result=provisioner.provision(root,wheelhouse,revision,
+                    mode=self.nonproduction_mode())
             self.assertEqual(result["outcome"],"RUNTIME_REPROVISION_FAILED")
             self.assertFalse((root/"generations"/revision).exists())
 
@@ -353,6 +370,83 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
                         result=provisioner.provision(root,Path("/not-read"),REVISION)
                     self.assertEqual(result["outcome"],"PRODUCTION_RUNTIME_ALREADY_EXISTS")
                     self.assertEqual(proof.read_bytes(),before)
+
+    def test_validation_only_pre_push_is_distinct_from_production_eligibility(self):
+        old="2"*40
+        def git_result(command):
+            if command[:2]==["rev-parse","HEAD"]: return subprocess.CompletedProcess(command,0,(REVISION+"\n").encode(),b"")
+            if command[:2]==["diff-index","--quiet"]: return subprocess.CompletedProcess(command,0,b"",b"")
+            if command[:2]==["ls-files","--others"]: return subprocess.CompletedProcess(command,0,b"",b"")
+            if command[:2]==["symbolic-ref","--short"]: return subprocess.CompletedProcess(command,0,b"main\n",b"")
+            if command[:2]==["rev-parse","refs/remotes/origin/main"]: return subprocess.CompletedProcess(command,0,(old+"\n").encode(),b"")
+            raise AssertionError(command)
+        with mock.patch.object(provisioner,"_git",side_effect=git_result):
+            self.assertEqual(provisioner.repository_eligibility(REVISION,
+                mode=provisioner.ProvisionMode.VALIDATION_ONLY),provisioner.VALIDATION_ONLY)
+            self.assertEqual(provisioner.repository_eligibility(REVISION,REVISION,REVISION),
+                             "PRODUCTION_INELIGIBLE_REVISION")
+        def pushed(command):
+            result=git_result(command)
+            if command[:2]==["rev-parse","refs/remotes/origin/main"]:
+                return subprocess.CompletedProcess(command,0,(REVISION+"\n").encode(),b"")
+            return result
+        with mock.patch.object(provisioner,"_git",side_effect=pushed):
+            self.assertEqual(provisioner.repository_eligibility(REVISION,REVISION,REVISION),
+                             provisioner.PRODUCTION_ELIGIBLE)
+
+    def test_validation_only_is_main_typed_and_disposable_only(self):
+        clean=lambda stdout=b"": subprocess.CompletedProcess([],0,stdout,b"")
+        feature=[clean((REVISION+"\n").encode()),clean(),clean(),clean(b"codex/feature\n")]
+        with mock.patch.object(provisioner,"_git",side_effect=feature):
+            self.assertEqual(provisioner.repository_eligibility(REVISION,
+                mode=provisioner.ProvisionMode.VALIDATION_ONLY),"PRODUCTION_INELIGIBLE_REVISION")
+        self.assertEqual(provisioner.repository_eligibility(REVISION,mode="VALIDATION_ONLY"),
+                         "PRODUCTION_INELIGIBLE_REVISION")
+        trusted=runtime_contract.trusted_production_runtime_root(); self.assertIsNotNone(trusted)
+        with mock.patch.object(provisioner,"repository_eligibility",return_value=provisioner.VALIDATION_ONLY):
+            result=provisioner.provision(trusted,trusted/"python-wheelhouse",REVISION,
+                mode=provisioner.ProvisionMode.VALIDATION_ONLY)
+            self.assertEqual(result["outcome"],"VALIDATION_ROOT_UNSAFE")
+            result=provisioner.provision(trusted,trusted/"python-wheelhouse",REVISION,
+                production=True,mode=provisioner.ProvisionMode.VALIDATION_ONLY)
+            self.assertEqual(result["outcome"],"VALIDATION_ROOT_UNSAFE")
+
+    def test_validation_only_repository_checks_remain_fail_closed(self):
+        def eligibility(*,head=REVISION,dirty=False,untracked=b"",branch=b"main\n"):
+            def run(command):
+                if command[:2]==["rev-parse","HEAD"]:
+                    return subprocess.CompletedProcess(command,0,(head+"\n").encode(),b"")
+                if command[:2]==["diff-index","--quiet"]:
+                    return subprocess.CompletedProcess(command,1 if dirty else 0,b"",b"")
+                if command[:2]==["ls-files","--others"]:
+                    return subprocess.CompletedProcess(command,0,untracked,b"")
+                if command[:2]==["symbolic-ref","--short"]:
+                    return subprocess.CompletedProcess(command,0,branch,b"")
+                raise AssertionError(command)
+            with mock.patch.object(provisioner,"_git",side_effect=run):
+                return provisioner.repository_eligibility(REVISION,
+                    mode=provisioner.ProvisionMode.VALIDATION_ONLY)
+        for case,kwargs in (("head",{"head":"2"*40}),("tracked",{"dirty":True}),
+                ("untracked",{"untracked":b"scripts/shadow.py\n"}),
+                ("branch",{"branch":b"codex/feature\n"})):
+            with self.subTest(case=case):
+                self.assertEqual(eligibility(**kwargs),"PRODUCTION_INELIGIBLE_REVISION")
+
+    def test_validation_only_requires_account_and_production_root_trust(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); root.chmod(0o700)
+            with mock.patch.object(provisioner,"repository_eligibility",
+                    return_value=provisioner.VALIDATION_ONLY), \
+                 mock.patch.object(provisioner,"resolve_account_home",return_value=None):
+                result=provisioner.provision(root,root/"wheels",REVISION,
+                    mode=provisioner.ProvisionMode.VALIDATION_ONLY)
+                self.assertEqual(result["outcome"],"PRODUCTION_ACCOUNT_HOME_INVALID")
+            with mock.patch.object(provisioner,"repository_eligibility",
+                    return_value=provisioner.VALIDATION_ONLY), \
+                 mock.patch.object(provisioner,"trusted_production_runtime_root",return_value=None):
+                result=provisioner.provision(root,root/"wheels",REVISION,
+                    mode=provisioner.ProvisionMode.VALIDATION_ONLY)
+                self.assertEqual(result["outcome"],"PRODUCTION_RUNTIME_ROOT_INVALID")
 
     def test_user_controlled_interpreter_chain_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
