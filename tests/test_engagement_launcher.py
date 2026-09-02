@@ -122,7 +122,7 @@ class EngagementLauncherTests(unittest.TestCase):
         self.assertNotIn("KeepAlive",value); self.assertNotIn("WorkingDirectory",value)
         for forbidden in ("WatchPaths","QueueDirectories","StartOnMount","Sockets","MachServices"):
             self.assertNotIn(forbidden,value)
-        self.assertEqual(value["ProgramArguments"][0],"/usr/bin/python3")
+        self.assertEqual(value["ProgramArguments"][0],"<PRIVATE_RUNTIME_ROOT>/python/bin/python3")
         self.assertEqual(value["ProgramArguments"][1],"-I")
         self.assertIn("<APPROVED_REPOSITORY_ROOT>"," ".join(value["ProgramArguments"]))
         self.assertNotIn("/Users/",path.read_text())
@@ -153,7 +153,7 @@ class EngagementLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); self.runtime(root); runner=FakeRunner()
             launcher.launch(root,REVISION,runner=runner)
-        python_calls=[call for call in runner.calls if call[0]=="/usr/bin/python3"]
+        python_calls=[call for call in runner.calls if call[0]==os.path.abspath(os.sys.executable)]
         self.assertEqual(len(python_calls),2)
         self.assertTrue(all(call[1]=="-I" for call in python_calls))
         self.assertNotIn("PYTHONPATH",launcher.SAFE_ENV)
@@ -192,18 +192,19 @@ class EngagementLauncherTests(unittest.TestCase):
             completed=subprocess.run(command,cwd=hostile,
                 env={**os.environ,"PYTHONPATH":str(hostile),"PYTHONUSERBASE":str(hostile)},
                 capture_output=True,text=True)
-            self.assertEqual(completed.returncode,0,(completed.stdout,completed.stderr))
+            self.assertEqual(completed.returncode,1,(completed.stdout,completed.stderr))
             result=json.loads(completed.stdout)
-            self.assertEqual((result["outcome"],result["collector_invocations"]),("OK_DISABLED",0))
+            self.assertEqual((result["outcome"],result["collector_invocations"]),
+                             ("PRODUCTION_RUNTIME_NOT_READY",0))
             self.assertFalse(marker.exists())
             wrong=subprocess.run(command[:4]+["0"*40]+command[5:],cwd=hostile,
                 env={**os.environ,"PYTHONPATH":str(hostile)},capture_output=True,text=True)
-            self.assertEqual(json.loads(wrong.stdout)["outcome"],"CODE_REVISION_MISMATCH")
+            self.assertEqual(json.loads(wrong.stdout)["outcome"],"PRODUCTION_RUNTIME_NOT_READY")
             adjacent=root/"scripts/json.py"
             adjacent.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
             blocked=subprocess.run(command,cwd=hostile,env={**os.environ,"PYTHONPATH":str(hostile)},
                                    capture_output=True,text=True)
-            self.assertEqual(json.loads(blocked.stdout)["outcome"],"CODE_TREE_DIRTY")
+            self.assertEqual(json.loads(blocked.stdout)["outcome"],"PRODUCTION_RUNTIME_NOT_READY")
             self.assertFalse(marker.exists())
 
     def test_isolated_python_ignores_adjacent_and_pythonpath_shadow_modules(self):
@@ -248,7 +249,7 @@ class EngagementLauncherTests(unittest.TestCase):
         class MetadataRunner(FakeRunner):
             def __call__(self,command,cwd,timeout):
                 if "--ignored" in command:
-                    self.calls.append(command); return completed(b"src/.DS_Store\0")
+                    self.calls.append(command); return completed()
                 return super().__call__(command,cwd,timeout)
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); self.runtime(root); runner=MetadataRunner()

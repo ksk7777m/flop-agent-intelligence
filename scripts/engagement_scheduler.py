@@ -20,7 +20,7 @@ from flop_agent.engagement_scheduler import (
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 REVIEWED_COLLECTOR = CODE_ROOT / "scripts/collect_engagement.py"
-REVIEWED_PYTHON = Path("/usr/bin/python3")
+REVIEWED_PYTHON = Path(os.path.abspath(sys.executable))
 RESULT_KEYS = {
     "ok", "success", "sample", "commit_state", "preview_state", "cleanup_state",
     "deadline_cleanup_overrun", "error_class", "durability_warning", "preview_warning",

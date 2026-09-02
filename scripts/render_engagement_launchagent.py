@@ -21,6 +21,7 @@ LAUNCHER=CODE_ROOT/"scripts/engagement_scheduler_launcher.py"
 SAFE_ENV={"PATH":"/usr/bin:/bin","LC_ALL":"C","TMPDIR":"/tmp"}
 Runner=Callable[[list[str],Path,int],subprocess.CompletedProcess[bytes]]
 COMMIT_STATES={"PRE_PUBLISH","PUBLISHED","DURABLE"}
+RUNTIME_SCHEMA="engagement-production-runtime-v1"
 
 
 def _run(command: list[str],cwd: Path,timeout: int) -> subprocess.CompletedProcess[bytes]:
@@ -60,7 +61,7 @@ def _result(*,success: bool,outcome: str,commit_state: str="PRE_PUBLISH",
 def _valid_payload(payload: bytes,expected_revision: str,runtime_root: Path) -> bool:
     try: value=plistlib.loads(payload)
     except plistlib.InvalidFileException: return False
-    arguments=["/usr/bin/python3","-I",str(LAUNCHER),"--expected-revision",
+    arguments=[str(runtime_root/"python/bin/python3"),"-I",str(LAUNCHER),"--expected-revision",
                expected_revision,"--runtime-root",str(runtime_root)]
     keys={"Label","ProgramArguments","StartInterval","RunAtLoad",
           "StandardOutPath","StandardErrorPath"}
@@ -80,6 +81,23 @@ def _valid_payload(payload: bytes,expected_revision: str,runtime_root: Path) -> 
     return not any(re.search(r"<[^<>]+>",item) for item in strings(value))
 
 
+def _runtime_ready(runtime_root: Path, expected_revision: str) -> bool:
+    manifest=runtime_root/"production-runtime.json"; interpreter=runtime_root/"python/bin/python3"
+    try:
+        metadata=manifest.lstat(); python_metadata=interpreter.lstat()
+        value=json.loads(manifest.read_text(encoding="utf-8"))
+        return (stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
+            and metadata.st_uid==os.getuid() and stat.S_IMODE(metadata.st_mode)==0o600
+            and stat.S_ISLNK(python_metadata.st_mode)
+            and os.readlink(interpreter)=="/Library/Developer/CommandLineTools/usr/bin/python3"
+            and stat.S_ISREG(interpreter.resolve().lstat().st_mode)
+            and interpreter.resolve().lstat().st_uid==0
+            and value.get("schema")==RUNTIME_SCHEMA
+            and value.get("project_revision")==expected_revision
+            and value.get("python")=="python/bin/python3")
+    except (OSError,RuntimeError,UnicodeDecodeError,json.JSONDecodeError): return False
+
+
 def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runner=_run,
            code_root: Path=CODE_ROOT) -> dict[str,object]:
     output=output.absolute(); runtime_root=runtime_root.absolute()
@@ -91,6 +109,8 @@ def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runn
             or not _safe_file(TEMPLATE,code_root) or not _safe_file(LAUNCHER,code_root)
             or not _safe_directory(output.parent,private=True)):
         return _result(success=False,outcome="CODE_PATH_UNSAFE")
+    if runner is _run and not _runtime_ready(runtime_root,expected_revision):
+        return _result(success=False,outcome="PRODUCTION_RUNTIME_NOT_READY")
     if output.exists() or output.is_symlink():
         return _result(success=False,outcome="PLIST_ALREADY_EXISTS")
     candidate: Path | None=None; descriptor=-1; published=False
@@ -103,10 +123,10 @@ def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runn
         if dirty.returncode: return _result(success=False,outcome="CODE_TREE_DIRTY")
         value=plistlib.loads(TEMPLATE.read_bytes())
         arguments=value.get("ProgramArguments")
-        expected=["/usr/bin/python3","-I","<APPROVED_REPOSITORY_ROOT>/scripts/engagement_scheduler_launcher.py",
+        expected=["<PRIVATE_RUNTIME_ROOT>/python/bin/python3","-I","<APPROVED_REPOSITORY_ROOT>/scripts/engagement_scheduler_launcher.py",
                   "--expected-revision","<APPROVED_GIT_REVISION>","--runtime-root","<PRIVATE_RUNTIME_ROOT>"]
         if arguments!=expected: return _result(success=False,outcome="PLIST_RENDER_INVALID")
-        value["ProgramArguments"]=["/usr/bin/python3","-I",str(LAUNCHER),"--expected-revision",
+        value["ProgramArguments"]=[str(runtime_root/"python/bin/python3"),"-I",str(LAUNCHER),"--expected-revision",
                                    expected_revision,"--runtime-root",str(runtime_root)]
         payload=plistlib.dumps(value,fmt=plistlib.FMT_XML,sort_keys=True)
         if not _valid_payload(payload,expected_revision,runtime_root):

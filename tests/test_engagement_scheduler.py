@@ -315,7 +315,7 @@ class EngagementSchedulerTests(unittest.TestCase):
         self.assertEqual(result,{"success":False,"error_class":"HTTP_BODY_TIMEOUT"})
         called.assert_called_once()
         command=called.call_args.args[0]
-        self.assertEqual(command[:3],[str(REVIEWED_PYTHON),'-I','-c'])
+        self.assertEqual(command[:3],[os.path.abspath(sys.executable),'-I','-c'])
         self.assertIn(str(REVIEWED_COLLECTOR),command[3])
         self.assertIn(str(CODE_ROOT/'src'),command[3])
         self.assertEqual(command[4:],['--root','/repo'])
@@ -342,7 +342,7 @@ class EngagementSchedulerTests(unittest.TestCase):
         with mock.patch("scripts.engagement_scheduler.subprocess.run",return_value=completed) as called:
             _collector(Path("/repo"))
         command=called.call_args.args[0]
-        self.assertEqual(command[:3],[str(REVIEWED_PYTHON),"-I","-c"])
+        self.assertEqual(command[:3],[os.path.abspath(sys.executable),"-I","-c"])
         probe=subprocess.run([sys.executable,"-I","-c",
             "import json,sys;print(json.dumps([sys.flags.isolated,sys.flags.no_user_site,sys.flags.ignore_environment,sys.path]))"],
             env={**os.environ,"PYTHONPATH":"/private/tmp/hostile","PYTHONUSERBASE":"/private/tmp/hostile"},

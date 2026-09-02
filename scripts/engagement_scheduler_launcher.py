@@ -10,13 +10,13 @@ import os
 import re
 import stat
 import subprocess
+import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
-PYTHON = Path("/usr/bin/python3")
 GIT = Path("/usr/bin/git")
 SCHEDULER = CODE_ROOT / "scripts/engagement_scheduler.py"
 COLLECTOR = CODE_ROOT / "scripts/collect_engagement.py"
@@ -25,6 +25,12 @@ LABEL = "com.flop-agent-intelligence.engagement-scheduler"
 MAX_COMMAND_OUTPUT = 64 * 1024
 MAX_LOG_BYTES = 1024 * 1024
 LOG_GENERATIONS = 3
+RUNTIME_SCHEMA = "engagement-production-runtime-v1"
+RUNTIME_VERSION = "0.1.0"
+RUNTIME_PACKAGES = {"attrs":"25.4.0","cffi":"2.0.0","cryptography":"46.0.5",
+    "jsonschema":"4.25.1","jsonschema-specifications":"2025.9.1","pycparser":"2.23",
+    "referencing":"0.36.2","rpds-py":"0.27.1","typing-extensions":"4.15.0"}
+PRELOG_KEYS = {"timestamp","stage","error_class","approved_revision","runtime_version"}
 LOG_KEYS = {"timestamp","outcome","circuit_state","requests_24h","collector_invocations"}
 LOG_OUTCOMES = {"PREFLIGHT_READY","OK_DISABLED","OK_SCHEDULER_INVOKED",
                 "LAUNCHER_INTERNAL_ERROR","LOG_UNAVAILABLE"}
@@ -69,7 +75,46 @@ def _scheduler_command(action: str, runtime_root: Path) -> list[str]:
                f"sys.path.insert(0,{str(CODE_ROOT / 'src')!r});"
                f"sys.argv[0]={str(SCHEDULER)!r};"
                f"runpy.run_path({str(SCHEDULER)!r},run_name='__main__')")
-    return [str(PYTHON),"-I","-c",isolated_entry,action,"--root",str(runtime_root)]
+    return [str(Path(os.path.abspath(sys.executable))),"-I","-c",isolated_entry,action,"--root",str(runtime_root)]
+
+
+def validate_runtime(runtime_root: Path, expected_revision: str) -> str | None:
+    """Return a stable failure class, or None for the bound private runtime."""
+    manifest=runtime_root/"production-runtime.json"
+    expected_python=(runtime_root/"python/bin/python3").absolute()
+    try:
+        metadata=manifest.lstat(); python_metadata=expected_python.lstat()
+        if (not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
+                or metadata.st_uid!=os.getuid() or stat.S_IMODE(metadata.st_mode)!=0o600):
+            return "PRODUCTION_RUNTIME_NOT_READY"
+        resolved_python=expected_python.resolve(); resolved_metadata=resolved_python.lstat()
+        if (not stat.S_ISLNK(python_metadata.st_mode)
+                or os.readlink(expected_python)!="/Library/Developer/CommandLineTools/usr/bin/python3"
+                or not stat.S_ISREG(resolved_metadata.st_mode) or resolved_metadata.st_uid!=0):
+            return "PRODUCTION_RUNTIME_NOT_READY"
+        value=json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError,RuntimeError,UnicodeDecodeError,json.JSONDecodeError):
+        return "PRODUCTION_RUNTIME_NOT_READY"
+    required={"schema","runtime_version","project_revision","python","python_version",
+              "dependency_lock","dependency_lock_sha256","packages","wheels","created_at"}
+    if (not isinstance(value,dict) or set(value)!=required
+            or value.get("schema")!=RUNTIME_SCHEMA or value.get("runtime_version")!=RUNTIME_VERSION
+            or value.get("python")!="python/bin/python3" or value.get("packages")!=RUNTIME_PACKAGES):
+        return "PRODUCTION_RUNTIME_NOT_READY"
+    if value.get("project_revision")!=expected_revision: return "CODE_REVISION_MISMATCH"
+    actual=Path(os.path.abspath(sys.executable))
+    if actual!=expected_python: return "PRODUCTION_INTERPRETER_MISMATCH"
+    try:
+        import importlib.metadata as metadata_api
+        site_root=runtime_root/"python"
+        for package,version in RUNTIME_PACKAGES.items():
+            distribution=metadata_api.distribution(package)
+            if (distribution.version!=version
+                    or not Path(distribution.locate_file("")).resolve().is_relative_to(site_root)):
+                return "PRODUCTION_DEPENDENCY_MISSING"
+    except (metadata_api.PackageNotFoundError,OSError,RuntimeError):
+        return "PRODUCTION_DEPENDENCY_MISSING"
+    return None
 
 
 def _ignored_code_present(output: bytes, code_root: Path) -> bool:
@@ -136,8 +181,7 @@ def _code_paths_safe(code_root: Path) -> bool:
     expected_launcher=code_root/"scripts/engagement_scheduler_launcher.py"
     return (Path(__file__).absolute()==expected_launcher.absolute()
             and all(_safe_regular(path,code_root) for path in required)
-            and PYTHON.is_absolute() and GIT.is_absolute()
-            and _safe_regular(PYTHON,Path("/")) and _safe_regular(GIT,Path("/")))
+            and GIT.is_absolute() and _safe_regular(GIT,Path("/")))
 
 
 def _bounded_json(completed: subprocess.CompletedProcess[bytes]) -> dict[str, Any] | None:
@@ -220,25 +264,60 @@ def append_log(runtime_root: Path, record: dict[str, Any]) -> None:
         finally: os.close(descriptor)
 
 
+def append_prelog(runtime_root: Path, stage: str, error_class: str,
+                  approved_revision: str) -> None:
+    record={"timestamp":_utc_stamp(),"stage":stage,"error_class":error_class,
+            "approved_revision":approved_revision,"runtime_version":RUNTIME_VERSION}
+    if set(record)!=PRELOG_KEYS or not re.fullmatch(r"[A-Z_]+",error_class): raise OSError
+    engagement=runtime_root/"runtime/engagement"
+    _safe_directory(runtime_root,create=False); _safe_directory(runtime_root/"runtime",create=False)
+    _safe_directory(engagement,create=False)
+    directory=engagement/"launcher-logs"; _safe_directory(directory,create=True)
+    path=directory/"launcher-preflight.jsonl"; _safe_log_file(path)
+    payload=(json.dumps(record,sort_keys=True,separators=(",",":"))+"\n").encode()
+    flags=os.O_CREAT|os.O_APPEND|os.O_WRONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)
+    descriptor=os.open(path,flags,0o600)
+    try:
+        metadata=os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode)!=0o600: raise OSError
+        if metadata.st_size+len(payload)>MAX_LOG_BYTES:
+            os.ftruncate(descriptor,0); os.lseek(descriptor,0,os.SEEK_SET)
+        os.write(descriptor,payload); os.fsync(descriptor)
+    finally: os.close(descriptor)
+
+
+def _preflight_failure(runtime_root: Path, expected_revision: str, outcome: str,
+                       stage: str) -> dict[str, Any]:
+    try: append_prelog(runtime_root,stage,outcome,expected_revision)
+    except OSError: pass
+    return _result(outcome)
+
+
 def launch(runtime_root: Path, expected_revision: str, *, runner: Runner = _run,
            code_root: Path = CODE_ROOT) -> dict[str, Any]:
-    if not re.fullmatch(r"[0-9a-f]{40}",expected_revision): return _result("CODE_REVISION_MISMATCH")
-    if code_root!=CODE_ROOT or not _code_paths_safe(code_root): return _result("CODE_PATH_UNSAFE")
+    if not re.fullmatch(r"[0-9a-f]{40}",expected_revision):
+        return _preflight_failure(runtime_root,expected_revision,"CODE_REVISION_MISMATCH","REVISION")
+    if code_root!=CODE_ROOT or not _code_paths_safe(code_root):
+        return _preflight_failure(runtime_root,expected_revision,"CODE_PATH_UNSAFE","CODE_PATH")
+    if runner is _run:
+        runtime_error=validate_runtime(runtime_root,expected_revision)
+        if runtime_error:
+            return _preflight_failure(runtime_root,expected_revision,runtime_error,"RUNTIME")
     try:
         revision=runner([str(GIT),"rev-parse","HEAD"],code_root,5)
         if (revision.returncode!=0 or revision.stderr or len(revision.stdout)>64
                 or revision.stdout.decode("ascii").strip()!=expected_revision):
-            return _result("CODE_REVISION_MISMATCH")
+            return _preflight_failure(runtime_root,expected_revision,"CODE_REVISION_MISMATCH","REVISION")
         clean=runner([str(GIT),"diff-index","--quiet","HEAD","--"],code_root,5)
-        if clean.returncode!=0: return _result("CODE_TREE_DIRTY")
+        if clean.returncode!=0: return _preflight_failure(runtime_root,expected_revision,"CODE_TREE_DIRTY","CODE_TREE")
         untracked=runner([str(GIT),"ls-files","--others","--exclude-standard","-z"],code_root,5)
         if untracked.returncode!=0 or untracked.stderr or untracked.stdout:
-            return _result("CODE_TREE_DIRTY")
+            return _preflight_failure(runtime_root,expected_revision,"CODE_TREE_DIRTY","CODE_TREE")
         ignored_code=runner([str(GIT),"ls-files","--others","--ignored","--exclude-standard",
                              "-z","--","scripts","src"],code_root,5)
         if (ignored_code.returncode!=0 or ignored_code.stderr
                 or _ignored_code_present(ignored_code.stdout,code_root)):
-            return _result("CODE_TREE_DIRTY")
+            return _preflight_failure(runtime_root,expected_revision,"CODE_TREE_DIRTY","CODE_TREE")
         status=runner(_scheduler_command("status",runtime_root),code_root,10)
         state=_bounded_json(status)
         if not state or state.get("success") is not True:

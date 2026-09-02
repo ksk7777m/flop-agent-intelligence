@@ -31,7 +31,7 @@ class EngagementActivationTests(unittest.TestCase):
                 "installed":False,"loaded":False,"network_requests":0,"collector_invocations":0})
             self.assertEqual(output.stat().st_mode&0o777,0o600)
             value=plistlib.loads(output.read_bytes()); arguments=value["ProgramArguments"]
-            self.assertEqual(arguments,["/usr/bin/python3","-I",str(renderer.LAUNCHER),
+            self.assertEqual(arguments,[str(runtime/"python/bin/python3"),"-I",str(renderer.LAUNCHER),
                 "--expected-revision",REVISION,"--runtime-root",str(runtime)])
             self.assertEqual((value["StartInterval"],value["RunAtLoad"]),(3600,False))
             self.assertNotIn("KeepAlive",value); self.assertNotIn(b"APPROVED_",output.read_bytes())
