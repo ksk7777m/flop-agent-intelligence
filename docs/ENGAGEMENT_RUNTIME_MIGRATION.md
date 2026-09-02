@@ -9,6 +9,8 @@ is no mutable `current` link. Each generation contains its own venv, verified wh
 and private manifest; the plist names the immutable interpreter path. Existing generations
 are retained as rollback evidence. The scheduler state, history, locks, receipts, and
 other evidence remain outside generations and are never replaced by provisioning.
+Generation publication is serialized by a stable private publication lock and uses
+no-replace semantics; an existing same-revision generation is never overwritten.
 
 The interpreter policy permits only the venv-created `python3` link whose literal target
 is the approved Apple Command Line Tools Python. Every subsequent OS link must be
@@ -30,14 +32,19 @@ separately approved. Approval A does not authorize runtime provisioning or launc
 3. Hash the authoritative state, history, and locks.
 4. Build a new sibling generation from the verified private wheelhouse. Installation is
    offline and hash-locked.
-5. Validate interpreter chain, package origins and hashes, manifest/main/project coherence,
-   and the real isolated scheduler `status` path without running the collector.
-6. Generate a `PRODUCTION_ELIGIBLE` plist candidate bound to the same immutable generation.
-7. Recheck state, history, and lock hashes, retain prior generations, and STOP.
+5. Run `scripts/validate_engagement_production_runtime.py` and require PASS. Missing
+   prerequisites are `TEST_ENVIRONMENT_MISSING`, never a skipped success.
+6. Before generation publication, validate the complete interpreter chain, package and
+   project origins, manifest/main/project coherence, and the real isolated scheduler
+   `status` path. Hash state, history, and both locks before and after; do not run collector.
+7. Generate a `PRODUCTION_ELIGIBLE` plist candidate bound to the same immutable generation.
+8. Recheck state, history, and lock hashes, retain prior generations, and STOP.
 
 Approval B does not authorize plist installation, launchd reload, scheduler state changes,
 or collection. A failed candidate build is removed before publication and leaves prior
 generations and all scheduler data untouched.
+Production readiness is mandatory inside both renderer and launcher helpers and cannot be
+disabled by replacing their command runner. Feature revisions emit non-installable JSON only.
 
 ## Approval C — single-label LaunchAgent migration
 

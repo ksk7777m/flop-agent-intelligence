@@ -30,8 +30,23 @@ class FakeRunner:
 
 
 class EngagementLauncherTests(unittest.TestCase):
+    def setUp(self):
+        self.runtime_patch=mock.patch.object(launcher,"validate_runtime",return_value=None)
+        self.runtime_patch.start()
+
+    def tearDown(self): self.runtime_patch.stop()
+
     def runtime(self,root):
         path=root/"runtime/engagement"; path.mkdir(parents=True); return path
+
+    def test_custom_runner_cannot_bypass_real_runtime_validation(self):
+        self.runtime_patch.stop()
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                root=Path(folder); self.runtime(root)
+                result=launcher.launch(root,REVISION,runner=FakeRunner())
+            self.assertEqual(result["outcome"],"PRODUCTION_RUNTIME_NOT_READY")
+        finally: self.runtime_patch.start()
 
     def test_disabled_launcher_is_bounded_offline_and_invokes_scheduler_once(self):
         with tempfile.TemporaryDirectory() as folder:

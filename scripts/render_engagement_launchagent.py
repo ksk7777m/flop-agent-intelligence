@@ -125,7 +125,7 @@ def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runn
             or not _safe_file(TEMPLATE,code_root) or not _safe_file(LAUNCHER,code_root)
             or not _safe_directory(output.parent,private=True)):
         return _result(success=False,outcome="CODE_PATH_UNSAFE")
-    if runner is _run and not _runtime_ready(runtime_root,expected_revision,code_root,production):
+    if not _runtime_ready(runtime_root,expected_revision,code_root,production):
         return _result(success=False,outcome="PRODUCTION_RUNTIME_NOT_READY")
     if output.exists() or output.is_symlink():
         return _result(success=False,outcome="PLIST_ALREADY_EXISTS")

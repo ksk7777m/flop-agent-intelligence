@@ -31,6 +31,8 @@ RUNTIME_VERSION = "0.1.0"
 RUNTIME_PACKAGES = {"attrs":"25.4.0","cffi":"2.0.0","cryptography":"46.0.5",
     "jsonschema":"4.25.1","jsonschema-specifications":"2025.9.1","pycparser":"2.23",
     "referencing":"0.36.2","rpds-py":"0.27.1","typing-extensions":"4.15.0"}
+RUNTIME_STATE_FILES = ("scheduler-state.json","scheduler-state.lock",
+                       "history.jsonl","history.jsonl.lock")
 PRELOG_KEYS = {"timestamp","stage","error_class","approved_revision","runtime_version"}
 LOG_KEYS = {"timestamp","outcome","circuit_state","requests_24h","collector_invocations"}
 LOG_OUTCOMES = {"PREFLIGHT_READY","OK_DISABLED","OK_SCHEDULER_INVOKED",
@@ -96,9 +98,19 @@ def validate_runtime(runtime_root: Path, expected_revision: str, *,
                 or not stat.S_ISREG(resolved_metadata.st_mode) or resolved_metadata.st_uid!=0):
             return "PRODUCTION_RUNTIME_NOT_READY"
         link=Path("/Library/Developer/CommandLineTools/usr/bin/python3")
+        approved_root=Path("/Library/Developer/CommandLineTools")
         for _ in range(8):
+            link=Path(os.path.abspath(link))
+            if not link.is_relative_to(approved_root): return "PRODUCTION_RUNTIME_NOT_READY"
+            current=approved_root
+            for part in link.relative_to(approved_root).parts[:-1]:
+                current=current/part; parent_metadata=current.lstat()
+                if (not stat.S_ISDIR(parent_metadata.st_mode) or parent_metadata.st_uid!=0
+                        or stat.S_IMODE(parent_metadata.st_mode)&0o022):
+                    return "PRODUCTION_RUNTIME_NOT_READY"
             link_metadata=link.lstat()
-            if link_metadata.st_uid!=0: return "PRODUCTION_RUNTIME_NOT_READY"
+            if link_metadata.st_uid!=0 or stat.S_IMODE(link_metadata.st_mode)&0o022:
+                return "PRODUCTION_RUNTIME_NOT_READY"
             if not stat.S_ISLNK(link_metadata.st_mode): break
             target=Path(os.readlink(link)); link=(target if target.is_absolute() else link.parent/target)
         else: return "PRODUCTION_RUNTIME_NOT_READY"
@@ -107,11 +119,13 @@ def validate_runtime(runtime_root: Path, expected_revision: str, *,
         return "PRODUCTION_RUNTIME_NOT_READY"
     required={"schema","runtime_version","project_revision","python","python_version",
               "dependency_lock","dependency_lock_sha256","packages","wheels","created_at",
-              "project_root","eligibility","previous_generations"}
+              "project_root","eligibility","previous_generations","readiness",
+              "approved_main_revision","verified_origin_revision","interpreter_realpath"}
     if (not isinstance(value,dict) or set(value)!=required
             or value.get("schema")!=RUNTIME_SCHEMA or value.get("runtime_version")!=RUNTIME_VERSION
             or value.get("python")!="python/bin/python3" or value.get("packages")!=RUNTIME_PACKAGES
-            or value.get("project_root")!=str(CODE_ROOT)):
+            or value.get("project_root")!=str(CODE_ROOT) or value.get("readiness")!="READY"
+            or value.get("interpreter_realpath")!=str(resolved_python)):
         return "PRODUCTION_RUNTIME_NOT_READY"
     try:
         lock=CODE_ROOT/str(value["dependency_lock"])
@@ -120,20 +134,62 @@ def validate_runtime(runtime_root: Path, expected_revision: str, *,
             return "PRODUCTION_RUNTIME_NOT_READY"
     except (OSError,TypeError): return "PRODUCTION_RUNTIME_NOT_READY"
     if value.get("project_revision")!=expected_revision: return "CODE_REVISION_MISMATCH"
-    if require_production and value.get("eligibility")!="PRODUCTION_ELIGIBLE":
-        return "PRODUCTION_RUNTIME_NOT_READY"
+    if require_production:
+        if (value.get("eligibility")!="PRODUCTION_ELIGIBLE"
+                or value.get("approved_main_revision")!=expected_revision
+                or value.get("verified_origin_revision")!=expected_revision):
+            return "PRODUCTION_RUNTIME_NOT_READY"
+        commands=([str(GIT),"symbolic-ref","--short","HEAD"],
+                  [str(GIT),"rev-parse","HEAD"],
+                  [str(GIT),"rev-parse","refs/remotes/origin/main"],
+                  [str(GIT),"diff-index","--quiet","HEAD","--"],
+                  [str(GIT),"ls-files","--others","--exclude-standard","-z"],
+                  [str(GIT),"ls-files","--others","--ignored","--exclude-standard",
+                   "-z","--","scripts","src"])
+        checks=tuple(subprocess.run(command,cwd=CODE_ROOT,env=SAFE_ENV,capture_output=True,
+                                    check=False) for command in commands)
+        if (checks[0].returncode or checks[0].stdout!=b"main\n" or checks[0].stderr
+                or checks[1].returncode or checks[1].stdout.decode("ascii").strip()!=expected_revision
+                or checks[1].stderr
+                or checks[2].returncode or checks[2].stdout.decode("ascii").strip()!=expected_revision
+                or checks[2].stderr or checks[3].returncode
+                or checks[4].returncode or checks[4].stderr or checks[4].stdout
+                or checks[5].returncode or checks[5].stderr
+                or _ignored_code_present(checks[5].stdout,CODE_ROOT)):
+            return "PRODUCTION_RUNTIME_NOT_READY"
     actual=Path(os.path.abspath(sys.executable))
     if actual!=expected_python: return "PRODUCTION_INTERPRETER_MISMATCH"
     try:
         import importlib.metadata as metadata_api
+        import cryptography
+        import jsonschema
+        import flop_agent.engagement_history as engagement_history
         site_root=generation/"python"
         for package,version in RUNTIME_PACKAGES.items():
             distribution=metadata_api.distribution(package)
             if (distribution.version!=version
                     or not Path(distribution.locate_file("")).resolve().is_relative_to(site_root)):
                 return "PRODUCTION_DEPENDENCY_MISSING"
-    except (metadata_api.PackageNotFoundError,OSError,RuntimeError):
+        if (not Path(jsonschema.__file__).resolve().is_relative_to(site_root)
+                or not Path(cryptography.__file__).resolve().is_relative_to(site_root)
+                or not Path(engagement_history.__file__).resolve().is_relative_to(CODE_ROOT/"src")):
+            return "PRODUCTION_DEPENDENCY_MISSING"
+    except (metadata_api.PackageNotFoundError,ImportError,OSError,RuntimeError,TypeError):
         return "PRODUCTION_DEPENDENCY_MISSING"
+    if require_production:
+        engagement=runtime_root/"runtime/engagement"
+        try:
+            before={name:hashlib.sha256((engagement/name).read_bytes()).digest()
+                    for name in RUNTIME_STATE_FILES}
+            status=subprocess.run(_scheduler_command("status",runtime_root),cwd=CODE_ROOT,
+                                  env=SAFE_ENV,capture_output=True,check=False,timeout=10)
+            state=_bounded_json(status)
+            after={name:hashlib.sha256((engagement/name).read_bytes()).digest()
+                   for name in RUNTIME_STATE_FILES}
+        except (OSError,subprocess.SubprocessError):
+            return "PRODUCTION_RUNTIME_NOT_READY"
+        if (status.returncode or not state or state.get("success") is not True or before!=after):
+            return "PRODUCTION_RUNTIME_NOT_READY"
     return None
 
 
@@ -319,10 +375,9 @@ def launch(runtime_root: Path, expected_revision: str, *, runner: Runner = _run,
         return _preflight_failure(runtime_root,expected_revision,"CODE_REVISION_MISMATCH","REVISION")
     if code_root!=CODE_ROOT or not _code_paths_safe(code_root):
         return _preflight_failure(runtime_root,expected_revision,"CODE_PATH_UNSAFE","CODE_PATH")
-    if runner is _run:
-        runtime_error=validate_runtime(runtime_root,expected_revision,require_production=True)
-        if runtime_error:
-            return _preflight_failure(runtime_root,expected_revision,runtime_error,"RUNTIME")
+    runtime_error=validate_runtime(runtime_root,expected_revision,require_production=True)
+    if runtime_error:
+        return _preflight_failure(runtime_root,expected_revision,runtime_error,"RUNTIME")
     try:
         revision=runner([str(GIT),"rev-parse","HEAD"],code_root,5)
         if (revision.returncode!=0 or revision.stderr or len(revision.stdout)>64

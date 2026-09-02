@@ -99,22 +99,33 @@ class KVIntegrationTests(unittest.TestCase):
                          "schemas/kv-observatory.schema.json", "api/kv/status.json",
                          "examples/kv-observer.example.json"):
             self.assertIn(expected, names)
-        positives = ["/Users/alice/secret", "/private/tmp/operator", "file:///tmp/key", "https://u:p@example.invalid/x",
+        positives = ["/Users/alice/secret", "/private/tmp/operator", "/var/folders/x/y",
+                     "file:///tmp/key", "https://u:p@example.invalid/x",
                      "mb-p-secret", "prefix-mb-p-secret", "https://technocore.chat/set-signed/x",
                      "wallet_secret=abcd"]
         for value in positives:
             self.assertTrue(scanner.scan_text(value), value)
-        for harmless in ("keep-private-key material out", "step-by-step", "https://technocore.chat/openapi.json", "value_sha256"):
+        for harmless in ("keep-private-key material out", "step-by-step", "~/Library/<placeholder>",
+                         "https://technocore.chat/openapi.json", "value_sha256"):
             self.assertFalse(scanner.scan_text(harmless), harmless)
         for name in ("state.sqlite", "state.sqlite3", "state.db", "state.db-wal", "state.sqlite-shm"):
             self.assertTrue(scanner.is_database_artifact(name))
-        for name in ("deps/pkg.whl","runtime/python-wheelhouse/x","runtime/.venv/bin/python",
+        for name in ("deps/pkg.whl","runtime/python-wheelhouse/x","runtime/wheelhouse/x",
+                     "runtime/venv/bin/python","runtime/.venv/bin/python","runtime/venv/pyvenv.cfg",
                      "runtime/generations/sha/production-runtime.json",
-                     "logs/launcher-preflight.jsonl","venv/site-packages/jsonschema/__init__.py",
-                     "pip-cache/http/item","runtime/scheduler-state.lock"):
+                     "logs/launcher-preflight.jsonl","logs/launcher-preflight.jsonl.2",
+                     "logs/launcher-preflight-2026.jsonl.bak","venv/site-packages/jsonschema/__init__.py",
+                     "pip-cache/http/item",".cache/pip/http/item","runtime/scheduler-state.lock",
+                     "runtime/history.jsonl","runtime/history.jsonl.lock","private-wheel-inventory.json"):
             self.assertTrue(scanner.is_private_runtime_artifact(name),name)
         for name in ("docs/ENGAGEMENT_RUNTIME_MIGRATION.md","requirements-engagement-production.txt"):
             self.assertFalse(scanner.is_private_runtime_artifact(name),name)
+        self.assertTrue(scanner.is_generated_private_plist(
+            "staging/com.example.plist","<string>/Users/alice/private/python3</string>"))
+        self.assertTrue(scanner.is_generated_private_plist(
+            "staging/com.example.plist","<string>/private/tmp/runtime/python3</string>"))
+        self.assertFalse(scanner.is_generated_private_plist(
+            "launchd/com.example.plist.template","<string>&lt;PRIVATE_RUNTIME_ROOT&gt;</string>"))
 
 
 if __name__ == "__main__":

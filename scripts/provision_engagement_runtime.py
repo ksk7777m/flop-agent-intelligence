@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -12,6 +13,8 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +42,7 @@ PACKAGES = {"attrs":"25.4.0","cffi":"2.0.0","cryptography":"46.0.5",
     "referencing":"0.36.2","rpds-py":"0.27.1","typing-extensions":"4.15.0"}
 SAFE_ENV = {"PATH":"/usr/bin:/bin","LC_ALL":"C","TMPDIR":"/tmp",
             "PYTHONDONTWRITEBYTECODE":"1","PIP_DISABLE_PIP_VERSION_CHECK":"1"}
+STATE_FILES=("scheduler-state.json","scheduler-state.lock","history.jsonl","history.jsonl.lock")
 
 def _result(success: bool, outcome: str, **extra: object) -> dict[str, object]:
     return {"success":success,"outcome":outcome,"network_requests":0,
@@ -58,6 +62,75 @@ def _hash(path: Path) -> str:
     with path.open("rb") as stream:
         for block in iter(lambda:stream.read(1024*1024),b""): digest.update(block)
     return digest.hexdigest()
+
+def _runtime_data_snapshot(runtime_root: Path) -> dict[str,str]:
+    engagement=runtime_root/"runtime/engagement"
+    return {name:_hash(engagement/name) for name in STATE_FILES}
+
+def _trusted_chain(link: Path,approved: Path) -> str | None:
+    try:
+        for _ in range(8):
+            link=Path(os.path.abspath(link))
+            if not link.is_relative_to(approved): return None
+            current=approved
+            for part in link.relative_to(approved).parts[:-1]:
+                current=current/part; item=current.lstat()
+                if (not stat.S_ISDIR(item.st_mode) or item.st_uid!=0
+                        or stat.S_IMODE(item.st_mode)&0o022): return None
+            item=link.lstat()
+            if item.st_uid!=0 or stat.S_IMODE(item.st_mode)&0o022: return None
+            if not stat.S_ISLNK(item.st_mode):
+                return str(link) if stat.S_ISREG(item.st_mode) else None
+            target=Path(os.readlink(link)); link=target if target.is_absolute() else link.parent/target
+    except (OSError,RuntimeError): return None
+    return None
+
+def _trusted_interpreter(interpreter: Path) -> str | None:
+    try:
+        metadata=interpreter.lstat()
+        if (not stat.S_ISLNK(metadata.st_mode)
+                or os.readlink(interpreter)!="/Library/Developer/CommandLineTools/usr/bin/python3"):
+            return None
+    except OSError: return None
+    return _trusted_chain(Path("/Library/Developer/CommandLineTools/usr/bin/python3"),
+                          Path("/Library/Developer/CommandLineTools"))
+
+def _valid_origins(value: object,python_dir: Path,source: Path) -> bool:
+    try:
+        return (isinstance(value,dict)
+            and (value.get("isolated"),value.get("no_user_site"),value.get("ignore_environment"))==(1,1,1)
+            and Path(value["jsonschema"]).resolve().is_relative_to(python_dir)
+            and Path(value["cryptography"]).resolve().is_relative_to(python_dir)
+            and Path(value["flop_agent"]).resolve().is_relative_to(source))
+    except (KeyError,TypeError,OSError,RuntimeError): return False
+
+@contextmanager
+def _publication_lock(generations: Path, timeout: float=5.0):
+    path=generations/".publication.lock"
+    descriptor=os.open(path,os.O_CREAT|os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0),0o600)
+    try:
+        metadata=os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid!=os.getuid()
+                or stat.S_IMODE(metadata.st_mode)!=0o600): raise OSError
+        deadline=time.monotonic()+timeout
+        while True:
+            try: fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB); break
+            except BlockingIOError:
+                if time.monotonic()>=deadline: raise TimeoutError
+                time.sleep(0.01)
+        try: yield
+        finally: fcntl.flock(descriptor,fcntl.LOCK_UN)
+    finally: os.close(descriptor)
+
+def _publish_generation(candidate: Path,generation: Path,generations: Path) -> bool:
+    """Exclusively publish candidate; never replace an existing generation."""
+    with _publication_lock(generations):
+        if generation.exists() or generation.is_symlink(): return False
+        os.rename(candidate,generation)
+        directory=os.open(generations,os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+        return True
 
 def verify_wheelhouse(path: Path) -> bool:
     if not _private_dir(path): return False
@@ -143,11 +216,39 @@ print(json.dumps({'isolated':sys.flags.isolated,'user_site':site.ENABLE_USER_SIT
                 or value.get("packages")!=PACKAGES
                 or not all(Path(origin).is_relative_to(python_dir) for origin in value["origins"].values())):
             raise RuntimeError("runtime verification")
+        interpreter_realpath=_trusted_interpreter(interpreter)
+        if interpreter_realpath is None: raise RuntimeError("interpreter trust")
+        before=_runtime_data_snapshot(runtime_root)
+        source=CODE_ROOT/"src"; scheduler=CODE_ROOT/"scripts/engagement_scheduler.py"
+        origin_probe=("import json,sys;"+f"sys.path.insert(0,{str(source)!r});"
+            "import cryptography,jsonschema,flop_agent.engagement_history as f;"
+            "print(json.dumps({'isolated':sys.flags.isolated,'no_user_site':sys.flags.no_user_site,"
+            "'ignore_environment':sys.flags.ignore_environment,'jsonschema':jsonschema.__file__,"
+            "'cryptography':cryptography.__file__,'flop_agent':f.__file__}))")
+        origins=subprocess.run([str(interpreter),"-I","-c",origin_probe],env=SAFE_ENV,
+                               capture_output=True,check=False)
+        if origins.returncode or origins.stderr: raise RuntimeError("origin verification")
+        origin_value=json.loads(origins.stdout)
+        if not _valid_origins(origin_value,python_dir,source):
+            raise RuntimeError("origin verification")
+        entry=("import runpy,sys;"+f"sys.path.insert(0,{str(source)!r});"
+            +f"sys.argv[0]={str(scheduler)!r};"
+            +f"runpy.run_path({str(scheduler)!r},run_name='__main__')")
+        status=subprocess.run([str(interpreter),"-I","-c",entry,"status","--root",str(runtime_root)],
+                              cwd=CODE_ROOT,env=SAFE_ENV,capture_output=True,check=False,timeout=10)
+        try: status_value=json.loads(status.stdout)
+        except (UnicodeDecodeError,json.JSONDecodeError): raise RuntimeError("status verification") from None
+        if (status.returncode or status.stderr or status_value.get("success") is not True
+                or _runtime_data_snapshot(runtime_root)!=before):
+            raise RuntimeError("status verification")
         payload={"schema":RUNTIME_SCHEMA,"runtime_version":RUNTIME_VERSION,
             "project_revision":expected_revision,"python":"python/bin/python3",
             "python_version":"3.9.6","dependency_lock":"requirements-engagement-production.txt",
             "dependency_lock_sha256":_hash(LOCK),"packages":PACKAGES,"wheels":WHEELS,
             "project_root":str(CODE_ROOT),"eligibility":eligibility,
+            "approved_main_revision":approved_main_revision,
+            "verified_origin_revision":verified_origin_revision,
+            "interpreter_realpath":interpreter_realpath,"readiness":"READY",
             "previous_generations":sorted(item.name for item in generations.iterdir()
                 if item.is_dir() and not item.name.startswith(".")),
             "created_at":datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")}
@@ -159,10 +260,9 @@ print(json.dumps({'isolated':sys.flags.isolated,'user_site':site.ENABLE_USER_SIT
         directory=os.open(candidate,os.O_RDONLY)
         try: os.fsync(directory)
         finally: os.close(directory)
-        os.replace(candidate,generation); candidate=None
-        directory=os.open(generations,os.O_RDONLY)
-        try: os.fsync(directory)
-        finally: os.close(directory)
+        if not _publish_generation(candidate,generation,generations):
+            return _result(False,"PRODUCTION_RUNTIME_ALREADY_EXISTS",eligibility=eligibility)
+        candidate=None
         return _result(True,"PRODUCTION_RUNTIME_READY",python=str(generation/"python/bin/python3"),
                        generation=str(generation),project_revision=expected_revision,
                        wheel_count=len(WHEELS),eligibility=eligibility)

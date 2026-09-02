@@ -18,7 +18,7 @@ PUBLIC_DIRS = ("docs", "schemas", "api", "examples", "prompts")
 
 FORBIDDEN_PATTERNS = {
     "local filesystem path": re.compile(
-        r"(?:file://|/Users/[^/\s]+/|/private/tmp/|/home/[^/\s]+/|[A-Za-z]:\\Users\\[^\\\s]+\\)",
+        r"(?:file://|/Users/[^/\s]+/|/private/tmp/|/var/folders/|/home/[^/\s]+/|[A-Za-z]:\\Users\\[^\\\s]+\\)",
         re.IGNORECASE,
     ),
     "private Technocore locator": re.compile(
@@ -67,10 +67,23 @@ def is_database_artifact(name: str) -> bool:
 
 def is_private_runtime_artifact(name: str) -> bool:
     path=Path(name)
-    parts={"site-packages","python-wheelhouse","pip-cache","generations",".venv"}
-    names={"production-runtime.json","launcher-preflight.jsonl",
-           "scheduler-state.json","scheduler-state.lock","history.jsonl.lock"}
-    return path.suffix==".whl" or bool(parts.intersection(path.parts)) or path.name in names
+    lowered=tuple(part.lower() for part in path.parts); filename=path.name.lower()
+    parts={"site-packages","python-wheelhouse","wheelhouse","pip-cache","pip_cache",
+           "generations",".venv","venv","production-runtime"}
+    names={"production-runtime.json","scheduler-state.json","scheduler-state.lock",
+           "history.jsonl","history.jsonl.lock","pyvenv.cfg"}
+    runtime_lock=filename.endswith(".lock") and bool({"runtime","engagement","generations"}.intersection(lowered))
+    pip_cache=any(lowered[index:index+2]==(".cache","pip") for index in range(len(lowered)-1))
+    prelog=filename.startswith("launcher-preflight") and ".jsonl" in filename
+    inventory=("wheel" in filename and "inventory" in filename)
+    return (path.suffix.lower()==".whl" or bool(parts.intersection(lowered)) or filename in names
+            or runtime_lock or pip_cache or prelog or inventory)
+
+
+def is_generated_private_plist(name: str, text: str) -> bool:
+    path=Path(name)
+    return (path.suffix.lower()==".plist" and not path.name.endswith(".plist.template")
+            and bool(scan_text(text)))
 
 
 def scan() -> list[str]:
@@ -81,6 +94,14 @@ def scan() -> list[str]:
     for name in filter(None,tracked):
         if is_private_runtime_artifact(name):
             findings.append(f"{name}: private runtime artifact is tracked")
+        path=ROOT/name
+        if path.suffix==".plist" and not path.name.endswith(".plist.template"):
+            try: plist_text=path.read_text(encoding="utf-8")
+            except (OSError,UnicodeDecodeError):
+                findings.append(f"{name}: unreadable generated plist is tracked")
+            else:
+                if is_generated_private_plist(name,plist_text):
+                    findings.append(f"{name}: local generated plist is tracked")
     for path in files:
         text = path.read_text(encoding="utf-8")
         for label in scan_text(text):

@@ -29,19 +29,33 @@ def render(output,runtime,revision,**kwargs):
 
 
 class EngagementActivationTests(unittest.TestCase):
+    def setUp(self):
+        self.runtime_patch=mock.patch.object(renderer,"_runtime_ready",return_value=True)
+        self.runtime_patch.start()
+
+    def tearDown(self): self.runtime_patch.stop()
+
     def test_feature_is_noninstallable_preview_and_production_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
             runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700)
             feature=Runner(branch="codex/feature")
-            preview=renderer.render(staged/"preview.json",runtime,REVISION,runner=feature)
+            self.runtime_patch.stop()
+            try:
+                bypass=renderer.render(staged/"bypass.plist",runtime,REVISION,runner=feature,
+                    production=True,approved_main_revision=REVISION,verified_origin_revision=REVISION)
+            finally: self.runtime_patch.start()
+            self.assertEqual(bypass["outcome"],"PRODUCTION_RUNTIME_NOT_READY")
+            with mock.patch.object(renderer,"_runtime_ready",return_value=True):
+                preview=renderer.render(staged/"preview.json",runtime,REVISION,runner=feature)
             self.assertEqual((preview["success"],preview["eligibility"],preview["installable"],
                               preview["artifact_format"]),
                              (True,"PREVIEW_ONLY_FEATURE_REVISION",False,"NON_INSTALLABLE_JSON"))
             self.assertEqual(json.loads((staged/"preview.json").read_text())["installability"],
                              "NON_INSTALLABLE")
-            rejected=renderer.render(staged/"production.plist",runtime,REVISION,runner=feature,
-                production=True,approved_main_revision=REVISION,verified_origin_revision=REVISION)
+            with mock.patch.object(renderer,"_runtime_ready",return_value=True):
+                rejected=renderer.render(staged/"production.plist",runtime,REVISION,runner=feature,
+                    production=True,approved_main_revision=REVISION,verified_origin_revision=REVISION)
             self.assertEqual(rejected["outcome"],"PRODUCTION_REVISION_NOT_ELIGIBLE")
             self.assertFalse((staged/"production.plist").exists())
 
@@ -51,9 +65,10 @@ class EngagementActivationTests(unittest.TestCase):
             runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700)
             for runner,approved,verified in ((Runner(),None,None),
                     (Runner(origin="2"*40),REVISION,REVISION),(Runner(),REVISION,"2"*40)):
-                result=renderer.render(staged/f"{len(list(staged.iterdir()))}.plist",runtime,REVISION,
-                    runner=runner,production=True,approved_main_revision=approved,
-                    verified_origin_revision=verified)
+                with mock.patch.object(renderer,"_runtime_ready",return_value=True):
+                    result=renderer.render(staged/f"{len(list(staged.iterdir()))}.plist",runtime,REVISION,
+                        runner=runner,production=True,approved_main_revision=approved,
+                        verified_origin_revision=verified)
                 self.assertEqual(result["outcome"],"PRODUCTION_REVISION_NOT_ELIGIBLE")
 
     def test_production_render_rejects_untracked_artifact(self):
