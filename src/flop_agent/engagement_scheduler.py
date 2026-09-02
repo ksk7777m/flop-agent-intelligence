@@ -362,6 +362,7 @@ def evaluate(state: Mapping[str, Any], *, now: datetime | None = None) -> dict[s
     return {"allowed":outcome == "SCHEDULER_READY", "outcome":outcome,
             "overlap_active":False,
             "circuit_state":state["circuit_state"], "scheduler_enabled":state["scheduler_enabled"],
+            "run_in_progress":state["run_in_progress"],
             "last_attempt_at":state["last_attempt_at"], "last_success_at":state["last_success_at"],
             "not_before_at":state["not_before_at"],
             "consecutive_failures":state["consecutive_failures"],

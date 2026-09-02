@@ -14,11 +14,16 @@ import stat
 import subprocess
 import tempfile
 import time
+import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from engagement_runtime_contract import validate_scheduler_status_result
+
 CODE_ROOT = Path(__file__).resolve().parents[1]
+PRODUCTION_RUNTIME_ROOT = (Path.home()/"Library/Application Support/flop-agent-intelligence/production-runtime").absolute()
 BASE_PYTHON = Path("/usr/bin/python3")
 GIT = Path("/usr/bin/git")
 LOCK = CODE_ROOT / "requirements-engagement-production.txt"
@@ -69,6 +74,11 @@ def _runtime_data_snapshot(runtime_root: Path) -> dict[str,str]:
 
 def _trusted_chain(link: Path,approved: Path) -> str | None:
     try:
+        for ancestor in (Path("/"),Path("/Library"),Path("/Library/Developer"),approved):
+            item=ancestor.lstat()
+            if (not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode)
+                    or item.st_uid!=0 or stat.S_IMODE(item.st_mode)&0o022
+                    or ancestor.resolve()!=ancestor.absolute()): return None
         for _ in range(8):
             link=Path(os.path.abspath(link))
             if not link.is_relative_to(approved): return None
@@ -176,6 +186,8 @@ def provision(runtime_root: Path, source_wheelhouse: Path, expected_revision: st
         return _result(False,eligibility,eligibility=eligibility)
     if production and eligibility!=PRODUCTION_ELIGIBLE:
         return _result(False,"PRODUCTION_REVISION_NOT_ELIGIBLE",eligibility=eligibility)
+    if production and runtime_root!=PRODUCTION_RUNTIME_ROOT:
+        return _result(False,"RUNTIME_ROOT_UNSAFE",eligibility=eligibility)
     if not _private_dir(runtime_root): return _result(False,"RUNTIME_ROOT_UNSAFE")
     if not verify_wheelhouse(source_wheelhouse): return _result(False,"WHEELHOUSE_INVALID")
     generations=runtime_root/"generations"
@@ -238,9 +250,9 @@ print(json.dumps({'isolated':sys.flags.isolated,'user_site':site.ENABLE_USER_SIT
                               cwd=CODE_ROOT,env=SAFE_ENV,capture_output=True,check=False,timeout=10)
         try: status_value=json.loads(status.stdout)
         except (UnicodeDecodeError,json.JSONDecodeError): raise RuntimeError("status verification") from None
-        if (status.returncode or status.stderr or status_value.get("success") is not True
+        if (status.returncode or status.stderr or validate_scheduler_status_result(status_value) is None
                 or _runtime_data_snapshot(runtime_root)!=before):
-            raise RuntimeError("status verification")
+            raise RuntimeError("PRODUCTION_SCHEDULER_STATUS_INVALID")
         payload={"schema":RUNTIME_SCHEMA,"runtime_version":RUNTIME_VERSION,
             "project_revision":expected_revision,"python":"python/bin/python3",
             "python_version":"3.9.6","dependency_lock":"requirements-engagement-production.txt",

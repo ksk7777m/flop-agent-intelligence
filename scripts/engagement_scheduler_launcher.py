@@ -17,7 +17,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from engagement_runtime_contract import validate_scheduler_status_result
+
 CODE_ROOT = Path(__file__).resolve().parents[1]
+PRODUCTION_RUNTIME_ROOT = (Path.home()/"Library/Application Support/flop-agent-intelligence/production-runtime").absolute()
 GIT = Path("/usr/bin/git")
 SCHEDULER = CODE_ROOT / "scripts/engagement_scheduler.py"
 COLLECTOR = CODE_ROOT / "scripts/collect_engagement.py"
@@ -31,6 +35,17 @@ RUNTIME_VERSION = "0.1.0"
 RUNTIME_PACKAGES = {"attrs":"25.4.0","cffi":"2.0.0","cryptography":"46.0.5",
     "jsonschema":"4.25.1","jsonschema-specifications":"2025.9.1","pycparser":"2.23",
     "referencing":"0.36.2","rpds-py":"0.27.1","typing-extensions":"4.15.0"}
+RUNTIME_WHEELS = {
+    "attrs-25.4.0-py3-none-any.whl":"adcf7e2a1fb3b36ac48d97835bb6d8ade15b8dcce26aba8bf1d14847b57a3373",
+    "cffi-2.0.0-cp39-cp39-macosx_11_0_arm64.whl":"de8dad4425a6ca6e4e5e297b27b5c824ecc7581910bf9aee86cb6835e6812aa7",
+    "cryptography-46.0.5-cp38-abi3-macosx_10_9_universal2.whl":"4108d4c09fbbf2789d0c926eb4152ae1760d5a2d97612b92d508d96c861e4d31",
+    "jsonschema-4.25.1-py3-none-any.whl":"3fba0169e345c7175110351d456342c364814cfcf3b964ba4587f22915230a63",
+    "jsonschema_specifications-2025.9.1-py3-none-any.whl":"98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+    "pycparser-2.23-py3-none-any.whl":"e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934",
+    "referencing-0.36.2-py3-none-any.whl":"e8699adbbf8b5c7de96d8ffa0eb5c158b3beafce084968e2ea8bb08c6794dcd0",
+    "rpds_py-0.27.1-cp39-cp39-macosx_11_0_arm64.whl":"1fea2b1a922c47c51fd07d656324531adc787e415c8b116530a1d29c0516c62d",
+    "typing_extensions-4.15.0-py3-none-any.whl":"f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548",
+}
 RUNTIME_STATE_FILES = ("scheduler-state.json","scheduler-state.lock",
                        "history.jsonl","history.jsonl.lock")
 PRELOG_KEYS = {"timestamp","stage","error_class","approved_revision","runtime_version"}
@@ -52,6 +67,69 @@ SCHEDULER_OUTCOMES = {
 }
 
 Runner = Callable[[list[str], Path, int], subprocess.CompletedProcess[bytes]]
+
+
+def _trusted_directory(path: Path, *, private: bool) -> bool:
+    try: metadata=path.lstat()
+    except OSError: return False
+    mode=stat.S_IMODE(metadata.st_mode)
+    return (stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
+            and metadata.st_uid==os.getuid() and path.resolve()==path.absolute()
+            and (mode==0o700 if private else not mode&0o022))
+
+
+def _runtime_directories_trusted(runtime_root: Path,generation: Path,
+                                 expected_revision: str,require_production: bool) -> bool:
+    generations=runtime_root/"generations"
+    python_dir=generation/"python"; wheelhouse=generation/"wheelhouse"
+    return ((not require_production or runtime_root==PRODUCTION_RUNTIME_ROOT)
+            and generation.name==expected_revision and generation.parent==generations
+            and _trusted_directory(runtime_root,private=True)
+            and _trusted_directory(generations,private=True)
+            and _trusted_directory(generation,private=True)
+            and _trusted_directory(python_dir,private=False)
+            and _trusted_directory(wheelhouse,private=True))
+
+
+def _trusted_os_chain(link: Path,*,approved: Path=Path("/Library/Developer/CommandLineTools"),
+                      ancestors: tuple[Path,...] | None=None,expected_owner: int=0) -> str | None:
+    try:
+        ancestors=ancestors or (Path("/"),Path("/Library"),Path("/Library/Developer"),approved)
+        for ancestor in ancestors:
+            item=ancestor.lstat()
+            if (not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode)
+                    or item.st_uid!=expected_owner or stat.S_IMODE(item.st_mode)&0o022
+                    or ancestor.resolve()!=ancestor.absolute()): return None
+        for _ in range(8):
+            link=Path(os.path.abspath(link))
+            if not link.is_relative_to(approved): return None
+            current=approved
+            for part in link.relative_to(approved).parts[:-1]:
+                current=current/part; item=current.lstat()
+                if (not stat.S_ISDIR(item.st_mode) or stat.S_ISLNK(item.st_mode)
+                        or item.st_uid!=expected_owner or stat.S_IMODE(item.st_mode)&0o022): return None
+            item=link.lstat()
+            if item.st_uid!=expected_owner or stat.S_IMODE(item.st_mode)&0o022: return None
+            if not stat.S_ISLNK(item.st_mode):
+                return str(link) if stat.S_ISREG(item.st_mode) else None
+            target=Path(os.readlink(link)); link=target if target.is_absolute() else link.parent/target
+    except (OSError,RuntimeError): return None
+    return None
+
+
+def _manifest_contract_valid(value: object,resolved_python: Path) -> bool:
+    required={"schema","runtime_version","project_revision","python","python_version",
+              "dependency_lock","dependency_lock_sha256","packages","wheels","created_at",
+              "project_root","eligibility","previous_generations","readiness",
+              "approved_main_revision","verified_origin_revision","interpreter_realpath"}
+    return (isinstance(value,dict) and set(value)==required
+            and value.get("schema")==RUNTIME_SCHEMA and value.get("runtime_version")==RUNTIME_VERSION
+            and value.get("python")=="python/bin/python3" and value.get("python_version")=="3.9.6"
+            and value.get("dependency_lock")=="requirements-engagement-production.txt"
+            and value.get("packages")==RUNTIME_PACKAGES
+            and value.get("wheels")==RUNTIME_WHEELS and value.get("project_root")==str(CODE_ROOT)
+            and value.get("readiness")=="READY"
+            and value.get("interpreter_realpath")==str(resolved_python))
 
 
 def _utc_stamp() -> str:
@@ -87,6 +165,8 @@ def validate_runtime(runtime_root: Path, expected_revision: str, *,
     generation=(runtime_root/"generations"/expected_revision).absolute()
     manifest=generation/"production-runtime.json"
     expected_python=generation/"python/bin/python3"
+    if not _runtime_directories_trusted(runtime_root,generation,expected_revision,require_production):
+        return "PRODUCTION_RUNTIME_NOT_READY"
     try:
         metadata=manifest.lstat(); python_metadata=expected_python.lstat()
         if (not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
@@ -97,35 +177,13 @@ def validate_runtime(runtime_root: Path, expected_revision: str, *,
                 or os.readlink(expected_python)!="/Library/Developer/CommandLineTools/usr/bin/python3"
                 or not stat.S_ISREG(resolved_metadata.st_mode) or resolved_metadata.st_uid!=0):
             return "PRODUCTION_RUNTIME_NOT_READY"
-        link=Path("/Library/Developer/CommandLineTools/usr/bin/python3")
-        approved_root=Path("/Library/Developer/CommandLineTools")
-        for _ in range(8):
-            link=Path(os.path.abspath(link))
-            if not link.is_relative_to(approved_root): return "PRODUCTION_RUNTIME_NOT_READY"
-            current=approved_root
-            for part in link.relative_to(approved_root).parts[:-1]:
-                current=current/part; parent_metadata=current.lstat()
-                if (not stat.S_ISDIR(parent_metadata.st_mode) or parent_metadata.st_uid!=0
-                        or stat.S_IMODE(parent_metadata.st_mode)&0o022):
-                    return "PRODUCTION_RUNTIME_NOT_READY"
-            link_metadata=link.lstat()
-            if link_metadata.st_uid!=0 or stat.S_IMODE(link_metadata.st_mode)&0o022:
-                return "PRODUCTION_RUNTIME_NOT_READY"
-            if not stat.S_ISLNK(link_metadata.st_mode): break
-            target=Path(os.readlink(link)); link=(target if target.is_absolute() else link.parent/target)
-        else: return "PRODUCTION_RUNTIME_NOT_READY"
+        trusted_realpath=_trusted_os_chain(Path("/Library/Developer/CommandLineTools/usr/bin/python3"))
+        if trusted_realpath is None or trusted_realpath!=str(resolved_python):
+            return "PRODUCTION_RUNTIME_NOT_READY"
         value=json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError,RuntimeError,UnicodeDecodeError,json.JSONDecodeError):
         return "PRODUCTION_RUNTIME_NOT_READY"
-    required={"schema","runtime_version","project_revision","python","python_version",
-              "dependency_lock","dependency_lock_sha256","packages","wheels","created_at",
-              "project_root","eligibility","previous_generations","readiness",
-              "approved_main_revision","verified_origin_revision","interpreter_realpath"}
-    if (not isinstance(value,dict) or set(value)!=required
-            or value.get("schema")!=RUNTIME_SCHEMA or value.get("runtime_version")!=RUNTIME_VERSION
-            or value.get("python")!="python/bin/python3" or value.get("packages")!=RUNTIME_PACKAGES
-            or value.get("project_root")!=str(CODE_ROOT) or value.get("readiness")!="READY"
-            or value.get("interpreter_realpath")!=str(resolved_python)):
+    if not _manifest_contract_valid(value,resolved_python):
         return "PRODUCTION_RUNTIME_NOT_READY"
     try:
         lock=CODE_ROOT/str(value["dependency_lock"])
@@ -188,7 +246,7 @@ def validate_runtime(runtime_root: Path, expected_revision: str, *,
                    for name in RUNTIME_STATE_FILES}
         except (OSError,subprocess.SubprocessError):
             return "PRODUCTION_RUNTIME_NOT_READY"
-        if (status.returncode or not state or state.get("success") is not True or before!=after):
+        if (status.returncode or validate_scheduler_status_result(state) is None or before!=after):
             return "PRODUCTION_RUNTIME_NOT_READY"
     return None
 
@@ -394,14 +452,10 @@ def launch(runtime_root: Path, expected_revision: str, *, runner: Runner = _run,
                 or _ignored_code_present(ignored_code.stdout,code_root)):
             return _preflight_failure(runtime_root,expected_revision,"CODE_TREE_DIRTY","CODE_TREE")
         status=runner(_scheduler_command("status",runtime_root),code_root,10)
-        state=_bounded_json(status)
-        if not state or state.get("success") is not True:
-            outcome="STATE_MISSING" if state and state.get("outcome")=="SCHEDULER_STATE_MISSING" else "STATE_INVALID"
+        raw_state=_bounded_json(status); state=validate_scheduler_status_result(raw_state)
+        if state is None:
+            outcome="STATE_MISSING" if raw_state and raw_state.get("outcome")=="SCHEDULER_STATE_MISSING" else "STATE_INVALID"
             return _result(outcome)
-        if (state.get("circuit_state") not in CIRCUIT_STATES-{None}
-                or type(state.get("requests_24h")) is not int
-                or not 0<=state["requests_24h"]<=24):
-            return _result("STATE_INVALID")
         append_log(runtime_root,{"timestamp":_utc_stamp(),"outcome":"PREFLIGHT_READY",
                    "circuit_state":state.get("circuit_state"),"requests_24h":state.get("requests_24h")})
     except (OSError,subprocess.SubprocessError,UnicodeDecodeError):

@@ -14,8 +14,13 @@ def completed(value=b"",returncode=0,stderr=b""):
 class FakeRunner:
     def __init__(self,revision=REVISION,dirty=False,status=None,run=None):
         self.revision=revision; self.dirty=dirty; self.calls=[]
-        self.status=status or {"success":True,"outcome":"SCHEDULER_DISABLED",
-            "scheduler_enabled":False,"circuit_state":"READY_DISABLED","requests_24h":0}
+        self.status=status or {"success":True,"allowed":False,"outcome":"SCHEDULER_NOT_BEFORE",
+            "overlap_active":False,"scheduler_enabled":True,"run_in_progress":False,
+            "circuit_state":"READY","last_attempt_at":None,"last_success_at":None,
+            "not_before_at":"2026-09-03T00:00:00Z","consecutive_failures":0,
+            "last_error_class":None,"normal_interval_minutes":60,
+            "minimum_interval_minutes":30,"next_eligible_at":"2026-09-03T00:00:00Z",
+            "requests_24h":0}
         self.run=run or {"success":False,"outcome":"SCHEDULER_DISABLED",
             "collector_invocations":0,"circuit_state":"READY_DISABLED"}
     def __call__(self,command,cwd,timeout):
@@ -184,6 +189,8 @@ class EngagementLauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder).resolve(); (root/"scripts").mkdir(); (root/"src/flop_agent").mkdir(parents=True)
             shutil.copy2(launcher.__file__,root/"scripts/engagement_scheduler_launcher.py")
+            shutil.copy2(launcher.CODE_ROOT/"scripts/engagement_runtime_contract.py",
+                         root/"scripts/engagement_runtime_contract.py")
             (root/"scripts/collect_engagement.py").write_text("raise AssertionError('collector invoked')\n")
             scheduler=root/"scripts/engagement_scheduler.py"
             scheduler.write_text("import json,sys\na='status' if 'status' in sys.argv else 'run-once'\n"
@@ -208,6 +215,7 @@ class EngagementLauncherTests(unittest.TestCase):
                 env={**os.environ,"PYTHONPATH":str(hostile),"PYTHONUSERBASE":str(hostile)},
                 capture_output=True,text=True)
             self.assertEqual(completed.returncode,1,(completed.stdout,completed.stderr))
+            self.assertTrue(completed.stdout,completed.stderr)
             result=json.loads(completed.stdout)
             self.assertEqual((result["outcome"],result["collector_invocations"]),
                              ("PRODUCTION_RUNTIME_NOT_READY",0))

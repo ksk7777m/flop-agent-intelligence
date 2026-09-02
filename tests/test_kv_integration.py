@@ -111,6 +111,7 @@ class KVIntegrationTests(unittest.TestCase):
         for name in ("state.sqlite", "state.sqlite3", "state.db", "state.db-wal", "state.sqlite-shm"):
             self.assertTrue(scanner.is_database_artifact(name))
         for name in ("deps/pkg.whl","runtime/python-wheelhouse/x","runtime/wheelhouse/x",
+                     "runtime/wheel-house/x","runtime/wheels/README.inventory",
                      "runtime/venv/bin/python","runtime/.venv/bin/python","runtime/venv/pyvenv.cfg",
                      "runtime/generations/sha/production-runtime.json",
                      "logs/launcher-preflight.jsonl","logs/launcher-preflight.jsonl.2",
@@ -121,11 +122,34 @@ class KVIntegrationTests(unittest.TestCase):
         for name in ("docs/ENGAGEMENT_RUNTIME_MIGRATION.md","requirements-engagement-production.txt"):
             self.assertFalse(scanner.is_private_runtime_artifact(name),name)
         self.assertTrue(scanner.is_generated_private_plist(
-            "staging/com.example.plist","<string>/Users/alice/private/python3</string>"))
+            "staging/com.example.plist","""<?xml version="1.0"?><plist version="1.0"><dict>
+            <key>Label</key><string>com.flop-agent-intelligence.engagement-scheduler</string>
+            <key>ProgramArguments</key><array><string>/Users/alice/private/python3</string></array>
+            </dict></plist>"""))
         self.assertTrue(scanner.is_generated_private_plist(
-            "staging/com.example.plist","<string>/private/tmp/runtime/python3</string>"))
+            "staging/renamed.xml","""<?xml version="1.0"?><plist version="1.0"><dict>
+            <key>Label</key><string>com.flop-agent-intelligence.engagement-scheduler</string>
+            <key>ProgramArguments</key><array><string>/private/tmp/runtime/python3</string></array>
+            </dict></plist>"""))
         self.assertFalse(scanner.is_generated_private_plist(
             "launchd/com.example.plist.template","<string>&lt;PRIVATE_RUNTIME_ROOT&gt;</string>"))
+        runtime_manifest=json.dumps({"schema":"engagement-production-runtime-v1",
+            "interpreter_realpath":"/Library/Developer/CommandLineTools/python3",
+            "project_revision":"a"*40,"dependency_lock_sha256":"b"*64,
+            "wheels":{"attrs.whl":"c"*64},"readiness":"READY"})
+        readiness=json.dumps({"interpreter_realpath":"/Library/Developer/CommandLineTools/python3",
+            "project_revision":"a"*40,"dependency_lock_sha256":"b"*64,
+            "wheels":{},"readiness":"READY"})
+        prelog=json.dumps({"timestamp":"2026-09-03T00:00:00Z","stage":"RUNTIME",
+            "error_class":"PRODUCTION_RUNTIME_NOT_READY","approved_revision":"a"*40,
+            "runtime_version":"0.1.0"})
+        history=json.dumps({"collector_version":"0.1.0","git_revision":"a"*40,
+            "source_sha256":"b"*64,"per_room":[],"fetched_at":"2026-09-03T00:00:00Z"})
+        for name,text in (("misc/renamed.json",runtime_manifest),("misc/ready.tmp",readiness),
+                          ("logs/diagnostic-20260903.bak",prelog),("misc/archive.jsonl",history)):
+            self.assertTrue(scanner.is_structured_private_artifact(name,text),name)
+        self.assertFalse(scanner.is_structured_private_artifact(
+            "api/capabilities.json",json.dumps({"schema":"capabilities-v1","status":"READY"})))
 
 
 if __name__ == "__main__":

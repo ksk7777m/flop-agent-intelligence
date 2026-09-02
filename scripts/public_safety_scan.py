@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import plistlib
 import re
 import subprocess
 from pathlib import Path
@@ -68,7 +69,7 @@ def is_database_artifact(name: str) -> bool:
 def is_private_runtime_artifact(name: str) -> bool:
     path=Path(name)
     lowered=tuple(part.lower() for part in path.parts); filename=path.name.lower()
-    parts={"site-packages","python-wheelhouse","wheelhouse","pip-cache","pip_cache",
+    parts={"site-packages","python-wheelhouse","wheelhouse","wheel-house","wheels","pip-cache","pip_cache",
            "generations",".venv","venv","production-runtime"}
     names={"production-runtime.json","scheduler-state.json","scheduler-state.lock",
            "history.jsonl","history.jsonl.lock","pyvenv.cfg"}
@@ -82,8 +83,35 @@ def is_private_runtime_artifact(name: str) -> bool:
 
 def is_generated_private_plist(name: str, text: str) -> bool:
     path=Path(name)
-    return (path.suffix.lower()==".plist" and not path.name.endswith(".plist.template")
-            and bool(scan_text(text)))
+    if path.name.endswith(".plist.template"): return False
+    try: value=plistlib.loads(text.encode())
+    except (ValueError,plistlib.InvalidFileException): return False
+    if not isinstance(value,dict): return False
+    arguments=value.get("ProgramArguments",[])
+    return (value.get("Label")=="com.flop-agent-intelligence.engagement-scheduler"
+            and isinstance(arguments,list) and bool(scan_text("\n".join(
+                item for item in arguments if isinstance(item,str)))))
+
+
+def is_structured_private_artifact(name: str,text: str) -> bool:
+    """Recognize strong runtime structures without banning generic documentation."""
+    path=Path(name); values=[]
+    if path.suffix.lower() in {".json",".jsonl",".bak",".tmp"}:
+        try: values=[json.loads(line) for line in text.splitlines() if line.strip()]
+        except json.JSONDecodeError: values=[]
+    for value in values:
+        if not isinstance(value,dict): continue
+        keys=set(value)
+        if (value.get("schema")=="engagement-production-runtime-v1"
+                or {"interpreter_realpath","project_revision","dependency_lock_sha256",
+                    "wheels","readiness"} <= keys
+                or keys=={"timestamp","stage","error_class","approved_revision","runtime_version"}):
+            return True
+        public_prefix=path.parts[0] if path.parts else ""
+        if (public_prefix not in {*PUBLIC_DIRS,"api","schemas","examples"}
+                and {"collector_version","git_revision","source_sha256","per_room","fetched_at"} <= keys):
+            return True
+    return is_generated_private_plist(name,text)
 
 
 def scan() -> list[str]:
@@ -95,13 +123,10 @@ def scan() -> list[str]:
         if is_private_runtime_artifact(name):
             findings.append(f"{name}: private runtime artifact is tracked")
         path=ROOT/name
-        if path.suffix==".plist" and not path.name.endswith(".plist.template"):
-            try: plist_text=path.read_text(encoding="utf-8")
-            except (OSError,UnicodeDecodeError):
-                findings.append(f"{name}: unreadable generated plist is tracked")
-            else:
-                if is_generated_private_plist(name,plist_text):
-                    findings.append(f"{name}: local generated plist is tracked")
+        try: tracked_text=path.read_text(encoding="utf-8")
+        except (OSError,UnicodeDecodeError): tracked_text=None
+        if tracked_text is not None and is_structured_private_artifact(name,tracked_text):
+            findings.append(f"{name}: structured private runtime artifact is tracked")
     for path in files:
         text = path.read_text(encoding="utf-8")
         for label in scan_text(text):

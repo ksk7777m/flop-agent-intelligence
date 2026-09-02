@@ -5,11 +5,117 @@ from unittest import mock
 from scripts import engagement_scheduler_launcher as launcher
 from scripts import provision_engagement_runtime as provisioner
 from scripts import validate_engagement_production_runtime as runtime_validator
+from scripts.engagement_runtime_contract import validate_scheduler_status_result
 
 REVISION="1"*40
 
 
 class EngagementProductionRuntimeTests(unittest.TestCase):
+    @staticmethod
+    def valid_status():
+        return {"success":True,"allowed":False,"outcome":"SCHEDULER_NOT_BEFORE",
+            "overlap_active":False,"circuit_state":"READY","scheduler_enabled":True,
+            "run_in_progress":False,"last_attempt_at":None,"last_success_at":None,
+            "not_before_at":"2026-09-03T00:00:00Z","consecutive_failures":0,
+            "last_error_class":None,"normal_interval_minutes":60,
+            "minimum_interval_minutes":30,"next_eligible_at":"2026-09-03T00:00:00Z",
+            "requests_24h":0}
+
+    def test_strict_scheduler_status_contract_matrix(self):
+        valid=self.valid_status(); self.assertIsNotNone(validate_scheduler_status_result(valid))
+        mutations={
+            "success_only":{"success":True},
+            "missing":{key:value for key,value in valid.items() if key!="run_in_progress"},
+            "wrong_scheduler":{**valid,"scheduler_enabled":False},
+            "wrong_circuit":{**valid,"circuit_state":"DEGRADED"},
+            "running":{**valid,"run_in_progress":True},
+            "extra":{**valid,"unexpected":True},
+            "wrong_type":{**valid,"requests_24h":"0"},
+            "failure":{**valid,"success":False},
+            "contradiction":{**valid,"outcome":"SCHEDULER_READY","allowed":False},
+            "error":{**valid,"last_error_class":"WORKER_CRASHED"},
+        }
+        for case,value in mutations.items():
+            with self.subTest(case=case): self.assertIsNone(validate_scheduler_status_result(value))
+        with self.assertRaises(json.JSONDecodeError): json.loads(b"not-json")
+
+    def test_runtime_directory_trust_attack_matrix(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); root.chmod(0o700)
+            generations=root/"generations"; generations.mkdir(mode=0o700)
+            generation=generations/REVISION; generation.mkdir(mode=0o700)
+            (generation/"python").mkdir(mode=0o755); (generation/"wheelhouse").mkdir(mode=0o700)
+            self.assertTrue(launcher._runtime_directories_trusted(root,generation,REVISION,False))
+            for target,mode in ((root,0o770),(generations,0o777),(generation,0o770)):
+                with self.subTest(target=target,mode=oct(mode)):
+                    old=stat.S_IMODE(target.stat().st_mode); target.chmod(mode)
+                    self.assertFalse(launcher._runtime_directories_trusted(root,generation,REVISION,False))
+                    target.chmod(old)
+            self.assertFalse(launcher._runtime_directories_trusted(root,root/REVISION,REVISION,False))
+            with mock.patch.object(launcher.os,"getuid",return_value=os.getuid()+1):
+                self.assertFalse(launcher._runtime_directories_trusted(root,generation,REVISION,False))
+            for child in (generation/"python",generation/"wheelhouse"):
+                with self.subTest(symlink=child.name):
+                    child.rmdir(); child.symlink_to(root,target_is_directory=True)
+                    self.assertFalse(launcher._runtime_directories_trusted(root,generation,REVISION,False))
+                    child.unlink(); child.mkdir(mode=0o755 if child.name=="python" else 0o700)
+
+    def test_runtime_root_and_generation_symlinks_are_rejected(self):
+        for target_name in ("runtime","generations","generation"):
+            with self.subTest(target=target_name), tempfile.TemporaryDirectory() as folder:
+                base=Path(folder).resolve(); real=base/"real"; real.mkdir(mode=0o700)
+                runtime=base/"runtime"; runtime.mkdir(mode=0o700)
+                generations=runtime/"generations"; generations.mkdir(mode=0o700)
+                generation=generations/REVISION; generation.mkdir(mode=0o700)
+                (generation/"python").mkdir(); (generation/"wheelhouse").mkdir(mode=0o700)
+                victim={"runtime":runtime,"generations":generations,"generation":generation}[target_name]
+                if target_name=="runtime":
+                    shutil.rmtree(runtime); runtime.symlink_to(real,target_is_directory=True)
+                    generation=runtime/"generations"/REVISION
+                else:
+                    shutil.rmtree(victim); victim.symlink_to(real,target_is_directory=True)
+                self.assertFalse(launcher._runtime_directories_trusted(runtime,generation,REVISION,False))
+
+    def test_os_chain_attack_matrix_uses_safe_model_paths(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base=Path(folder).resolve(); approved=base/"approved"; approved.mkdir(mode=0o755)
+            directory=approved/"usr/bin"; directory.mkdir(parents=True)
+            final=approved/"python3.9"; final.write_bytes(b"python"); final.chmod(0o755)
+            link=directory/"python3"; link.symlink_to(final)
+            kwargs={"approved":approved,"ancestors":(approved,),"expected_owner":os.getuid()}
+            self.assertEqual(launcher._trusted_os_chain(link,**kwargs),str(final))
+            self.assertIsNone(launcher._trusted_os_chain(link,approved=approved,
+                ancestors=(approved,),expected_owner=0))
+            directory.chmod(0o777)
+            self.assertIsNone(launcher._trusted_os_chain(link,**kwargs)); directory.chmod(0o755)
+            outside=base/"outside-python"; outside.write_bytes(b"python")
+            link.unlink(); link.symlink_to(outside)
+            self.assertIsNone(launcher._trusted_os_chain(link,**kwargs)); outside.unlink()
+            replacement=base/"replacement"; replacement.mkdir()
+            alias=base/"approved-link"; alias.symlink_to(replacement,target_is_directory=True)
+            self.assertIsNone(launcher._trusted_os_chain(alias/"python3",approved=alias,
+                ancestors=(alias,),expected_owner=os.getuid()))
+
+    def test_manifest_wheel_inventory_is_exact(self):
+        resolved=Path("/approved/python3.9")
+        value={"schema":launcher.RUNTIME_SCHEMA,"runtime_version":launcher.RUNTIME_VERSION,
+            "project_revision":REVISION,"python":"python/bin/python3","python_version":"3.9.6",
+            "dependency_lock":"requirements-engagement-production.txt","dependency_lock_sha256":"a"*64,
+            "packages":launcher.RUNTIME_PACKAGES,"wheels":launcher.RUNTIME_WHEELS,
+            "project_root":str(launcher.CODE_ROOT),"eligibility":"PREVIEW_ONLY_FEATURE_REVISION",
+            "previous_generations":[],"readiness":"READY","approved_main_revision":None,
+            "verified_origin_revision":None,"interpreter_realpath":str(resolved),
+            "created_at":"2026-09-03T00:00:00Z"}
+        self.assertTrue(launcher._manifest_contract_valid(value,resolved))
+        variants=[]
+        altered=dict(launcher.RUNTIME_WHEELS); altered[next(iter(altered))]="0"*64; variants.append(altered)
+        extra=dict(launcher.RUNTIME_WHEELS); extra["extra-1.0.whl"]="0"*64; variants.append(extra)
+        missing=dict(launcher.RUNTIME_WHEELS); missing.pop(next(iter(missing))); variants.append(missing)
+        renamed=dict(launcher.RUNTIME_WHEELS); digest=renamed.pop(next(iter(renamed))); renamed["wrong.whl"]=digest; variants.append(renamed)
+        wrong_version=dict(value); wrong_version["packages"]={**launcher.RUNTIME_PACKAGES,"attrs":"0"}
+        for wheels in variants:
+            self.assertFalse(launcher._manifest_contract_valid({**value,"wheels":wheels},resolved))
+        self.assertFalse(launcher._manifest_contract_valid(wrong_version,resolved))
     def verified_wheelhouse(self):
         path=Path.home()/"Library/Application Support/flop-agent-intelligence/production-runtime/python-wheelhouse"
         if not provisioner.verify_wheelhouse(path): self.skipTest("verified private wheelhouse unavailable")
@@ -27,6 +133,7 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
         self.assertEqual(len(lines),9)
         self.assertTrue(all("==" in line and "--hash=sha256:" in line for line in lines))
         self.assertEqual(len(provisioner.WHEELS),9)
+        self.assertEqual(provisioner.WHEELS,launcher.RUNTIME_WHEELS)
         self.assertEqual(set(provisioner.PACKAGES),{"attrs","cffi","cryptography","jsonschema",
             "jsonschema-specifications","pycparser","referencing","rpds-py","typing-extensions"})
 
@@ -57,12 +164,14 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder).resolve(); generation=root/"generations"/REVISION
             python=generation/"python/bin/python3"; python.parent.mkdir(parents=True)
+            root.chmod(0o700); (root/"generations").chmod(0o700); generation.chmod(0o700)
+            (generation/"wheelhouse").mkdir(mode=0o700)
             python.symlink_to("/Library/Developer/CommandLineTools/usr/bin/python3")
             value={"schema":launcher.RUNTIME_SCHEMA,"runtime_version":launcher.RUNTIME_VERSION,
                 "project_revision":REVISION,"python":"python/bin/python3","python_version":"3.9.6",
                 "dependency_lock":"requirements-engagement-production.txt",
                 "dependency_lock_sha256":hashlib.sha256((launcher.CODE_ROOT/"requirements-engagement-production.txt").read_bytes()).hexdigest(),
-                "packages":launcher.RUNTIME_PACKAGES,"wheels":{},
+                "packages":launcher.RUNTIME_PACKAGES,"wheels":launcher.RUNTIME_WHEELS,
                 "project_root":str(launcher.CODE_ROOT),"eligibility":"PREVIEW_ONLY_FEATURE_REVISION",
                 "previous_generations":[],"readiness":"READY","approved_main_revision":None,
                 "verified_origin_revision":None,
@@ -173,7 +282,7 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
             real_run=subprocess.run
             def fail_status(command,*args,**kwargs):
                 if len(command)>4 and command[-3]=="status":
-                    return subprocess.CompletedProcess(command,1,b'{}',b'')
+                    return subprocess.CompletedProcess(command,0,b'{"success":true}',b'')
                 return real_run(command,*args,**kwargs)
             with mock.patch.object(provisioner.subprocess,"run",side_effect=fail_status):
                 result=provisioner.provision(root,wheelhouse,revision)
