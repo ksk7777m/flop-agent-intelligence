@@ -36,6 +36,17 @@ def production_runtime_root() -> Path | None:
     home=resolve_account_home()
     return None if home is None else (home/RUNTIME_SUFFIX).absolute()
 
+
+def trusted_production_runtime_root() -> Path | None:
+    """Return the existing private production root, or fail closed."""
+    root=production_runtime_root()
+    if root is None: return None
+    try: metadata=root.lstat()
+    except OSError: return None
+    return root if (stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
+        and metadata.st_uid==os.getuid() and stat.S_IMODE(metadata.st_mode)==0o700
+        and root.resolve()==root.absolute()) else None
+
 STATUS_KEYS = {
     "success", "allowed", "outcome", "overlap_active", "circuit_state",
     "scheduler_enabled", "run_in_progress", "last_attempt_at", "last_success_at",

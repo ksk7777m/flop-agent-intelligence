@@ -378,11 +378,33 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
             self.assertEqual(sum(candidate.exists() for candidate in candidates),1)
 
     def test_dedicated_validator_missing_prerequisites_is_failure_not_skip(self):
-        with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder).resolve(); root.chmod(0o700)
-            result=runtime_validator.validate(root,root/"missing-wheelhouse",REVISION)
+        root=runtime_contract.trusted_production_runtime_root()
+        self.assertIsNotNone(root)
+        result=runtime_validator.validate(root,root/"missing-wheelhouse",REVISION)
         self.assertEqual((result["success"],result["outcome"]),
                          (False,"TEST_ENVIRONMENT_MISSING"))
+
+    def test_dedicated_validator_account_and_root_fail_closed(self):
+        root=runtime_contract.trusted_production_runtime_root(); self.assertIsNotNone(root)
+        wheelhouse=root/"python-wheelhouse"
+        with mock.patch.object(runtime_validator,"resolve_account_home",return_value=None):
+            self.assertEqual(runtime_validator.validate(root,wheelhouse,REVISION)["outcome"],
+                             "PRODUCTION_ACCOUNT_HOME_INVALID")
+        with mock.patch.object(runtime_validator,"resolve_account_home",side_effect=OSError):
+            self.assertEqual(runtime_validator.validate(root,wheelhouse,REVISION)["outcome"],
+                             "PRODUCTION_ACCOUNT_HOME_INVALID")
+        with mock.patch.object(runtime_validator,"trusted_production_runtime_root",return_value=None):
+            self.assertEqual(runtime_validator.validate(root,wheelhouse,REVISION)["outcome"],
+                             "PRODUCTION_RUNTIME_ROOT_INVALID")
+        with mock.patch.object(runtime_validator,"trusted_production_runtime_root",
+                               side_effect=AssertionError):
+            self.assertEqual(runtime_validator.validate(root,wheelhouse,REVISION)["outcome"],
+                             "PRODUCTION_RUNTIME_ROOT_INVALID")
+        with tempfile.TemporaryDirectory() as folder:
+            alternate=Path(folder).resolve()
+            with mock.patch.object(runtime_validator,"trusted_production_runtime_root",return_value=root):
+                self.assertEqual(runtime_validator.validate(alternate,wheelhouse,REVISION)["outcome"],
+                                 "PRODUCTION_RUNTIME_ROOT_INVALID")
 
 
 if __name__=="__main__": unittest.main()

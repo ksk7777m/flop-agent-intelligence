@@ -49,6 +49,7 @@ ENGAGEMENT_RAW_FIELDS = {
 ENGAGEMENT_SOURCE_URL = "https://technocore.chat/rooms?format=json&limit=200"
 MAX_TRACKED_TEXT_BYTES = 1024 * 1024
 MAX_JSONL_RECORDS = 256
+OVERSIZED_SAMPLE_BYTES = 256 * 1024
 
 
 def public_files(root: Path = ROOT) -> list[Path]:
@@ -136,34 +137,67 @@ def bounded_text(path: Path) -> str | None:
     return None if data and controls/max(1,len(data))>.01 else text
 
 
+def oversized_text_sample(path: Path) -> str | None:
+    """Return a bounded prefix/suffix sample only for oversized text-like files."""
+    try:
+        size=path.stat().st_size
+        if size<=MAX_TRACKED_TEXT_BYTES: return None
+        with path.open("rb") as stream:
+            prefix=stream.read(OVERSIZED_SAMPLE_BYTES)
+            stream.seek(max(0,size-OVERSIZED_SAMPLE_BYTES)); suffix=stream.read(OVERSIZED_SAMPLE_BYTES)
+    except OSError: return None
+    data=prefix+b"\n"+suffix
+    if b"\0" in data: return None
+    try: text=data.decode("utf-8")
+    except UnicodeDecodeError: return None
+    controls=sum(byte<32 and byte not in {9,10,13} for byte in data)
+    return None if controls/max(1,len(data))>.01 else text
+
+
+def required_bounded_text(path: Path) -> str:
+    text=bounded_text(path)
+    if text is None: raise ValueError(f"unreadable or oversized required public text: {path}")
+    return text
+
+
+def tracked_artifact_reason(name: str,path: Path) -> str | None:
+    if is_private_runtime_artifact(name): return "private runtime artifact is tracked"
+    text=bounded_text(path)
+    if text is not None and is_structured_private_artifact(name,text):
+        return "structured private runtime artifact is tracked"
+    oversized=oversized_text_sample(path)
+    if oversized is not None:
+        return ("oversized structured private runtime artifact is tracked"
+                if is_structured_private_artifact(name,oversized)
+                else "oversized unapproved tracked text requires explicit review")
+    return None
+
+
 def scan() -> list[str]:
     findings: list[str] = []
     files = public_files()
     tracked = subprocess.run(["git","ls-files","-z"],cwd=ROOT,capture_output=True,
                              check=True).stdout.decode("utf-8").split("\0")
     for name in filter(None,tracked):
-        if is_private_runtime_artifact(name):
-            findings.append(f"{name}: private runtime artifact is tracked")
         path=ROOT/name
-        tracked_text=bounded_text(path)
-        if tracked_text is not None and is_structured_private_artifact(name,tracked_text):
-            findings.append(f"{name}: structured private runtime artifact is tracked")
+        reason=tracked_artifact_reason(name,path)
+        if reason is not None: findings.append(f"{name}: {reason}")
     for path in files:
-        text = path.read_text(encoding="utf-8")
+        text = required_bounded_text(path)
         for label in scan_text(text):
             findings.append(f"{path.relative_to(ROOT)}: {label}")
         name = str(path.relative_to(ROOT))
         if is_database_artifact(name):
             findings.append(f"{name}: database artifact in public publication surface")
 
-    openapi = json.loads((ROOT / "openapi.json").read_text(encoding="utf-8"))
+    openapi = json.loads(required_bounded_text(ROOT / "openapi.json"))
     for route, operations in openapi.get("paths", {}).items():
         unsafe = set(operations) - {"get", "parameters", "summary", "description"}
         if unsafe:
             findings.append(f"openapi.json: non-GET operation at {route}: {sorted(unsafe)}")
 
     for path in sorted((ROOT / "api").rglob("*.json")):
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(required_bounded_text(path))
 
         def visit(value):
             if isinstance(value, dict):
@@ -208,8 +242,8 @@ def scan() -> list[str]:
         ("api/capabilities.json", "schemas/capabilities.v1.json", None),
     )
     for api_name, schema_name, definition in schema_jobs:
-        payload = json.loads((ROOT / api_name).read_text(encoding="utf-8"))
-        full_schema = json.loads((ROOT / schema_name).read_text(encoding="utf-8"))
+        payload = json.loads(required_bounded_text(ROOT / api_name))
+        full_schema = json.loads(required_bounded_text(ROOT / schema_name))
         schema = full_schema
         try:
             jsonschema.Draft202012Validator(schema).validate(payload)
@@ -218,7 +252,7 @@ def scan() -> list[str]:
 
     workflows = ROOT / ".github/workflows"
     for path in workflows.glob("*.y*ml") if workflows.is_dir() else ():
-        text = path.read_text(encoding="utf-8")
+        text = required_bounded_text(path)
         if "collect_engagement" in text and re.search(r"(?m)^\s*(?:schedule|push|pull_request):", text):
             findings.append(f"{path.relative_to(ROOT)}: active Engagement collection trigger")
 
@@ -228,7 +262,7 @@ def scan() -> list[str]:
 
     for path in (p for p in files if p.suffix == ".json" and "schemas" not in p.parts and "api" not in p.parts):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(required_bounded_text(path))
         except json.JSONDecodeError:
             findings.append(f"{path.relative_to(ROOT)}: malformed public JSON")
             continue
@@ -245,7 +279,7 @@ def scan() -> list[str]:
 
         visit_public_json(payload)
 
-    manifest = json.loads((ROOT / "ai-onboarding.json").read_text(encoding="utf-8"))
+    manifest = json.loads(required_bounded_text(ROOT / "ai-onboarding.json"))
     if manifest.get("mode") != "read-only":
         findings.append("ai-onboarding.json: mode is not read-only")
     return findings

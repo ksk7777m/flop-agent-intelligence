@@ -2,6 +2,7 @@ import json
 import copy
 import importlib.util
 import re
+import tempfile
 import unittest
 from pathlib import Path
 from flop_agent.presence import load_semantic_contract
@@ -161,6 +162,25 @@ class KVIntegrationTests(unittest.TestCase):
         self.assertFalse(scanner.is_structured_private_artifact(
             "api/capabilities.json",json.dumps({"schema":"capabilities-v1","status":"READY"})))
         self.assertIsNone(scanner.bounded_text(Path(__file__).with_name("nonexistent")))
+
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); limit=scanner.MAX_TRACKED_TEXT_BYTES
+            artifacts={"manifest":runtime_manifest,"prelog":prelog,"readiness":readiness,
+                       "plist":generated}
+            for label,payload in artifacts.items():
+                for size in (limit-1,limit,limit+1,limit*2+17):
+                    for suffix in ("",".txt",".log"):
+                        with self.subTest(label=label,size=size,suffix=suffix):
+                            path=root/f"neutral-{label}{suffix}"
+                            encoded=payload.encode(); padding=max(0,size-len(encoded))
+                            path.write_bytes(encoded+b" "*padding)
+                            self.assertIsNotNone(scanner.tracked_artifact_reason(
+                                f"misc/{path.name}",path))
+            middle=root/"neutral-middle"
+            middle.write_bytes(b"public text "*(limit//12)+runtime_manifest.encode()+b" tail")
+            self.assertIsNotNone(scanner.tracked_artifact_reason("misc/neutral-middle",middle))
+            binary=root/"large-image.bin"; binary.write_bytes(b"\0"*(limit+1))
+            self.assertIsNone(scanner.tracked_artifact_reason("assets/large-image.bin",binary))
 
 
 if __name__ == "__main__":

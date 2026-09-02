@@ -34,6 +34,10 @@ separately approved. Approval A does not authorize runtime provisioning or launc
    offline and hash-locked.
 5. Run `scripts/validate_engagement_production_runtime.py` and require PASS. Missing
    prerequisites are `TEST_ENVIRONMENT_MISSING`, never a skipped success.
+   Its `source-runtime` is the existing trusted production root used read-only for
+   state and wheelhouse inputs; the integration generation itself is built only in
+   a disposable temporary directory. Account identity and production-root policy
+   must pass before disposable validation can report success.
 6. Before generation publication, validate the complete interpreter chain, package and
    project origins, manifest/main/project coherence, and the real isolated scheduler
    `status` path. Hash state, history, and both locks before and after; do not run collector.

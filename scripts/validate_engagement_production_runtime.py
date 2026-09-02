@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from provision_engagement_runtime import STATE_FILES, provision, verify_wheelhouse
+from engagement_runtime_contract import resolve_account_home, trusted_production_runtime_root
 
 CODE_ROOT=Path(__file__).resolve().parents[1]
 
@@ -23,6 +24,16 @@ def _hash(path: Path) -> str: return hashlib.sha256(path.read_bytes()).hexdigest
 
 def validate(source_runtime: Path,wheelhouse: Path,expected_revision: str) -> dict[str,object]:
     source_runtime=source_runtime.absolute(); wheelhouse=wheelhouse.absolute()
+    try: account_home=resolve_account_home()
+    except Exception: account_home=None
+    if account_home is None:
+        return {"success":False,"outcome":"PRODUCTION_ACCOUNT_HOME_INVALID",
+                "network_requests":0,"collector_invocations":0}
+    try: trusted_root=trusted_production_runtime_root()
+    except Exception: trusted_root=None
+    if trusted_root is None or source_runtime!=trusted_root:
+        return {"success":False,"outcome":"PRODUCTION_RUNTIME_ROOT_INVALID",
+                "network_requests":0,"collector_invocations":0}
     engagement=source_runtime/"runtime/engagement"
     try:
         if not verify_wheelhouse(wheelhouse): raise OSError
