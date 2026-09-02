@@ -128,14 +128,20 @@ class EngagementLauncherTests(unittest.TestCase):
         self.assertNotIn("/Users/",path.read_text())
         self.assertEqual((value["StandardOutPath"],value["StandardErrorPath"]),("/dev/null","/dev/null"))
 
-    def test_real_state_and_history_are_read_only_to_launcher_tests(self):
-        root=launcher.CODE_ROOT; paths=[root/"runtime/engagement/scheduler-state.json",
-            root/"runtime/engagement/scheduler-state.lock",root/"runtime/engagement/history.jsonl"]
-        before=[path.read_bytes() for path in paths]
+    def test_explicit_private_runtime_leaves_retired_evidence_untouched(self):
         with tempfile.TemporaryDirectory() as folder:
-            temporary=Path(folder); self.runtime(temporary)
-            self.assertEqual(launcher.launch(temporary,REVISION,runner=FakeRunner())["outcome"],"OK_DISABLED")
-        self.assertEqual([path.read_bytes() for path in paths],before)
+            root=Path(folder); production=root/"private-production"; repository=root/"repository"
+            self.runtime(production)
+            retired=repository/"runtime/engagement.retired-evidence"
+            retired.mkdir(parents=True)
+            evidence=retired/"scheduler-state.json"; evidence.write_bytes(b"retired evidence\n")
+            before=evidence.read_bytes()
+
+            result=launcher.launch(production,REVISION,runner=FakeRunner())
+
+            self.assertEqual(result["outcome"],"OK_DISABLED")
+            self.assertEqual(evidence.read_bytes(),before)
+            self.assertFalse((repository/"runtime/engagement").exists())
 
     def test_source_has_no_activation_network_or_shell_surface(self):
         source=Path(launcher.__file__).read_text()

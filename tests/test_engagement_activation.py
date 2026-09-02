@@ -125,9 +125,26 @@ class EngagementActivationTests(unittest.TestCase):
             with self.subTest(arguments=arguments),self.assertRaises(ValueError):
                 renderer._result(**arguments)
 
-    def test_production_plist_remains_absent(self):
-        production=Path.home()/"Library/LaunchAgents/com.flop-agent-intelligence.engagement-scheduler.plist"
-        self.assertFalse(production.exists())
+    def test_installed_plist_is_safe_and_does_not_imply_activation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            active_directory=root/"Library/LaunchAgents"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700)
+            active_directory.mkdir(parents=True)
+            rendered=staged/"scheduler.plist"
+            result=renderer.render(rendered,runtime,REVISION,runner=Runner())
+            active=active_directory/"com.flop-agent-intelligence.engagement-scheduler.plist"
+            active.write_bytes(rendered.read_bytes()); active.chmod(0o600)
+
+            metadata=os.lstat(active); value=plistlib.loads(active.read_bytes())
+            self.assertTrue(active.is_file()); self.assertFalse(active.is_symlink())
+            self.assertEqual(metadata.st_uid,os.geteuid())
+            self.assertEqual(metadata.st_mode&0o777,0o600)
+            self.assertEqual(value["Label"],"com.flop-agent-intelligence.engagement-scheduler")
+            self.assertEqual((value["StartInterval"],value["RunAtLoad"]),(3600,False))
+            self.assertNotIn("KeepAlive",value)
+            self.assertEqual((result["installed"],result["loaded"]),(False,False))
+            self.assertEqual((result["collector_invocations"],result["network_requests"]),(0,0))
 
     def test_renderer_revision_tree_and_path_checks_fail_closed(self):
         with tempfile.TemporaryDirectory() as folder:
