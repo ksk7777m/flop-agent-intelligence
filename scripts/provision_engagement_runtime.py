@@ -21,6 +21,8 @@ GIT = Path("/usr/bin/git")
 LOCK = CODE_ROOT / "requirements-engagement-production.txt"
 RUNTIME_SCHEMA = "engagement-production-runtime-v1"
 RUNTIME_VERSION = "0.1.0"
+PRODUCTION_ELIGIBLE = "PRODUCTION_ELIGIBLE"
+PREVIEW_ONLY = "PREVIEW_ONLY_FEATURE_REVISION"
 WHEELS = {
     "attrs-25.4.0-py3-none-any.whl":"adcf7e2a1fb3b36ac48d97835bb6d8ade15b8dcce26aba8bf1d14847b57a3373",
     "cffi-2.0.0-cp39-cp39-macosx_11_0_arm64.whl":"de8dad4425a6ca6e4e5e297b27b5c824ecc7581910bf9aee86cb6835e6812aa7",
@@ -70,27 +72,49 @@ def verify_wheelhouse(path: Path) -> bool:
                 or _hash(item)!=WHEELS[item.name]): return False
     return True
 
-def _git_revision(expected: str) -> bool:
-    if not re.fullmatch(r"[0-9a-f]{40}",expected): return False
-    commands=([str(GIT),"rev-parse","HEAD"],[str(GIT),"diff-index","--quiet","HEAD","--"],
-              [str(GIT),"ls-files","--others","--exclude-standard"])
-    results=[subprocess.run(command,cwd=CODE_ROOT,env=SAFE_ENV,capture_output=True,check=False)
-             for command in commands]
-    return (results[0].returncode==0 and not results[0].stderr
-            and results[0].stdout.decode("ascii").strip()==expected
-            and results[1].returncode==0 and results[2].returncode==0 and not results[2].stdout)
+def _git(command: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run([str(GIT),*command],cwd=CODE_ROOT,env=SAFE_ENV,
+                          capture_output=True,check=False)
 
-def provision(runtime_root: Path, source_wheelhouse: Path, expected_revision: str) -> dict[str, object]:
+def repository_eligibility(expected: str, approved_main_revision: str | None=None,
+                           verified_origin_revision: str | None=None) -> str:
+    if not re.fullmatch(r"[0-9a-f]{40}",expected): return "PRODUCTION_INELIGIBLE_REVISION"
+    head=_git(["rev-parse","HEAD"]); dirty=_git(["diff-index","--quiet","HEAD","--"])
+    untracked=_git(["ls-files","--others","--exclude-standard"])
+    if (head.returncode or head.stderr or head.stdout.decode("ascii").strip()!=expected
+            or dirty.returncode or untracked.returncode or untracked.stdout):
+        return "PRODUCTION_INELIGIBLE_REVISION"
+    branch=_git(["symbolic-ref","--short","HEAD"])
+    if branch.returncode or branch.stdout.decode("ascii").strip()!="main": return PREVIEW_ONLY
+    origin=_git(["rev-parse","refs/remotes/origin/main"])
+    if (not approved_main_revision or not verified_origin_revision
+            or approved_main_revision!=expected or verified_origin_revision!=expected
+            or origin.returncode or origin.stdout.decode("ascii").strip()!=expected):
+        return "PRODUCTION_INELIGIBLE_REVISION"
+    return PRODUCTION_ELIGIBLE
+
+def provision(runtime_root: Path, source_wheelhouse: Path, expected_revision: str,
+              *, production: bool=False, approved_main_revision: str | None=None,
+              verified_origin_revision: str | None=None) -> dict[str, object]:
     runtime_root=runtime_root.absolute(); source_wheelhouse=source_wheelhouse.absolute()
-    if not _git_revision(expected_revision): return _result(False,"CODE_REVISION_MISMATCH")
+    eligibility=repository_eligibility(expected_revision,approved_main_revision,
+                                       verified_origin_revision)
+    if eligibility=="PRODUCTION_INELIGIBLE_REVISION":
+        return _result(False,eligibility,eligibility=eligibility)
+    if production and eligibility!=PRODUCTION_ELIGIBLE:
+        return _result(False,"PRODUCTION_REVISION_NOT_ELIGIBLE",eligibility=eligibility)
     if not _private_dir(runtime_root): return _result(False,"RUNTIME_ROOT_UNSAFE")
     if not verify_wheelhouse(source_wheelhouse): return _result(False,"WHEELHOUSE_INVALID")
-    python_dir=runtime_root/"python"; wheelhouse=runtime_root/"python-wheelhouse"
-    manifest=runtime_root/"production-runtime.json"
-    if any(path.exists() or path.is_symlink() for path in (python_dir,wheelhouse,manifest)):
-        return _result(False,"PRODUCTION_RUNTIME_ALREADY_EXISTS")
-    candidate=Path(tempfile.mkdtemp(prefix=".engagement-python-",dir=runtime_root))
+    generations=runtime_root/"generations"
+    if not generations.exists(): generations.mkdir(mode=0o700)
+    if not _private_dir(generations): return _result(False,"RUNTIME_ROOT_UNSAFE")
+    generation=generations/expected_revision
+    if generation.exists() or generation.is_symlink():
+        return _result(False,"PRODUCTION_RUNTIME_ALREADY_EXISTS",eligibility=eligibility)
+    candidate=Path(tempfile.mkdtemp(prefix=f".{expected_revision}.candidate-",dir=generations))
     candidate.chmod(0o700)
+    python_dir=candidate/"python"; wheelhouse=candidate/"wheelhouse"
+    manifest=candidate/"production-runtime.json"
     try:
         wheelhouse.mkdir(mode=0o700)
         for name in sorted(WHEELS):
@@ -98,10 +122,10 @@ def provision(runtime_root: Path, source_wheelhouse: Path, expected_revision: st
             shutil.copyfile(source_wheelhouse/name,destination,follow_symlinks=False)
             destination.chmod(0o600)
         if not verify_wheelhouse(wheelhouse): raise RuntimeError("wheelhouse verification")
-        created=subprocess.run([str(BASE_PYTHON),"-m","venv",str(candidate)],
+        created=subprocess.run([str(BASE_PYTHON),"-m","venv",str(python_dir)],
             env=SAFE_ENV,capture_output=True,check=False)
         if created.returncode: raise RuntimeError("venv creation")
-        interpreter=candidate/"bin/python3"
+        interpreter=python_dir/"bin/python3"
         installed=subprocess.run([str(interpreter),"-I","-m","pip","install","--no-index",
             "--find-links",str(wheelhouse),"--require-hashes","--no-deps","-r",str(LOCK)],
             env=SAFE_ENV,capture_output=True,check=False)
@@ -117,29 +141,33 @@ print(json.dumps({'isolated':sys.flags.isolated,'user_site':site.ENABLE_USER_SIT
         value=json.loads(checked.stdout)
         if (value.get("isolated")!=1 or value.get("user_site") is not False
                 or value.get("packages")!=PACKAGES
-                or not all(Path(origin).is_relative_to(candidate) for origin in value["origins"].values())):
+                or not all(Path(origin).is_relative_to(python_dir) for origin in value["origins"].values())):
             raise RuntimeError("runtime verification")
-        os.replace(candidate,python_dir); candidate=None
         payload={"schema":RUNTIME_SCHEMA,"runtime_version":RUNTIME_VERSION,
             "project_revision":expected_revision,"python":"python/bin/python3",
             "python_version":"3.9.6","dependency_lock":"requirements-engagement-production.txt",
             "dependency_lock_sha256":_hash(LOCK),"packages":PACKAGES,"wheels":WHEELS,
+            "project_root":str(CODE_ROOT),"eligibility":eligibility,
+            "previous_generations":sorted(item.name for item in generations.iterdir()
+                if item.is_dir() and not item.name.startswith(".")),
             "created_at":datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")}
         descriptor=os.open(manifest,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
         try:
             data=(json.dumps(payload,sort_keys=True,separators=(",",":"))+"\n").encode()
             os.write(descriptor,data); os.fsync(descriptor)
         finally: os.close(descriptor)
-        directory=os.open(runtime_root,os.O_RDONLY)
+        directory=os.open(candidate,os.O_RDONLY)
         try: os.fsync(directory)
         finally: os.close(directory)
-        return _result(True,"PRODUCTION_RUNTIME_READY",python=str(python_dir/"bin/python3"),
-                       project_revision=expected_revision,wheel_count=len(WHEELS))
+        os.replace(candidate,generation); candidate=None
+        directory=os.open(generations,os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+        return _result(True,"PRODUCTION_RUNTIME_READY",python=str(generation/"python/bin/python3"),
+                       generation=str(generation),project_revision=expected_revision,
+                       wheel_count=len(WHEELS),eligibility=eligibility)
     except (OSError,RuntimeError,ValueError,json.JSONDecodeError):
-        if manifest.exists(): manifest.unlink()
-        if python_dir.exists(): shutil.rmtree(python_dir)
-        if wheelhouse.exists(): shutil.rmtree(wheelhouse)
-        return _result(False,"PRODUCTION_RUNTIME_PROVISION_FAILED")
+        return _result(False,"RUNTIME_REPROVISION_FAILED",eligibility=eligibility)
     finally:
         if candidate is not None and candidate.exists(): shutil.rmtree(candidate)
 
@@ -148,8 +176,13 @@ def main() -> None:
     parser.add_argument("--runtime-root",required=True,type=Path)
     parser.add_argument("--wheelhouse",required=True,type=Path)
     parser.add_argument("--expected-revision",required=True)
+    parser.add_argument("--production",action="store_true")
+    parser.add_argument("--approved-main-revision")
+    parser.add_argument("--verified-origin-revision")
     args=parser.parse_args()
-    result=provision(args.runtime_root,args.wheelhouse,args.expected_revision)
+    result=provision(args.runtime_root,args.wheelhouse,args.expected_revision,
+        production=args.production,approved_main_revision=args.approved_main_revision,
+        verified_origin_revision=args.verified_origin_revision)
     print(json.dumps(result,sort_keys=True,separators=(",",":")))
     if not result["success"]: raise SystemExit(1)
 

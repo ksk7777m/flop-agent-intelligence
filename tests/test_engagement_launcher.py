@@ -122,7 +122,7 @@ class EngagementLauncherTests(unittest.TestCase):
         self.assertNotIn("KeepAlive",value); self.assertNotIn("WorkingDirectory",value)
         for forbidden in ("WatchPaths","QueueDirectories","StartOnMount","Sockets","MachServices"):
             self.assertNotIn(forbidden,value)
-        self.assertEqual(value["ProgramArguments"][0],"<PRIVATE_RUNTIME_ROOT>/python/bin/python3")
+        self.assertEqual(value["ProgramArguments"][0],"<IMMUTABLE_RUNTIME_GENERATION>/python/bin/python3")
         self.assertEqual(value["ProgramArguments"][1],"-I")
         self.assertIn("<APPROVED_REPOSITORY_ROOT>"," ".join(value["ProgramArguments"]))
         self.assertNotIn("/Users/",path.read_text())

@@ -22,6 +22,8 @@ SAFE_ENV={"PATH":"/usr/bin:/bin","LC_ALL":"C","TMPDIR":"/tmp"}
 Runner=Callable[[list[str],Path,int],subprocess.CompletedProcess[bytes]]
 COMMIT_STATES={"PRE_PUBLISH","PUBLISHED","DURABLE"}
 RUNTIME_SCHEMA="engagement-production-runtime-v1"
+PRODUCTION_ELIGIBLE="PRODUCTION_ELIGIBLE"
+PREVIEW_ONLY="PREVIEW_ONLY_FEATURE_REVISION"
 
 
 def _run(command: list[str],cwd: Path,timeout: int) -> subprocess.CompletedProcess[bytes]:
@@ -46,7 +48,8 @@ def _safe_directory(path: Path, *, private: bool = False) -> bool:
 
 
 def _result(*,success: bool,outcome: str,commit_state: str="PRE_PUBLISH",
-            error_class: str | None=None) -> dict[str,object]:
+            error_class: str | None=None,eligibility: str="PRODUCTION_INELIGIBLE_REVISION",
+            installable: bool=False,artifact_format: str | None=None) -> dict[str,object]:
     if commit_state not in COMMIT_STATES: raise ValueError("invalid plist commit state")
     created=commit_state!="PRE_PUBLISH"; durable=commit_state=="DURABLE"
     if not success and error_class is None: error_class=outcome
@@ -55,13 +58,14 @@ def _result(*,success: bool,outcome: str,commit_state: str="PRE_PUBLISH",
     return {"success":success,"outcome":outcome,"error_class":error_class,
             "plist_created":created,"commit_state":commit_state,
             "durability_confirmed":durable,"installed":False,"loaded":False,
-            "network_requests":0,"collector_invocations":0}
+            "network_requests":0,"collector_invocations":0,"eligibility":eligibility,
+            "installable":installable,"artifact_format":artifact_format}
 
 
 def _valid_payload(payload: bytes,expected_revision: str,runtime_root: Path) -> bool:
     try: value=plistlib.loads(payload)
     except plistlib.InvalidFileException: return False
-    arguments=[str(runtime_root/"python/bin/python3"),"-I",str(LAUNCHER),"--expected-revision",
+    arguments=[str(runtime_root/"generations"/expected_revision/"python/bin/python3"),"-I",str(LAUNCHER),"--expected-revision",
                expected_revision,"--runtime-root",str(runtime_root)]
     keys={"Label","ProgramArguments","StartInterval","RunAtLoad",
           "StandardOutPath","StandardErrorPath"}
@@ -81,12 +85,14 @@ def _valid_payload(payload: bytes,expected_revision: str,runtime_root: Path) -> 
     return not any(re.search(r"<[^<>]+>",item) for item in strings(value))
 
 
-def _runtime_ready(runtime_root: Path, expected_revision: str) -> bool:
-    manifest=runtime_root/"production-runtime.json"; interpreter=runtime_root/"python/bin/python3"
+def _runtime_ready(runtime_root: Path, expected_revision: str, code_root: Path,
+                   require_production: bool) -> bool:
+    generation=runtime_root/"generations"/expected_revision
+    manifest=generation/"production-runtime.json"; interpreter=generation/"python/bin/python3"
     try:
         metadata=manifest.lstat(); python_metadata=interpreter.lstat()
         value=json.loads(manifest.read_text(encoding="utf-8"))
-        return (stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
+        structural=(stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode)
             and metadata.st_uid==os.getuid() and stat.S_IMODE(metadata.st_mode)==0o600
             and stat.S_ISLNK(python_metadata.st_mode)
             and os.readlink(interpreter)=="/Library/Developer/CommandLineTools/usr/bin/python3"
@@ -94,12 +100,22 @@ def _runtime_ready(runtime_root: Path, expected_revision: str) -> bool:
             and interpreter.resolve().lstat().st_uid==0
             and value.get("schema")==RUNTIME_SCHEMA
             and value.get("project_revision")==expected_revision
-            and value.get("python")=="python/bin/python3")
+            and value.get("python")=="python/bin/python3"
+            and value.get("project_root")==str(code_root))
+        if not structural: return False
+        entry=("import json,sys;"+f"sys.path.insert(0,{str(code_root/'scripts')!r});"
+               "import engagement_scheduler_launcher as l;"
+               f"print(json.dumps(l.validate_runtime(__import__('pathlib').Path({str(runtime_root)!r}),{expected_revision!r},require_production={require_production!r})))")
+        checked=subprocess.run([str(interpreter),"-I","-c",entry],cwd=code_root,env=SAFE_ENV,
+                               capture_output=True,check=False,timeout=10)
+        return checked.returncode==0 and not checked.stderr and checked.stdout==b"null\n"
     except (OSError,RuntimeError,UnicodeDecodeError,json.JSONDecodeError): return False
 
 
 def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runner=_run,
-           code_root: Path=CODE_ROOT) -> dict[str,object]:
+           code_root: Path=CODE_ROOT,production: bool=False,
+           approved_main_revision: str | None=None,
+           verified_origin_revision: str | None=None) -> dict[str,object]:
     output=output.absolute(); runtime_root=runtime_root.absolute()
     active=(Path.home()/"Library/LaunchAgents").absolute()
     if not re.fullmatch(r"[0-9a-f]{40}",expected_revision):
@@ -109,7 +125,7 @@ def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runn
             or not _safe_file(TEMPLATE,code_root) or not _safe_file(LAUNCHER,code_root)
             or not _safe_directory(output.parent,private=True)):
         return _result(success=False,outcome="CODE_PATH_UNSAFE")
-    if runner is _run and not _runtime_ready(runtime_root,expected_revision):
+    if runner is _run and not _runtime_ready(runtime_root,expected_revision,code_root,production):
         return _result(success=False,outcome="PRODUCTION_RUNTIME_NOT_READY")
     if output.exists() or output.is_symlink():
         return _result(success=False,outcome="PLIST_ALREADY_EXISTS")
@@ -117,20 +133,51 @@ def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runn
     try:
         revision=runner([str(GIT),"rev-parse","HEAD"],code_root,5)
         dirty=runner([str(GIT),"diff-index","--quiet","HEAD","--"],code_root,5)
+        untracked=runner([str(GIT),"ls-files","--others","--exclude-standard","-z"],code_root,5)
         if (revision.returncode or revision.stderr or len(revision.stdout)>64
                 or revision.stdout.decode("ascii").strip()!=expected_revision):
             return _result(success=False,outcome="CODE_REVISION_MISMATCH")
-        if dirty.returncode: return _result(success=False,outcome="CODE_TREE_DIRTY")
+        if (dirty.returncode or untracked.returncode or untracked.stderr or untracked.stdout):
+            return _result(success=False,outcome="CODE_TREE_DIRTY")
+        branch=runner([str(GIT),"symbolic-ref","--short","HEAD"],code_root,5)
+        origin=runner([str(GIT),"rev-parse","refs/remotes/origin/main"],code_root,5)
+        is_main=(branch.returncode==0 and not branch.stderr
+                 and branch.stdout.decode("ascii").strip()=="main")
+        eligible=(is_main and approved_main_revision==expected_revision
+            and verified_origin_revision==expected_revision and origin.returncode==0
+            and not origin.stderr and origin.stdout.decode("ascii").strip()==expected_revision)
+        eligibility=PRODUCTION_ELIGIBLE if eligible else (PREVIEW_ONLY if not is_main
+            else "PRODUCTION_INELIGIBLE_REVISION")
+        if production and not eligible:
+            return _result(success=False,outcome="PRODUCTION_REVISION_NOT_ELIGIBLE",
+                           eligibility=eligibility)
+        if not production:
+            if output.suffix!=".json": return _result(success=False,outcome="PREVIEW_PATH_INVALID",
+                                                       eligibility=eligibility)
+            preview={"schema":"engagement-launchagent-preview-v1","installability":"NON_INSTALLABLE",
+                "eligibility":eligibility,"label":"com.flop-agent-intelligence.engagement-scheduler",
+                "start_interval":3600,"run_at_load":False,"keep_alive":False,
+                "interpreter":str(runtime_root/"generations"/expected_revision/"python/bin/python3"),
+                "launcher":str(LAUNCHER),"revision":expected_revision,"runtime_root":str(runtime_root)}
+            payload=(json.dumps(preview,sort_keys=True,separators=(",",":"))+"\n").encode()
+            validator=lambda data: json.loads(data).get("installability")=="NON_INSTALLABLE"
+            outcome="PLIST_PREVIEW_RENDERED"; artifact_format="NON_INSTALLABLE_JSON"
+        else:
+            if output.suffix!=".plist": return _result(success=False,outcome="PLIST_PATH_INVALID",
+                                                        eligibility=eligibility)
+            artifact_format="PLIST"; outcome="PLIST_RENDERED"
         value=plistlib.loads(TEMPLATE.read_bytes())
         arguments=value.get("ProgramArguments")
-        expected=["<PRIVATE_RUNTIME_ROOT>/python/bin/python3","-I","<APPROVED_REPOSITORY_ROOT>/scripts/engagement_scheduler_launcher.py",
+        expected=["<IMMUTABLE_RUNTIME_GENERATION>/python/bin/python3","-I","<APPROVED_REPOSITORY_ROOT>/scripts/engagement_scheduler_launcher.py",
                   "--expected-revision","<APPROVED_GIT_REVISION>","--runtime-root","<PRIVATE_RUNTIME_ROOT>"]
         if arguments!=expected: return _result(success=False,outcome="PLIST_RENDER_INVALID")
-        value["ProgramArguments"]=[str(runtime_root/"python/bin/python3"),"-I",str(LAUNCHER),"--expected-revision",
+        value["ProgramArguments"]=[str(runtime_root/"generations"/expected_revision/"python/bin/python3"),"-I",str(LAUNCHER),"--expected-revision",
                                    expected_revision,"--runtime-root",str(runtime_root)]
-        payload=plistlib.dumps(value,fmt=plistlib.FMT_XML,sort_keys=True)
-        if not _valid_payload(payload,expected_revision,runtime_root):
-            return _result(success=False,outcome="PLIST_RENDER_INVALID")
+        if production:
+            payload=plistlib.dumps(value,fmt=plistlib.FMT_XML,sort_keys=True)
+            validator=lambda data:_valid_payload(data,expected_revision,runtime_root)
+            if not validator(payload): return _result(success=False,outcome="PLIST_RENDER_INVALID",
+                eligibility=eligibility)
         descriptor,name=tempfile.mkstemp(prefix=f".{output.name}.candidate-",dir=output.parent)
         candidate=Path(name)
         metadata=os.fstat(descriptor)
@@ -143,7 +190,7 @@ def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runn
             written+=count
         os.fsync(descriptor); os.close(descriptor); descriptor=-1
         candidate_payload=candidate.read_bytes()
-        if candidate_payload!=payload or not _valid_payload(candidate_payload,expected_revision,runtime_root):
+        if candidate_payload!=payload or not validator(candidate_payload):
             return _result(success=False,outcome="PLIST_CANDIDATE_INVALID")
         try: os.link(candidate,output,follow_symlinks=False)
         except FileExistsError:
@@ -157,10 +204,12 @@ def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runn
         except OSError:
             return _result(success=False,outcome="PLIST_PUBLISHED_VALIDATION_FAILED",
                            commit_state="DURABLE")
-        if visible!=payload or not _valid_payload(visible,expected_revision,runtime_root):
+        if visible!=payload or not validator(visible):
             return _result(success=False,outcome="PLIST_PUBLISHED_VALIDATION_FAILED",
                            commit_state="DURABLE")
-        return _result(success=True,outcome="PLIST_RENDERED",commit_state="DURABLE")
+        return _result(success=True,outcome=outcome,commit_state="DURABLE",
+                       eligibility=eligibility,installable=production,
+                       artifact_format=artifact_format)
     except (OSError,UnicodeDecodeError,plistlib.InvalidFileException,subprocess.SubprocessError):
         return _result(success=False,outcome=("PLIST_COMMITTED_NOT_DURABLE" if published
                                               else "PLIST_RENDER_FAILED"),
@@ -177,8 +226,13 @@ def main() -> None:
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--runtime-root",type=Path,required=True)
     parser.add_argument("--expected-revision",required=True)
+    parser.add_argument("--production",action="store_true")
+    parser.add_argument("--approved-main-revision")
+    parser.add_argument("--verified-origin-revision")
     args=parser.parse_args()
-    result=render(args.output,args.runtime_root,args.expected_revision)
+    result=render(args.output,args.runtime_root,args.expected_revision,production=args.production,
+        approved_main_revision=args.approved_main_revision,
+        verified_origin_revision=args.verified_origin_revision)
     print(json.dumps(result,sort_keys=True,separators=(",",":")))
     if not result["success"]: raise SystemExit(1)
 

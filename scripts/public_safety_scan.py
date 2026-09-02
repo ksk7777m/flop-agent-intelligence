@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 import jsonschema
 
@@ -17,7 +18,7 @@ PUBLIC_DIRS = ("docs", "schemas", "api", "examples", "prompts")
 
 FORBIDDEN_PATTERNS = {
     "local filesystem path": re.compile(
-        r"(?:file://|/Users/[^/\s]+/|/home/[^/\s]+/|[A-Za-z]:\\Users\\[^\\\s]+\\)",
+        r"(?:file://|/Users/[^/\s]+/|/private/tmp/|/home/[^/\s]+/|[A-Za-z]:\\Users\\[^\\\s]+\\)",
         re.IGNORECASE,
     ),
     "private Technocore locator": re.compile(
@@ -64,9 +65,22 @@ def is_database_artifact(name: str) -> bool:
     return re.search(r"\.(?:sqlite3?|db)(?:-(?:wal|shm))?$|-(?:wal|shm)$", name, re.IGNORECASE) is not None
 
 
+def is_private_runtime_artifact(name: str) -> bool:
+    path=Path(name)
+    parts={"site-packages","python-wheelhouse","pip-cache","generations",".venv"}
+    names={"production-runtime.json","launcher-preflight.jsonl",
+           "scheduler-state.json","scheduler-state.lock","history.jsonl.lock"}
+    return path.suffix==".whl" or bool(parts.intersection(path.parts)) or path.name in names
+
+
 def scan() -> list[str]:
     findings: list[str] = []
     files = public_files()
+    tracked = subprocess.run(["git","ls-files","-z"],cwd=ROOT,capture_output=True,
+                             check=True).stdout.decode("utf-8").split("\0")
+    for name in filter(None,tracked):
+        if is_private_runtime_artifact(name):
+            findings.append(f"{name}: private runtime artifact is tracked")
     for path in files:
         text = path.read_text(encoding="utf-8")
         for label in scan_text(text):

@@ -99,7 +99,7 @@ class KVIntegrationTests(unittest.TestCase):
                          "schemas/kv-observatory.schema.json", "api/kv/status.json",
                          "examples/kv-observer.example.json"):
             self.assertIn(expected, names)
-        positives = ["/Users/alice/secret", "file:///tmp/key", "https://u:p@example.invalid/x",
+        positives = ["/Users/alice/secret", "/private/tmp/operator", "file:///tmp/key", "https://u:p@example.invalid/x",
                      "mb-p-secret", "prefix-mb-p-secret", "https://technocore.chat/set-signed/x",
                      "wallet_secret=abcd"]
         for value in positives:
@@ -108,6 +108,13 @@ class KVIntegrationTests(unittest.TestCase):
             self.assertFalse(scanner.scan_text(harmless), harmless)
         for name in ("state.sqlite", "state.sqlite3", "state.db", "state.db-wal", "state.sqlite-shm"):
             self.assertTrue(scanner.is_database_artifact(name))
+        for name in ("deps/pkg.whl","runtime/python-wheelhouse/x","runtime/.venv/bin/python",
+                     "runtime/generations/sha/production-runtime.json",
+                     "logs/launcher-preflight.jsonl","venv/site-packages/jsonschema/__init__.py",
+                     "pip-cache/http/item","runtime/scheduler-state.lock"):
+            self.assertTrue(scanner.is_private_runtime_artifact(name),name)
+        for name in ("docs/ENGAGEMENT_RUNTIME_MIGRATION.md","requirements-engagement-production.txt"):
+            self.assertFalse(scanner.is_private_runtime_artifact(name),name)
 
 
 if __name__ == "__main__":

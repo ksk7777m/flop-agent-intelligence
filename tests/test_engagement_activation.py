@@ -1,4 +1,4 @@
-import os, plistlib, subprocess, tempfile, threading, unittest
+import json, os, plistlib, subprocess, tempfile, threading, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -13,30 +13,77 @@ def completed(stdout=b"",returncode=0,stderr=b""):
 
 
 class Runner:
-    def __init__(self,revision=REVISION,dirty=False): self.revision=revision; self.dirty=dirty
+    def __init__(self,revision=REVISION,dirty=False,branch="main",origin=None):
+        self.revision=revision; self.dirty=dirty; self.branch=branch; self.origin=origin or revision
     def __call__(self,command,cwd,timeout):
         if command[1:3]==["rev-parse","HEAD"]: return completed((self.revision+"\n").encode())
+        if command[1:3]==["rev-parse","refs/remotes/origin/main"]: return completed((self.origin+"\n").encode())
+        if command[1:3]==["symbolic-ref","--short"]: return completed((self.branch+"\n").encode())
         if command[1:3]==["diff-index","--quiet"]: return completed(returncode=1 if self.dirty else 0)
+        if command[1:3]==["ls-files","--others"]: return completed()
         raise AssertionError(command)
+
+def render(output,runtime,revision,**kwargs):
+    return renderer.render(output,runtime,revision,production=True,
+        approved_main_revision=revision,verified_origin_revision=revision,**kwargs)
 
 
 class EngagementActivationTests(unittest.TestCase):
+    def test_feature_is_noninstallable_preview_and_production_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700)
+            feature=Runner(branch="codex/feature")
+            preview=renderer.render(staged/"preview.json",runtime,REVISION,runner=feature)
+            self.assertEqual((preview["success"],preview["eligibility"],preview["installable"],
+                              preview["artifact_format"]),
+                             (True,"PREVIEW_ONLY_FEATURE_REVISION",False,"NON_INSTALLABLE_JSON"))
+            self.assertEqual(json.loads((staged/"preview.json").read_text())["installability"],
+                             "NON_INSTALLABLE")
+            rejected=renderer.render(staged/"production.plist",runtime,REVISION,runner=feature,
+                production=True,approved_main_revision=REVISION,verified_origin_revision=REVISION)
+            self.assertEqual(rejected["outcome"],"PRODUCTION_REVISION_NOT_ELIGIBLE")
+            self.assertFalse((staged/"production.plist").exists())
+
+    def test_main_requires_matching_explicit_origin_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700)
+            for runner,approved,verified in ((Runner(),None,None),
+                    (Runner(origin="2"*40),REVISION,REVISION),(Runner(),REVISION,"2"*40)):
+                result=renderer.render(staged/f"{len(list(staged.iterdir()))}.plist",runtime,REVISION,
+                    runner=runner,production=True,approved_main_revision=approved,
+                    verified_origin_revision=verified)
+                self.assertEqual(result["outcome"],"PRODUCTION_REVISION_NOT_ELIGIBLE")
+
+    def test_production_render_rejects_untracked_artifact(self):
+        class Untracked(Runner):
+            def __call__(self,command,cwd,timeout):
+                if command[1:3]==["ls-files","--others"]: return completed(b"src/flop_agent/shadow.py\0")
+                return super().__call__(command,cwd,timeout)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
+            runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700)
+            result=render(staged/"production.plist",runtime,REVISION,runner=Untracked())
+            self.assertEqual(result["outcome"],"CODE_TREE_DIRTY")
+            self.assertFalse((staged/"production.plist").exists())
+
     def test_private_plist_render_is_exact_unloaded_and_exclusive(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder).resolve(); runtime=root/"runtime-root"; staged=root/"staged"
             runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"scheduler.plist"
-            result=renderer.render(output,runtime,REVISION,runner=Runner())
-            self.assertEqual(result,{"success":True,"outcome":"PLIST_RENDERED","error_class":None,
-                "plist_created":True,"commit_state":"DURABLE","durability_confirmed":True,
-                "installed":False,"loaded":False,"network_requests":0,"collector_invocations":0})
+            result=render(output,runtime,REVISION,runner=Runner())
+            self.assertTrue(result["success"]); self.assertEqual(result["outcome"],"PLIST_RENDERED")
+            self.assertEqual((result["eligibility"],result["installable"],result["artifact_format"]),
+                             ("PRODUCTION_ELIGIBLE",True,"PLIST"))
             self.assertEqual(output.stat().st_mode&0o777,0o600)
             value=plistlib.loads(output.read_bytes()); arguments=value["ProgramArguments"]
-            self.assertEqual(arguments,[str(runtime/"python/bin/python3"),"-I",str(renderer.LAUNCHER),
+            self.assertEqual(arguments,[str(runtime/"generations"/REVISION/"python/bin/python3"),"-I",str(renderer.LAUNCHER),
                 "--expected-revision",REVISION,"--runtime-root",str(runtime)])
             self.assertEqual((value["StartInterval"],value["RunAtLoad"]),(3600,False))
             self.assertNotIn("KeepAlive",value); self.assertNotIn(b"APPROVED_",output.read_bytes())
             before=output.read_bytes(); mode=output.stat().st_mode&0o777
-            again=renderer.render(output,runtime,REVISION,runner=Runner())
+            again=render(output,runtime,REVISION,runner=Runner())
             self.assertEqual(again["outcome"],"PLIST_ALREADY_EXISTS")
             self.assertEqual(output.read_bytes(),before)
             self.assertEqual(output.stat().st_mode&0o777,mode)
@@ -53,7 +100,7 @@ class EngagementActivationTests(unittest.TestCase):
             with self.subTest(stage=stage),tempfile.TemporaryDirectory() as folder:
                 root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
                 runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"job.plist"
-                with patcher: result=renderer.render(output,runtime,REVISION,runner=Runner())
+                with patcher: result=render(output,runtime,REVISION,runner=Runner())
                 self.assertEqual((result["success"],result["plist_created"],result["commit_state"],
                                   result["durability_confirmed"]),(False,False,"PRE_PUBLISH",False))
                 self.assertFalse(output.exists())
@@ -69,7 +116,7 @@ class EngagementActivationTests(unittest.TestCase):
                 if len(calls)==2: raise OSError("bounded")
                 return real_fsync(descriptor)
             with mock.patch.object(renderer.os,"fsync",side_effect=fail_directory):
-                result=renderer.render(output,runtime,REVISION,runner=Runner())
+                result=render(output,runtime,REVISION,runner=Runner())
             self.assertEqual((result["success"],result["outcome"],result["plist_created"],
                               result["commit_state"],result["durability_confirmed"]),
                              (False,"PLIST_COMMITTED_NOT_DURABLE",True,"PUBLISHED",False))
@@ -86,7 +133,7 @@ class EngagementActivationTests(unittest.TestCase):
                 if len(calls)==1: return real_write(descriptor,payload[:17])
                 raise OSError("bounded")
             with mock.patch.object(renderer.os,"write",side_effect=partial_then_fail):
-                result=renderer.render(output,runtime,REVISION,runner=Runner())
+                result=render(output,runtime,REVISION,runner=Runner())
             self.assertGreaterEqual(len(calls),2)
             self.assertEqual((result["plist_created"],result["commit_state"]),(False,"PRE_PUBLISH"))
             self.assertFalse(output.exists())
@@ -97,7 +144,7 @@ class EngagementActivationTests(unittest.TestCase):
             root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
             runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"job.plist"
             with mock.patch.object(renderer,"_valid_payload",side_effect=[True,True,False]):
-                result=renderer.render(output,runtime,REVISION,runner=Runner())
+                result=render(output,runtime,REVISION,runner=Runner())
             self.assertEqual((result["success"],result["outcome"],result["plist_created"],
                               result["commit_state"],result["durability_confirmed"]),
                              (False,"PLIST_PUBLISHED_VALIDATION_FAILED",True,"DURABLE",True))
@@ -108,7 +155,7 @@ class EngagementActivationTests(unittest.TestCase):
             root=Path(folder).resolve(); runtime=root/"runtime"; staged=root/"staged"
             runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700); output=staged/"job.plist"
             barrier=threading.Barrier(2); results=[]
-            def invoke(): barrier.wait(); results.append(renderer.render(output,runtime,REVISION,runner=Runner()))
+            def invoke(): barrier.wait(); results.append(render(output,runtime,REVISION,runner=Runner()))
             threads=[threading.Thread(target=invoke) for _ in range(2)]
             for thread in threads: thread.start()
             for thread in threads: thread.join()
@@ -132,7 +179,7 @@ class EngagementActivationTests(unittest.TestCase):
             runtime.mkdir(mode=0o700); staged.mkdir(mode=0o700)
             active_directory.mkdir(parents=True)
             rendered=staged/"scheduler.plist"
-            result=renderer.render(rendered,runtime,REVISION,runner=Runner())
+            result=render(rendered,runtime,REVISION,runner=Runner())
             active=active_directory/"com.flop-agent-intelligence.engagement-scheduler.plist"
             active.write_bytes(rendered.read_bytes()); active.chmod(0o600)
 
@@ -153,13 +200,13 @@ class EngagementActivationTests(unittest.TestCase):
             for revision,runner,outcome in (("bad",Runner(),"CODE_REVISION_MISMATCH"),
                 (REVISION,Runner(revision="0"*40),"CODE_REVISION_MISMATCH"),
                 (REVISION,Runner(dirty=True),"CODE_TREE_DIRTY")):
-                result=renderer.render(staged/f"{outcome}-{revision[:3]}.plist",runtime,revision,runner=runner)
+                result=render(staged/f"{outcome}-{revision[:3]}.plist",runtime,revision,runner=runner)
                 self.assertEqual(result["outcome"],outcome)
             unsafe=root/"unsafe"; unsafe.mkdir(); unsafe.chmod(0o777)
-            self.assertEqual(renderer.render(unsafe/"job.plist",runtime,REVISION,runner=Runner())["outcome"],
+            self.assertEqual(render(unsafe/"job.plist",runtime,REVISION,runner=Runner())["outcome"],
                              "CODE_PATH_UNSAFE")
             staged.chmod(0o755)
-            self.assertEqual(renderer.render(staged/"public.plist",runtime,REVISION,runner=Runner())["outcome"],
+            self.assertEqual(render(staged/"public.plist",runtime,REVISION,runner=Runner())["outcome"],
                              "CODE_PATH_UNSAFE")
 
     def test_renderer_source_has_no_activation_surface(self):

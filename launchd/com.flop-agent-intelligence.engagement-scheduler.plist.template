@@ -6,7 +6,7 @@
   <string>com.flop-agent-intelligence.engagement-scheduler</string>
   <key>ProgramArguments</key>
   <array>
-    <string>&lt;PRIVATE_RUNTIME_ROOT&gt;/python/bin/python3</string>
+    <string>&lt;IMMUTABLE_RUNTIME_GENERATION&gt;/python/bin/python3</string>
     <string>-I</string>
     <string>&lt;APPROVED_REPOSITORY_ROOT&gt;/scripts/engagement_scheduler_launcher.py</string>
     <string>--expected-revision</string>

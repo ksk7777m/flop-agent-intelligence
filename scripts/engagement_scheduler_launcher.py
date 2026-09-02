@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -78,10 +79,12 @@ def _scheduler_command(action: str, runtime_root: Path) -> list[str]:
     return [str(Path(os.path.abspath(sys.executable))),"-I","-c",isolated_entry,action,"--root",str(runtime_root)]
 
 
-def validate_runtime(runtime_root: Path, expected_revision: str) -> str | None:
+def validate_runtime(runtime_root: Path, expected_revision: str, *,
+                     require_production: bool=False) -> str | None:
     """Return a stable failure class, or None for the bound private runtime."""
-    manifest=runtime_root/"production-runtime.json"
-    expected_python=(runtime_root/"python/bin/python3").absolute()
+    generation=(runtime_root/"generations"/expected_revision).absolute()
+    manifest=generation/"production-runtime.json"
+    expected_python=generation/"python/bin/python3"
     try:
         metadata=manifest.lstat(); python_metadata=expected_python.lstat()
         if (not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
@@ -92,21 +95,38 @@ def validate_runtime(runtime_root: Path, expected_revision: str) -> str | None:
                 or os.readlink(expected_python)!="/Library/Developer/CommandLineTools/usr/bin/python3"
                 or not stat.S_ISREG(resolved_metadata.st_mode) or resolved_metadata.st_uid!=0):
             return "PRODUCTION_RUNTIME_NOT_READY"
+        link=Path("/Library/Developer/CommandLineTools/usr/bin/python3")
+        for _ in range(8):
+            link_metadata=link.lstat()
+            if link_metadata.st_uid!=0: return "PRODUCTION_RUNTIME_NOT_READY"
+            if not stat.S_ISLNK(link_metadata.st_mode): break
+            target=Path(os.readlink(link)); link=(target if target.is_absolute() else link.parent/target)
+        else: return "PRODUCTION_RUNTIME_NOT_READY"
         value=json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError,RuntimeError,UnicodeDecodeError,json.JSONDecodeError):
         return "PRODUCTION_RUNTIME_NOT_READY"
     required={"schema","runtime_version","project_revision","python","python_version",
-              "dependency_lock","dependency_lock_sha256","packages","wheels","created_at"}
+              "dependency_lock","dependency_lock_sha256","packages","wheels","created_at",
+              "project_root","eligibility","previous_generations"}
     if (not isinstance(value,dict) or set(value)!=required
             or value.get("schema")!=RUNTIME_SCHEMA or value.get("runtime_version")!=RUNTIME_VERSION
-            or value.get("python")!="python/bin/python3" or value.get("packages")!=RUNTIME_PACKAGES):
+            or value.get("python")!="python/bin/python3" or value.get("packages")!=RUNTIME_PACKAGES
+            or value.get("project_root")!=str(CODE_ROOT)):
         return "PRODUCTION_RUNTIME_NOT_READY"
+    try:
+        lock=CODE_ROOT/str(value["dependency_lock"])
+        if (not _safe_regular(lock,CODE_ROOT)
+                or hashlib.sha256(lock.read_bytes()).hexdigest()!=value["dependency_lock_sha256"]):
+            return "PRODUCTION_RUNTIME_NOT_READY"
+    except (OSError,TypeError): return "PRODUCTION_RUNTIME_NOT_READY"
     if value.get("project_revision")!=expected_revision: return "CODE_REVISION_MISMATCH"
+    if require_production and value.get("eligibility")!="PRODUCTION_ELIGIBLE":
+        return "PRODUCTION_RUNTIME_NOT_READY"
     actual=Path(os.path.abspath(sys.executable))
     if actual!=expected_python: return "PRODUCTION_INTERPRETER_MISMATCH"
     try:
         import importlib.metadata as metadata_api
-        site_root=runtime_root/"python"
+        site_root=generation/"python"
         for package,version in RUNTIME_PACKAGES.items():
             distribution=metadata_api.distribution(package)
             if (distribution.version!=version
@@ -300,7 +320,7 @@ def launch(runtime_root: Path, expected_revision: str, *, runner: Runner = _run,
     if code_root!=CODE_ROOT or not _code_paths_safe(code_root):
         return _preflight_failure(runtime_root,expected_revision,"CODE_PATH_UNSAFE","CODE_PATH")
     if runner is _run:
-        runtime_error=validate_runtime(runtime_root,expected_revision)
+        runtime_error=validate_runtime(runtime_root,expected_revision,require_production=True)
         if runtime_error:
             return _preflight_failure(runtime_root,expected_revision,runtime_error,"RUNTIME")
     try:
