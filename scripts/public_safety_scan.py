@@ -47,6 +47,8 @@ ENGAGEMENT_RAW_FIELDS = {
     "message_body", "topic", "topic_raw",
 }
 ENGAGEMENT_SOURCE_URL = "https://technocore.chat/rooms?format=json&limit=200"
+MAX_TRACKED_TEXT_BYTES = 1024 * 1024
+MAX_JSONL_RECORDS = 256
 
 
 def public_files(root: Path = ROOT) -> list[Path]:
@@ -96,9 +98,12 @@ def is_generated_private_plist(name: str, text: str) -> bool:
 def is_structured_private_artifact(name: str,text: str) -> bool:
     """Recognize strong runtime structures without banning generic documentation."""
     path=Path(name); values=[]
-    if path.suffix.lower() in {".json",".jsonl",".bak",".tmp"}:
-        try: values=[json.loads(line) for line in text.splitlines() if line.strip()]
-        except json.JSONDecodeError: values=[]
+    try: values=[json.loads(text)]
+    except json.JSONDecodeError:
+        for line in text.splitlines()[:MAX_JSONL_RECORDS]:
+            if not line.strip(): continue
+            try: values.append(json.loads(line))
+            except json.JSONDecodeError: continue
     for value in values:
         if not isinstance(value,dict): continue
         keys=set(value)
@@ -107,11 +112,28 @@ def is_structured_private_artifact(name: str,text: str) -> bool:
                     "wheels","readiness"} <= keys
                 or keys=={"timestamp","stage","error_class","approved_revision","runtime_version"}):
             return True
+        if ({"schema","scheduler_enabled","circuit_state","attempts_24h",
+             "run_in_progress","normal_interval_minutes"} <= keys):
+            return True
         public_prefix=path.parts[0] if path.parts else ""
         if (public_prefix not in {*PUBLIC_DIRS,"api","schemas","examples"}
                 and {"collector_version","git_revision","source_sha256","per_room","fetched_at"} <= keys):
             return True
     return is_generated_private_plist(name,text)
+
+
+def bounded_text(path: Path) -> str | None:
+    """Read only bounded UTF-8 text; never decode or parse binary/oversized data."""
+    try:
+        metadata=path.stat()
+        if metadata.st_size>MAX_TRACKED_TEXT_BYTES: return None
+        data=path.read_bytes()
+    except OSError: return None
+    if b"\0" in data: return None
+    try: text=data.decode("utf-8")
+    except UnicodeDecodeError: return None
+    controls=sum(byte<32 and byte not in {9,10,13} for byte in data)
+    return None if data and controls/max(1,len(data))>.01 else text
 
 
 def scan() -> list[str]:
@@ -123,8 +145,7 @@ def scan() -> list[str]:
         if is_private_runtime_artifact(name):
             findings.append(f"{name}: private runtime artifact is tracked")
         path=ROOT/name
-        try: tracked_text=path.read_text(encoding="utf-8")
-        except (OSError,UnicodeDecodeError): tracked_text=None
+        tracked_text=bounded_text(path)
         if tracked_text is not None and is_structured_private_artifact(name,tracked_text):
             findings.append(f"{name}: structured private runtime artifact is tracked")
     for path in files:

@@ -2,7 +2,39 @@
 
 from __future__ import annotations
 
+import os
+import pwd
+import stat
+from pathlib import Path
 from typing import Any
+
+RUNTIME_SUFFIX = Path("Library/Application Support/flop-agent-intelligence/production-runtime")
+
+
+def resolve_account_home() -> Path | None:
+    """Resolve a non-escalated user's trusted home without environment input."""
+    uid=os.getuid()
+    try:
+        if os.geteuid()!=uid: return None
+        raw=pwd.getpwuid(uid).pw_dir
+        home=Path(raw)
+        if not raw or not home.is_absolute() or home.resolve()!=home.absolute(): return None
+        parents=list(home.parents)
+        chain=[Path("/"),*reversed(parents[:-1]),home]
+        for index,path in enumerate(chain):
+            metadata=path.lstat()
+            if (not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
+                    or metadata.st_uid not in {0,uid} or stat.S_IMODE(metadata.st_mode)&0o022):
+                return None
+            if index==len(chain)-1 and metadata.st_uid!=uid: return None
+        return home
+    except (KeyError,OSError,RuntimeError,TypeError):
+        return None
+
+
+def production_runtime_root() -> Path | None:
+    home=resolve_account_home()
+    return None if home is None else (home/RUNTIME_SUFFIX).absolute()
 
 STATUS_KEYS = {
     "success", "allowed", "outcome", "overlap_active", "circuit_state",

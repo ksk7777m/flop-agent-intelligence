@@ -1,4 +1,4 @@
-import hashlib, json, os, shutil, stat, subprocess, tempfile, threading, unittest
+import hashlib, json, os, shutil, stat, subprocess, tempfile, threading, types, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -6,11 +6,55 @@ from scripts import engagement_scheduler_launcher as launcher
 from scripts import provision_engagement_runtime as provisioner
 from scripts import validate_engagement_production_runtime as runtime_validator
 from scripts.engagement_runtime_contract import validate_scheduler_status_result
+from scripts import engagement_runtime_contract as runtime_contract
 
 REVISION="1"*40
 
 
 class EngagementProductionRuntimeTests(unittest.TestCase):
+    def test_account_home_is_environment_independent_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home=Path(folder).resolve(); uid=os.getuid()
+            account=types.SimpleNamespace(pw_dir=str(home))
+            hostile={"HOME":"/private/tmp/attacker-home","USER":"attacker",
+                "LOGNAME":"attacker","PWD":"/private/tmp","PYTHONPATH":"/private/tmp/hostile"}
+            with mock.patch.dict(os.environ,hostile,clear=True), \
+                 mock.patch.object(runtime_contract.pwd,"getpwuid",return_value=account), \
+                 mock.patch.object(runtime_contract.os,"getuid",return_value=uid), \
+                 mock.patch.object(runtime_contract.os,"geteuid",return_value=uid):
+                self.assertEqual(runtime_contract.resolve_account_home(),home)
+                self.assertEqual(runtime_contract.production_runtime_root(),
+                    home/runtime_contract.RUNTIME_SUFFIX)
+            for home_value in (None,"","relative","x"*8192,str(home/"link")):
+                environment={} if home_value is None else {"HOME":home_value}
+                with self.subTest(HOME=home_value), mock.patch.dict(os.environ,environment,clear=True), \
+                     mock.patch.object(runtime_contract.pwd,"getpwuid",return_value=account):
+                    self.assertEqual(runtime_contract.resolve_account_home(),home)
+            with mock.patch.object(runtime_contract.pwd,"getpwuid",side_effect=KeyError):
+                self.assertIsNone(runtime_contract.resolve_account_home())
+            with mock.patch.object(runtime_contract.pwd,"getpwuid",
+                    return_value=types.SimpleNamespace(pw_dir="relative")):
+                self.assertIsNone(runtime_contract.resolve_account_home())
+            with mock.patch.object(runtime_contract.pwd,"getpwuid",
+                    return_value=types.SimpleNamespace(pw_dir=str(home/"missing"))):
+                self.assertIsNone(runtime_contract.resolve_account_home())
+            with mock.patch.object(runtime_contract.os,"geteuid",return_value=uid+1):
+                self.assertIsNone(runtime_contract.resolve_account_home())
+            with mock.patch.object(runtime_contract.os,"getuid",return_value=0), \
+                 mock.patch.object(runtime_contract.os,"geteuid",return_value=0), \
+                 mock.patch.object(runtime_contract.pwd,"getpwuid",return_value=account):
+                self.assertIsNone(runtime_contract.resolve_account_home())
+            home.chmod(0o777)
+            with mock.patch.object(runtime_contract.pwd,"getpwuid",return_value=account):
+                self.assertIsNone(runtime_contract.resolve_account_home())
+            home.chmod(0o700)
+            link=home.parent/(home.name+"-link"); link.symlink_to(home,target_is_directory=True)
+            try:
+                with mock.patch.object(runtime_contract.pwd,"getpwuid",
+                        return_value=types.SimpleNamespace(pw_dir=str(link))):
+                    self.assertIsNone(runtime_contract.resolve_account_home())
+            finally: link.unlink()
+
     @staticmethod
     def valid_status():
         return {"success":True,"allowed":False,"outcome":"SCHEDULER_NOT_BEFORE",

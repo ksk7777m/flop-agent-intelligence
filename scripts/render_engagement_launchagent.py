@@ -11,8 +11,12 @@ import re
 import stat
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 from typing import Callable
+
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from engagement_runtime_contract import resolve_account_home
 
 CODE_ROOT=Path(__file__).resolve().parents[1]
 GIT=Path("/usr/bin/git")
@@ -117,7 +121,9 @@ def render(output: Path,runtime_root: Path,expected_revision: str,*,runner: Runn
            approved_main_revision: str | None=None,
            verified_origin_revision: str | None=None) -> dict[str,object]:
     output=output.absolute(); runtime_root=runtime_root.absolute()
-    active=(Path.home()/"Library/LaunchAgents").absolute()
+    account_home=resolve_account_home()
+    if account_home is None: return _result(success=False,outcome="PRODUCTION_ACCOUNT_HOME_INVALID")
+    active=(account_home/"Library/LaunchAgents").absolute()
     if not re.fullmatch(r"[0-9a-f]{40}",expected_revision):
         return _result(success=False,outcome="CODE_REVISION_MISMATCH")
     if (output.parent==active or code_root!=CODE_ROOT or not _safe_directory(code_root)

@@ -20,10 +20,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from engagement_runtime_contract import validate_scheduler_status_result
+from engagement_runtime_contract import production_runtime_root, validate_scheduler_status_result
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION_RUNTIME_ROOT = (Path.home()/"Library/Application Support/flop-agent-intelligence/production-runtime").absolute()
 BASE_PYTHON = Path("/usr/bin/python3")
 GIT = Path("/usr/bin/git")
 LOCK = CODE_ROOT / "requirements-engagement-production.txt"
@@ -186,7 +185,8 @@ def provision(runtime_root: Path, source_wheelhouse: Path, expected_revision: st
         return _result(False,eligibility,eligibility=eligibility)
     if production and eligibility!=PRODUCTION_ELIGIBLE:
         return _result(False,"PRODUCTION_REVISION_NOT_ELIGIBLE",eligibility=eligibility)
-    if production and runtime_root!=PRODUCTION_RUNTIME_ROOT:
+    trusted_root=production_runtime_root() if production else runtime_root
+    if trusted_root is None or runtime_root!=trusted_root:
         return _result(False,"RUNTIME_ROOT_UNSAFE",eligibility=eligibility)
     if not _private_dir(runtime_root): return _result(False,"RUNTIME_ROOT_UNSAFE")
     if not verify_wheelhouse(source_wheelhouse): return _result(False,"WHEELHOUSE_INVALID")

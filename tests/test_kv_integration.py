@@ -145,11 +145,22 @@ class KVIntegrationTests(unittest.TestCase):
             "runtime_version":"0.1.0"})
         history=json.dumps({"collector_version":"0.1.0","git_revision":"a"*40,
             "source_sha256":"b"*64,"per_room":[],"fetched_at":"2026-09-03T00:00:00Z"})
-        for name,text in (("misc/renamed.json",runtime_manifest),("misc/ready.tmp",readiness),
-                          ("logs/diagnostic-20260903.bak",prelog),("misc/archive.jsonl",history)):
+        for name,text in (("manifest.txt",runtime_manifest),("runtime.log",runtime_manifest),
+                          ("manifest",runtime_manifest),("misc/ready.evidence",readiness),
+                          ("diagnostic.txt",prelog),("events.log",prelog),("preflight",prelog),
+                          ("misc/archive.data",history)):
             self.assertTrue(scanner.is_structured_private_artifact(name,text),name)
+        generated="""<?xml version="1.0"?><plist version="1.0"><dict>
+          <key>Label</key><string>com.flop-agent-intelligence.engagement-scheduler</string>
+          <key>ProgramArguments</key><array><string>/Users/alice/private/python3</string>
+          <string>-I</string><string>/Users/alice/repo/scripts/engagement_scheduler_launcher.py</string>
+          <string>--expected-revision</string><string>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</string>
+          </array></dict></plist>"""
+        for name in ("something.txt","scheduler.conf","candidate"):
+            self.assertTrue(scanner.is_structured_private_artifact(name,generated),name)
         self.assertFalse(scanner.is_structured_private_artifact(
             "api/capabilities.json",json.dumps({"schema":"capabilities-v1","status":"READY"})))
+        self.assertIsNone(scanner.bounded_text(Path(__file__).with_name("nonexistent")))
 
 
 if __name__ == "__main__":

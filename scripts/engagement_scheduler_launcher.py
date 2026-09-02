@@ -18,10 +18,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from engagement_runtime_contract import validate_scheduler_status_result
+from engagement_runtime_contract import production_runtime_root, validate_scheduler_status_result
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION_RUNTIME_ROOT = (Path.home()/"Library/Application Support/flop-agent-intelligence/production-runtime").absolute()
 GIT = Path("/usr/bin/git")
 SCHEDULER = CODE_ROOT / "scripts/engagement_scheduler.py"
 COLLECTOR = CODE_ROOT / "scripts/collect_engagement.py"
@@ -82,7 +81,8 @@ def _runtime_directories_trusted(runtime_root: Path,generation: Path,
                                  expected_revision: str,require_production: bool) -> bool:
     generations=runtime_root/"generations"
     python_dir=generation/"python"; wheelhouse=generation/"wheelhouse"
-    return ((not require_production or runtime_root==PRODUCTION_RUNTIME_ROOT)
+    trusted_root=production_runtime_root() if require_production else runtime_root
+    return (trusted_root is not None and runtime_root==trusted_root
             and generation.name==expected_revision and generation.parent==generations
             and _trusted_directory(runtime_root,private=True)
             and _trusted_directory(generations,private=True)
