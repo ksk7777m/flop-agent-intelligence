@@ -93,6 +93,20 @@ READY_OUTCOMES = {
     "SCHEDULER_READY", "SCHEDULER_NOT_BEFORE", "SCHEDULER_MIN_INTERVAL",
     "SCHEDULER_DAILY_BUDGET_EXCEEDED",
 }
+SCHEDULER_EVALUATION_KEYS = STATUS_KEYS | {"collector_invocations"}
+SCHEDULER_COLLECTION_KEYS = {
+    "success", "outcome", "error_class", "circuit_state", "collector_invocations",
+}
+SCHEDULER_RECOVERY_KEYS = {"success", "outcome", "circuit_state", "collector_invocations"}
+SCHEDULER_ERROR_KEYS = {"success", "allowed", "outcome", "collector_invocations"}
+SCHEDULER_SUPPRESSION_OUTCOMES = {
+    "SCHEDULER_DISABLED", "SCHEDULER_NOT_BEFORE", "SCHEDULER_MIN_INTERVAL",
+    "SCHEDULER_DAILY_BUDGET_EXCEEDED", "SCHEDULER_CIRCUIT_OPEN",
+}
+SCHEDULER_STATE_ERROR_OUTCOMES = {
+    "SCHEDULER_RUN_ALREADY_ACTIVE", "SCHEDULER_STATE_MISSING", "SCHEDULER_STATE_INVALID",
+    "SCHEDULER_STATE_PATH_UNSAFE", "SCHEDULER_STATE_PERMISSIONS", "SCHEDULER_STATE_LOCK_FAILED",
+}
 
 
 def validate_scheduler_status_result(value: object) -> dict[str, Any] | None:
@@ -121,3 +135,59 @@ def validate_scheduler_status_result(value: object) -> dict[str, Any] | None:
         if value[field] is not None and not isinstance(value[field], str):
             return None
     return value
+
+
+def validate_scheduler_run_result(value: object, returncode: int,
+                                  failure_classes: set[str]) -> dict[str, Any] | None:
+    """Return one exact scheduler run-once result, otherwise fail closed."""
+    if not isinstance(value,dict) or type(value.get("success")) is not bool:
+        return None
+    if returncode != (0 if value["success"] else 1): return None
+    outcome=value.get("outcome")
+    invocations=value.get("collector_invocations")
+    if type(invocations) is not int or invocations not in {0,1}: return None
+    if outcome in SCHEDULER_SUPPRESSION_OUTCOMES:
+        if set(value)!=SCHEDULER_EVALUATION_KEYS or value["success"] is not False or invocations!=0:
+            return None
+        if (value.get("allowed") is not False or value.get("overlap_active") is not False
+                or value.get("run_in_progress") is not False
+                or type(value.get("consecutive_failures")) is not int
+                or type(value.get("normal_interval_minutes")) is not int
+                or not 30<=value["normal_interval_minutes"]<=1440
+                or value.get("minimum_interval_minutes")!=30
+                or type(value.get("requests_24h")) is not int
+                or not 0<=value["requests_24h"]<=24
+                or not isinstance(value.get("next_eligible_at"),str)):
+            return None
+        for field in ("last_attempt_at","last_success_at","not_before_at"):
+            if value[field] is not None and not isinstance(value[field],str): return None
+        if outcome=="SCHEDULER_DISABLED":
+            coherent=(value.get("scheduler_enabled") is False
+                and value.get("circuit_state")=="READY_DISABLED"
+                and value["consecutive_failures"]==0 and value.get("last_error_class") is None)
+        elif outcome=="SCHEDULER_CIRCUIT_OPEN":
+            coherent=(value.get("scheduler_enabled") is False
+                and value.get("circuit_state")=="CIRCUIT_OPEN"
+                and value["consecutive_failures"]==2
+                and value.get("last_error_class") in failure_classes)
+        else:
+            coherent=(value.get("scheduler_enabled") is True
+                and value.get("circuit_state")=="READY"
+                and value["consecutive_failures"]==0 and value.get("last_error_class") is None)
+        return value if coherent else None
+    if outcome in {"SCHEDULER_COLLECTION_SUCCEEDED","SCHEDULER_COLLECTION_FAILED"}:
+        if set(value)!=SCHEDULER_COLLECTION_KEYS or invocations!=1: return None
+        if outcome=="SCHEDULER_COLLECTION_SUCCEEDED":
+            coherent=value["success"] is True and value.get("error_class") is None \
+                and value.get("circuit_state")=="READY"
+        else:
+            coherent=value["success"] is False and value.get("error_class") in failure_classes \
+                and value.get("circuit_state") in {"DEGRADED","CIRCUIT_OPEN"}
+        return value if coherent else None
+    if outcome=="SCHEDULER_RECOVERED_INTERRUPTED_RUN":
+        return value if (set(value)==SCHEDULER_RECOVERY_KEYS and value["success"] is False
+            and invocations==0 and value.get("circuit_state") in {"DEGRADED","CIRCUIT_OPEN"}) else None
+    if outcome in SCHEDULER_STATE_ERROR_OUTCOMES:
+        return value if (set(value)==SCHEDULER_ERROR_KEYS and value["success"] is False
+            and value.get("allowed") is False and invocations==0) else None
+    return None

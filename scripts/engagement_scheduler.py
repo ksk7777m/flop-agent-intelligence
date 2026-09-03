@@ -17,6 +17,10 @@ from flop_agent.engagement_scheduler import (
     FAILURE_CLASSES, approve_reset, disable_scheduled, dry_run, enable_scheduled, evaluate,
     load_state, provision_disabled, run_once,
 )
+if __package__:
+    from .engagement_runtime_contract import validate_scheduler_run_result
+else:
+    from engagement_runtime_contract import validate_scheduler_run_result
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 REVIEWED_COLLECTOR = CODE_ROOT / "scripts/collect_engagement.py"
@@ -184,7 +188,11 @@ def main() -> None:
     elif args.command == "approve-reset": result=approve_reset(state_path,lock_path)
     elif args.command == "enable-scheduled": result=enable_scheduled(state_path,lock_path)
     elif args.command == "disable-scheduled": result=disable_scheduled(state_path,lock_path)
-    else: result=run_once(state_path,lock_path,lambda:_collector(root))
+    else:
+        result=run_once(state_path,lock_path,lambda:_collector(root))
+        if validate_scheduler_run_result(result,0 if result.get("success") is True else 1,
+                                         FAILURE_CLASSES) is None:
+            result={"success":False,"outcome":"SCHEDULER_RESULT_INVALID","collector_invocations":0}
     print(json.dumps(result,indent=2))
     if result.get("success") is False and args.command not in {"status","dry-run"}: raise SystemExit(1)
 

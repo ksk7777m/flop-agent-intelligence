@@ -11,6 +11,22 @@ def completed(value=b"",returncode=0,stderr=b""):
     return subprocess.CompletedProcess([],returncode,value,stderr)
 
 
+def evaluation_result(outcome="SCHEDULER_NOT_BEFORE"):
+    value={"success":False,"allowed":False,"outcome":outcome,"overlap_active":False,
+        "circuit_state":"READY","scheduler_enabled":True,"run_in_progress":False,
+        "last_attempt_at":None,"last_success_at":None,
+        "not_before_at":"2026-09-03T00:00:00Z","consecutive_failures":0,
+        "last_error_class":None,"normal_interval_minutes":60,"minimum_interval_minutes":30,
+        "next_eligible_at":"2026-09-03T00:00:00Z","requests_24h":0,
+        "collector_invocations":0}
+    if outcome=="SCHEDULER_DISABLED":
+        value.update(circuit_state="READY_DISABLED",scheduler_enabled=False,not_before_at=None)
+    elif outcome=="SCHEDULER_CIRCUIT_OPEN":
+        value.update(circuit_state="CIRCUIT_OPEN",scheduler_enabled=False,
+                     consecutive_failures=2,last_error_class="VALIDATION_FAILED")
+    return value
+
+
 class FakeRunner:
     def __init__(self,revision=REVISION,dirty=False,status=None,run=None):
         self.revision=revision; self.dirty=dirty; self.calls=[]
@@ -21,8 +37,7 @@ class FakeRunner:
             "last_error_class":None,"normal_interval_minutes":60,
             "minimum_interval_minutes":30,"next_eligible_at":"2026-09-03T00:00:00Z",
             "requests_24h":0}
-        self.run=run or {"success":False,"outcome":"SCHEDULER_DISABLED",
-            "collector_invocations":0,"circuit_state":"READY_DISABLED"}
+        self.run=run or evaluation_result("SCHEDULER_DISABLED")
     def __call__(self,command,cwd,timeout):
         self.calls.append(command)
         if command[1:3]==["rev-parse","HEAD"]: return completed((self.revision+"\n").encode())
@@ -283,20 +298,25 @@ class EngagementLauncherTests(unittest.TestCase):
 
     def test_scheduler_result_semantic_matrix(self):
         valid=[
-            ({"success":False,"outcome":"SCHEDULER_DISABLED","collector_invocations":0,
-              "circuit_state":"READY_DISABLED"},"OK_DISABLED"),
+            (evaluation_result("SCHEDULER_DISABLED"),"OK_DISABLED"),
             ({"success":True,"outcome":"SCHEDULER_COLLECTION_SUCCEEDED","collector_invocations":1,
-              "circuit_state":"READY"},"OK_SCHEDULER_INVOKED"),
+              "circuit_state":"READY","error_class":None},"OK_SCHEDULER_INVOKED"),
             ({"success":False,"outcome":"SCHEDULER_COLLECTION_FAILED","collector_invocations":1,
-              "circuit_state":"DEGRADED"},"OK_SCHEDULER_INVOKED"),
-            ({"success":False,"outcome":"SCHEDULER_CIRCUIT_OPEN","collector_invocations":0,
-              "circuit_state":"CIRCUIT_OPEN"},"OK_SCHEDULER_INVOKED"),
-            ({"success":False,"outcome":"SCHEDULER_MIN_INTERVAL","collector_invocations":0,
-              "circuit_state":"READY"},"OK_SCHEDULER_INVOKED"),
-            ({"success":False,"outcome":"SCHEDULER_NOT_BEFORE","collector_invocations":0,
-              "circuit_state":"READY","not_before_at":"2026-09-01T13:00:00Z"},
-             "OK_SCHEDULER_INVOKED"),
+              "circuit_state":"DEGRADED","error_class":"VALIDATION_FAILED"},"OK_SCHEDULER_INVOKED"),
+            (evaluation_result("SCHEDULER_CIRCUIT_OPEN"),"OK_SCHEDULER_INVOKED"),
+            (evaluation_result("SCHEDULER_MIN_INTERVAL"),"OK_SCHEDULER_INVOKED"),
+            (evaluation_result("SCHEDULER_NOT_BEFORE"),"OK_SCHEDULER_INVOKED"),
+            (evaluation_result("SCHEDULER_DAILY_BUDGET_EXCEEDED"),"OK_SCHEDULER_INVOKED"),
+            ({"success":False,"outcome":"SCHEDULER_RECOVERED_INTERRUPTED_RUN",
+              "collector_invocations":0,"circuit_state":"DEGRADED"},"OK_SCHEDULER_INVOKED"),
+            ({"success":False,"allowed":False,"outcome":"SCHEDULER_RUN_ALREADY_ACTIVE",
+              "collector_invocations":0},"OK_SCHEDULER_INVOKED"),
         ]
+        valid.extend(({"success":False,"allowed":False,"outcome":outcome,
+                       "collector_invocations":0},"OK_SCHEDULER_INVOKED")
+            for outcome in ("SCHEDULER_STATE_MISSING","SCHEDULER_STATE_INVALID",
+                "SCHEDULER_STATE_PATH_UNSAFE","SCHEDULER_STATE_PERMISSIONS",
+                "SCHEDULER_STATE_LOCK_FAILED"))
         invalid=[]
         for value in (valid[0][0],valid[1][0],valid[3][0]):
             item=dict(value); item["collector_invocations"]=1-item["collector_invocations"]; invalid.append(item)
@@ -304,6 +324,12 @@ class EngagementLauncherTests(unittest.TestCase):
         item=dict(valid[1][0]); item["circuit_state"]="CIRCUIT_OPEN"; invalid.append(item)
         item=dict(valid[0][0]); item["outcome"]="UNKNOWN"; invalid.append(item)
         item=dict(valid[0][0]); item["collector_invocations"]=True; invalid.append(item)
+        item=dict(valid[4][0]); item.pop("run_in_progress"); invalid.append(item)
+        item=dict(valid[4][0]); item["run_in_progress"]="false"; invalid.append(item)
+        item=dict(valid[4][0]); item["run_in_progress"]=True; invalid.append(item)
+        item=dict(valid[4][0]); item["unknown"]=False; invalid.append(item)
+        item=dict(valid[4][0]); item["scheduler_enabled"]=False; invalid.append(item)
+        item=dict(valid[2][0]); item["error_class"]="UNKNOWN"; invalid.append(item)
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); self.runtime(root)
             for value,expected in valid:
@@ -316,6 +342,13 @@ class EngagementLauncherTests(unittest.TestCase):
                     self.assertEqual((result["outcome"],result["scheduler_invoked"],
                                       result["scheduler_outcome"],result["collector_invocations"]),
                                      ("LAUNCHER_INTERNAL_ERROR",True,"SCHEDULER_RESULT_INVALID",0))
+            class MalformedRunner(FakeRunner):
+                def __call__(self,command,cwd,timeout):
+                    if "run-once" in command: return completed(b"{",returncode=1)
+                    return super().__call__(command,cwd,timeout)
+            malformed=launcher.launch(root,REVISION,runner=MalformedRunner())
+            self.assertEqual((malformed["outcome"],malformed["scheduler_outcome"]),
+                             ("LAUNCHER_INTERNAL_ERROR","SCHEDULER_RESULT_INVALID"))
 
     def test_pre_and_post_run_log_failures_have_distinct_truthful_results(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -326,10 +359,10 @@ class EngagementLauncherTests(unittest.TestCase):
                               result["log_error_class"]),
                              ("LOG_UNAVAILABLE",False,False,"LOG_UNAVAILABLE"))
             self.assertFalse(any("run-once" in call for call in runner.calls))
-        for scheduler_result,expected in (({"success":False,"outcome":"SCHEDULER_DISABLED",
-                "collector_invocations":0,"circuit_state":"READY_DISABLED"},("OK_DISABLED",0)),
+        for scheduler_result,expected in ((evaluation_result("SCHEDULER_DISABLED"),("OK_DISABLED",0)),
                 ({"success":True,"outcome":"SCHEDULER_COLLECTION_SUCCEEDED",
-                "collector_invocations":1,"circuit_state":"READY"},("OK_SCHEDULER_INVOKED",1))):
+                "collector_invocations":1,"circuit_state":"READY","error_class":None},
+                 ("OK_SCHEDULER_INVOKED",1))):
             with tempfile.TemporaryDirectory() as folder:
                 root=Path(folder); self.runtime(root); runner=FakeRunner(run=scheduler_result)
                 with mock.patch.object(launcher,"append_log",side_effect=[None,OSError]):

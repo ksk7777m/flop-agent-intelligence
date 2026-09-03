@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from engagement_runtime_contract import (install_trusted_project_import_path,
-    production_runtime_root, validate_scheduler_status_result)
+    production_runtime_root, validate_scheduler_run_result, validate_scheduler_status_result)
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 GIT = Path("/usr/bin/git")
@@ -276,33 +276,8 @@ def _ignored_code_present(output: bytes, code_root: Path) -> bool:
 
 
 def _validated_scheduler_result(value: object, returncode: int) -> dict[str, Any] | None:
-    if not isinstance(value,dict) or type(value.get("success")) is not bool:
-        return None
-    allowed_keys={"success","allowed","outcome","overlap_active","circuit_state",
-        "scheduler_enabled","last_attempt_at","last_success_at","consecutive_failures",
-        "not_before_at",
-        "last_error_class","normal_interval_minutes","minimum_interval_minutes",
-        "next_eligible_at","requests_24h","collector_invocations","error_class"}
-    if not set(value)<=allowed_keys or returncode!=(0 if value["success"] else 1): return None
-    outcome=value.get("outcome"); invocations=value.get("collector_invocations")
-    circuit=value.get("circuit_state")
-    if type(invocations) is not int or invocations not in {0,1}: return None
-    precollector={"SCHEDULER_DISABLED","SCHEDULER_NOT_BEFORE","SCHEDULER_MIN_INTERVAL",
-        "SCHEDULER_DAILY_BUDGET_EXCEEDED","SCHEDULER_RUN_ALREADY_ACTIVE",
-        "SCHEDULER_STATE_MISSING","SCHEDULER_STATE_INVALID","SCHEDULER_STATE_PATH_UNSAFE",
-        "SCHEDULER_STATE_PERMISSIONS","SCHEDULER_STATE_LOCK_FAILED"}
-    valid=(
-        outcome=="SCHEDULER_COLLECTION_SUCCEEDED" and value["success"] and invocations==1
-        and circuit=="READY"
-        or outcome=="SCHEDULER_COLLECTION_FAILED" and not value["success"] and invocations==1
-        and circuit in {"DEGRADED","CIRCUIT_OPEN"}
-        or outcome=="SCHEDULER_CIRCUIT_OPEN" and not value["success"] and invocations==0
-        and circuit=="CIRCUIT_OPEN"
-        or outcome=="SCHEDULER_RECOVERED_INTERRUPTED_RUN" and not value["success"]
-        and invocations==0 and circuit in {"DEGRADED","CIRCUIT_OPEN"}
-        or outcome in precollector and not value["success"] and invocations==0
-        and circuit in CIRCUIT_STATES)
-    return value if valid else None
+    from flop_agent.engagement_scheduler import FAILURE_CLASSES
+    return validate_scheduler_run_result(value,returncode,FAILURE_CLASSES)
 
 
 def _safe_regular(path: Path, root: Path) -> bool:
