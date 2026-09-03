@@ -147,9 +147,11 @@ def _collector(root: Path) -> dict:
             return {"success":False,"error_class":"COLLECTOR_RESULT_INVALID"}
     except (OSError, RuntimeError):
         return {"success":False,"error_class":"COLLECTOR_RESULT_INVALID"}
-    source=CODE_ROOT/"src"
     isolated_entry=("import runpy,sys;"
-        f"sys.path.insert(0,{str(source)!r});"
+        f"sys.path.insert(0,{str(CODE_ROOT/'scripts')!r});"
+        "from pathlib import Path;"
+        "from engagement_runtime_contract import install_trusted_project_import_path as i;"
+        f"i(Path({str(CODE_ROOT)!r}));"
         f"sys.argv[0]={str(collector)!r};"
         f"runpy.run_path({str(collector)!r},run_name='__main__')")
     command = [str(REVIEWED_PYTHON),"-I","-c",isolated_entry,"--root",str(root)]

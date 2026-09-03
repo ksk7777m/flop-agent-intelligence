@@ -4,6 +4,7 @@ from unittest import mock
 
 from scripts import engagement_scheduler_launcher as launcher
 from scripts import provision_engagement_runtime as provisioner
+from scripts import render_engagement_launchagent as renderer
 from scripts import validate_engagement_production_runtime as runtime_validator
 from scripts.engagement_runtime_contract import validate_scheduler_status_result
 from scripts import engagement_runtime_contract as runtime_contract
@@ -67,6 +68,59 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
                         return_value=types.SimpleNamespace(pw_dir=str(link))):
                     self.assertIsNone(runtime_contract.resolve_account_home())
             finally: link.unlink()
+
+    def test_trusted_project_import_contract_reproduces_and_fixes_isolated_failure(self):
+        scripts=runtime_contract.Path(runtime_contract.__file__).resolve().parent
+        code_root=scripts.parent; source=code_root/"src"
+        old=("import sys;"+f"sys.path.insert(0,{str(scripts)!r});"
+             "import engagement_scheduler_launcher;import flop_agent")
+        failed=subprocess.run(["/usr/bin/python3","-I","-c",old],cwd=Path("/"),
+            env={"PATH":"/usr/bin:/bin","LC_ALL":"C"},capture_output=True,text=True)
+        self.assertNotEqual(failed.returncode,0)
+        self.assertIn("ModuleNotFoundError",failed.stderr)
+        with tempfile.TemporaryDirectory() as folder:
+            hostile=Path(folder).resolve(); fake=hostile/"flop_agent"
+            fake.mkdir(); (fake/"__init__.py").write_text("raise AssertionError('hostile')\n")
+            program=("import json,site,sys;"+f"sys.path.insert(0,{str(scripts)!r});"
+                "from pathlib import Path;"
+                "from engagement_runtime_contract import install_trusted_project_import_path as i;"
+                f"source=i(Path({str(code_root)!r}));"
+                "import flop_agent;"
+                "print(json.dumps({'isolated':sys.flags.isolated,'user_site':site.ENABLE_USER_SITE,"
+                "'source':str(source),'origin':flop_agent.__file__}))")
+            environment={"PATH":"/usr/bin:/bin","LC_ALL":"C","HOME":str(hostile),
+                "USER":"attacker","LOGNAME":"attacker","PWD":str(hostile),
+                "PYTHONPATH":str(hostile),"PYTHONUSERBASE":str(hostile)}
+            for cwd in (Path("/"),Path.home(),hostile):
+                completed=subprocess.run(["/usr/bin/python3","-I","-c",program],cwd=cwd,
+                    env=environment,capture_output=True,check=True,text=True)
+                value=json.loads(completed.stdout)
+                self.assertEqual((value["isolated"],value["user_site"]),(1,False))
+                self.assertEqual(Path(value["source"]),source)
+                self.assertTrue(Path(value["origin"]).resolve().is_relative_to(source))
+
+    def test_trusted_project_import_rejects_alias_and_arbitrary_checkout(self):
+        code_root=Path(runtime_contract.__file__).resolve().parents[1]
+        self.assertEqual(runtime_contract.resolve_trusted_project_src(code_root),code_root/"src")
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder).resolve(); alias=root/"repo"
+            alias.symlink_to(code_root,target_is_directory=True)
+            self.assertIsNone(runtime_contract.resolve_trusted_project_src(alias))
+            self.assertIsNone(runtime_contract.resolve_trusted_project_src(root))
+
+    def test_pre_and_post_publication_use_same_project_import_contract(self):
+        contract="install_trusted_project_import_path"
+        provision_source=Path(provisioner.__file__).read_text()
+        launcher_source=Path(launcher.__file__).read_text()
+        renderer_source=Path(renderer.__file__).read_text()
+        scheduler_source=(provisioner.CODE_ROOT/"scripts/engagement_scheduler.py").read_text()
+        self.assertIn(contract,provision_source)
+        self.assertIn(contract,launcher_source)
+        self.assertIn(contract,scheduler_source)
+        self.assertIn("l.validate_runtime",renderer_source)
+        direct=f"sys.path.insert(0,{str(provisioner.CODE_ROOT/'src')!r})"
+        for source in (provision_source,launcher_source,scheduler_source,renderer_source):
+            self.assertNotIn(direct,source)
 
     @staticmethod
     def valid_status():
@@ -297,7 +351,10 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
             generation=Path(result["generation"]); manifest=json.loads((generation/"production-runtime.json").read_text())
             self.assertIn("old-reviewed-generation",manifest["previous_generations"])
             hostile=root/"hostile"; hostile.mkdir(); (hostile/"jsonschema.py").write_text("raise AssertionError\n")
-            entry=("import runpy,sys;"+f"sys.path.insert(0,{str(provisioner.CODE_ROOT/'src')!r});"
+            entry=("import runpy,sys;"+f"sys.path.insert(0,{str(provisioner.CODE_ROOT/'scripts')!r});"
+                "from pathlib import Path;"
+                "from engagement_runtime_contract import install_trusted_project_import_path as i;"
+                f"i(Path({str(provisioner.CODE_ROOT)!r}));"
                 +f"sys.argv[0]={str(provisioner.CODE_ROOT/'scripts/engagement_scheduler.py')!r};"
                 +f"runpy.run_path({str(provisioner.CODE_ROOT/'scripts/engagement_scheduler.py')!r},run_name='__main__')")
             command=[result["python"],"-I","-c",entry,"status","--root",str(root)]
@@ -305,6 +362,7 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
                 "PYTHONUSERBASE":str(hostile)},capture_output=True,check=True,text=True)
             status=json.loads(completed.stdout)
             self.assertTrue(status["success"]); self.assertIn(status["outcome"],{"SCHEDULER_READY","SCHEDULER_NOT_BEFORE"})
+            self.assertTrue(renderer._runtime_ready(root,revision,renderer.CODE_ROOT,False))
             self.assertEqual(before,{path.name:self.digest(path) for path in tracked})
 
     def test_failed_generation_never_switches_or_touches_scheduler_data(self):

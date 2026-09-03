@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from engagement_runtime_contract import production_runtime_root, validate_scheduler_status_result
+from engagement_runtime_contract import (install_trusted_project_import_path,
+    production_runtime_root, validate_scheduler_status_result)
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 GIT = Path("/usr/bin/git")
@@ -153,7 +154,10 @@ def _run(command: list[str], cwd: Path, timeout: int) -> subprocess.CompletedPro
 
 def _scheduler_command(action: str, runtime_root: Path) -> list[str]:
     isolated_entry=("import runpy,sys;"
-               f"sys.path.insert(0,{str(CODE_ROOT / 'src')!r});"
+               f"sys.path.insert(0,{str(CODE_ROOT / 'scripts')!r});"
+               "from pathlib import Path;"
+               "from engagement_runtime_contract import install_trusted_project_import_path as i;"
+               f"i(Path({str(CODE_ROOT)!r}));"
                f"sys.argv[0]={str(SCHEDULER)!r};"
                f"runpy.run_path({str(SCHEDULER)!r},run_name='__main__')")
     return [str(Path(os.path.abspath(sys.executable))),"-I","-c",isolated_entry,action,"--root",str(runtime_root)]
@@ -215,12 +219,15 @@ def validate_runtime(runtime_root: Path, expected_revision: str, *,
                 or checks[5].returncode or checks[5].stderr
                 or _ignored_code_present(checks[5].stdout,CODE_ROOT)):
             return "PRODUCTION_RUNTIME_NOT_READY"
+    try: source=install_trusted_project_import_path(CODE_ROOT)
+    except RuntimeError: return "PRODUCTION_RUNTIME_NOT_READY"
     actual=Path(os.path.abspath(sys.executable))
     if actual!=expected_python: return "PRODUCTION_INTERPRETER_MISMATCH"
     try:
         import importlib.metadata as metadata_api
         import cryptography
         import jsonschema
+        import flop_agent
         import flop_agent.engagement_history as engagement_history
         site_root=generation/"python"
         for package,version in RUNTIME_PACKAGES.items():
@@ -230,7 +237,8 @@ def validate_runtime(runtime_root: Path, expected_revision: str, *,
                 return "PRODUCTION_DEPENDENCY_MISSING"
         if (not Path(jsonschema.__file__).resolve().is_relative_to(site_root)
                 or not Path(cryptography.__file__).resolve().is_relative_to(site_root)
-                or not Path(engagement_history.__file__).resolve().is_relative_to(CODE_ROOT/"src")):
+                or not Path(flop_agent.__file__).resolve().is_relative_to(source)
+                or not Path(engagement_history.__file__).resolve().is_relative_to(source)):
             return "PRODUCTION_DEPENDENCY_MISSING"
     except (metadata_api.PackageNotFoundError,ImportError,OSError,RuntimeError,TypeError):
         return "PRODUCTION_DEPENDENCY_MISSING"

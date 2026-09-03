@@ -5,10 +5,45 @@ from __future__ import annotations
 import os
 import pwd
 import stat
+import sys
 from pathlib import Path
 from typing import Any
 
 RUNTIME_SUFFIX = Path("Library/Application Support/flop-agent-intelligence/production-runtime")
+
+
+def resolve_trusted_project_src(code_root: Path) -> Path | None:
+    """Resolve this checkout's canonical, non-writable project import root."""
+    expected_root=Path(__file__).resolve().parents[1]
+    root=code_root.absolute(); source=root/"src"; package=source/"flop_agent"
+    initializer=package/"__init__.py"
+    try:
+        if root!=expected_root or root.resolve()!=root: return None
+        for path in (root,source,package):
+            metadata=path.lstat()
+            if (not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
+                    or metadata.st_uid!=os.getuid() or stat.S_IMODE(metadata.st_mode)&0o022
+                    or path.resolve()!=path.absolute()):
+                return None
+        metadata=initializer.lstat()
+        if (not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
+                or metadata.st_uid!=os.getuid() or stat.S_IMODE(metadata.st_mode)&0o022
+                or initializer.resolve()!=initializer.absolute()
+                or not initializer.is_relative_to(source)):
+            return None
+    except (OSError,RuntimeError):
+        return None
+    return source
+
+
+def install_trusted_project_import_path(code_root: Path) -> Path:
+    """Install the validated repository source path ahead of all import sources."""
+    source=resolve_trusted_project_src(code_root)
+    if source is None: raise RuntimeError("trusted project source unavailable")
+    value=str(source)
+    sys.path[:]=[entry for entry in sys.path if entry!=value]
+    sys.path.insert(0,value)
+    return source
 
 
 def resolve_account_home() -> Path | None:

@@ -177,6 +177,9 @@ class EngagementLauncherTests(unittest.TestCase):
         self.assertEqual(len(python_calls),2)
         self.assertTrue(all(call[1]=="-I" for call in python_calls))
         self.assertNotIn("PYTHONPATH",launcher.SAFE_ENV)
+        command=launcher._scheduler_command("status",Path("/private/runtime"))
+        self.assertIn("install_trusted_project_import_path",command[3])
+        self.assertIn(str(launcher.CODE_ROOT/"scripts"),command[3])
         self.assertFalse(any(key.startswith("GIT_") for key in launcher.SAFE_ENV))
         probe=subprocess.run(["/usr/bin/python3","-I","-c",
             "import json,sys;print(json.dumps({'isolated':sys.flags.isolated,'no_user_site':sys.flags.no_user_site,'path':sys.path}))"],

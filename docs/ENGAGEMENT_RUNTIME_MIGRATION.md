@@ -19,6 +19,15 @@ generation root, project paths, wheelhouse entries, manifests, and plist candida
 not be uncontrolled links. Wheel files are user-owned `0600` regular files in a user-owned
 `0700` directory. Project code resolves under the exact clean approved repository.
 
+Project imports use one shared isolated bootstrap contract. It derives the canonical
+`src` directory only from the trusted repository containing the runtime tooling, rejects
+aliases, symlinks, writable directories, and arbitrary source roots, then installs that
+path ahead of other import sources inside `-I`. Provisioning probes, renderer readiness,
+the LaunchAgent launcher, scheduler status/run-once, and the collector subprocess all use
+this contract. `PYTHONPATH`, user site, the initial working directory, and sibling checkouts
+cannot select project code; the loaded `flop_agent` origin is revalidated beneath the exact
+trusted `src` directory.
+
 ## Approval A — code only
 
 Merge the reviewed feature, run the complete offline validation, and push only if that is

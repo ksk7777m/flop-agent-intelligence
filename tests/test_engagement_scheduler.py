@@ -317,7 +317,8 @@ class EngagementSchedulerTests(unittest.TestCase):
         command=called.call_args.args[0]
         self.assertEqual(command[:3],[os.path.abspath(sys.executable),'-I','-c'])
         self.assertIn(str(REVIEWED_COLLECTOR),command[3])
-        self.assertIn(str(CODE_ROOT/'src'),command[3])
+        self.assertIn(str(CODE_ROOT/'scripts'),command[3])
+        self.assertIn("install_trusted_project_import_path",command[3])
         self.assertEqual(command[4:],['--root','/repo'])
         self.assertNotIn("curl"," ".join(command)); self.assertNotIn("http"," ".join(command))
         completed=mock.Mock(stdout=b'{"success":true,"error_class":null}',returncode=7)

@@ -255,8 +255,13 @@ print(json.dumps({'isolated':sys.flags.isolated,'user_site':site.ENABLE_USER_SIT
         interpreter_realpath=_trusted_interpreter(interpreter)
         if interpreter_realpath is None: raise RuntimeError("interpreter trust")
         before=_runtime_data_snapshot(runtime_root)
-        source=CODE_ROOT/"src"; scheduler=CODE_ROOT/"scripts/engagement_scheduler.py"
-        origin_probe=("import json,sys;"+f"sys.path.insert(0,{str(source)!r});"
+        source=CODE_ROOT/"src"; scripts=CODE_ROOT/"scripts"
+        scheduler=scripts/"engagement_scheduler.py"
+        project_import=(f"sys.path.insert(0,{str(scripts)!r});"
+            "from pathlib import Path;"
+            "from engagement_runtime_contract import install_trusted_project_import_path as i;"
+            f"i(Path({str(CODE_ROOT)!r}));")
+        origin_probe=("import json,sys;"+project_import+
             "import cryptography,jsonschema,flop_agent.engagement_history as f;"
             "print(json.dumps({'isolated':sys.flags.isolated,'no_user_site':sys.flags.no_user_site,"
             "'ignore_environment':sys.flags.ignore_environment,'jsonschema':jsonschema.__file__,"
@@ -267,8 +272,8 @@ print(json.dumps({'isolated':sys.flags.isolated,'user_site':site.ENABLE_USER_SIT
         origin_value=json.loads(origins.stdout)
         if not _valid_origins(origin_value,python_dir,source):
             raise RuntimeError("origin verification")
-        entry=("import runpy,sys;"+f"sys.path.insert(0,{str(source)!r});"
-            +f"sys.argv[0]={str(scheduler)!r};"
+        entry=("import runpy,sys;"+project_import+
+            f"sys.argv[0]={str(scheduler)!r};"
             +f"runpy.run_path({str(scheduler)!r},run_name='__main__')")
         status=subprocess.run([str(interpreter),"-I","-c",entry,"status","--root",str(runtime_root)],
                               cwd=CODE_ROOT,env=SAFE_ENV,capture_output=True,check=False,timeout=10)
