@@ -11,6 +11,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Mapping
 
+from .remote_content_policy import RemoteOrigin, discovered_remote_value
+
 
 ROOMS_SCHEMA = "technocore-observatory-rooms-v2"
 STATUS_SCHEMA = "technocore-observatory-status-v1"
@@ -20,9 +22,11 @@ OFFICIAL_SOURCE = "https://technocore.chat/rooms?format=json"
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
-def safe_text(value: Any, limit: int) -> str:
+def safe_text(value: Any, limit: int, *, origin: RemoteOrigin = RemoteOrigin.FETCHED_CONTENT,
+              source_id: str = "technocore-observatory") -> str:
     """Return a bounded single-line data string, never executable markup."""
-    cleaned = CONTROL.sub(" ", str(value or "")).replace("\u2028", " ").replace("\u2029", " ")
+    remote = discovered_remote_value(value or "", origin, source_id)
+    cleaned = CONTROL.sub(" ", remote.value_for_classification_only).replace("\u2028", " ").replace("\u2029", " ")
     return " ".join(cleaned.split())[:limit]
 
 
@@ -58,8 +62,8 @@ def normalize_room(raw: Mapping[str, Any], rank: int) -> Dict[str, Any]:
     window = optional_number(raw.get("window"))
     last_seq = optional_number(raw.get("last_seq"))
     return {
-        "room": safe_text(raw.get("room"), 48),
-        "topic": safe_text(raw.get("topic"), 120),
+        "room": safe_text(raw.get("room"), 48, origin=RemoteOrigin.TECHNOCORE_ROOM),
+        "topic": safe_text(raw.get("topic"), 120, origin=RemoteOrigin.TECHNOCORE_TOPIC),
         "first_seq": optional_number(raw.get("first_seq")),
         "last_seq": last_seq,
         "idle_seconds": optional_number(raw.get("idle_seconds")),

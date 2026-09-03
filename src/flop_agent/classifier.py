@@ -6,6 +6,13 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Dict, Iterable, List
 
+from .remote_content_policy import (
+    RemoteContentClass,
+    RemoteOrigin,
+    SourceTrustTier,
+    discovered_remote_value,
+)
+
 CRITICAL = ("testnet launch", "faucet", "airdrop snapshot", "claim", "deadline", "registration deadline", "wallet linking", "did registration", "eligibility", "contract address", "genesis")
 ACTION = ("technocore task", "specific tasks", "official task", "challenge", "workflow integration", "integration", "testnet feature", "miner", "validator", "did requirement")
 INFO = ("ama", "roadmap", "interview", "technical", "announcement")
@@ -30,6 +37,21 @@ def _hits(text: str, phrases: Iterable[str]) -> List[str]:
 
 
 def classify(text: str, official: bool) -> Classification:
+    remote = discovered_remote_value(
+        text,
+        RemoteOrigin.FETCHED_CONTENT if official else RemoteOrigin.TECHNOCORE_MESSAGE,
+        "configured-official-content" if official else "untrusted-content",
+        trust_tier=(SourceTrustTier.TIER_0_OFFICIAL if official
+                    else SourceTrustTier.TIER_2_UNSIGNED_COMMUNITY),
+    )
+    policy_hits = [finding.content_class.value for finding in remote.findings
+                   if finding.content_class not in {
+                       RemoteContentClass.PLAIN_TEXT,
+                       RemoteContentClass.URL,
+                       RemoteContentClass.CONTRACT_ADDRESS_CANDIDATE,
+                   }]
+    if policy_hits:
+        return Classification("SECURITY_REVIEW_REQUIRED", True, policy_hits, official)
     security_hits = _hits(text, SECURITY)
     ignore_hits = _hits(text, IGNORE)
     if security_hits:

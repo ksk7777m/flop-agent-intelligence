@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .identity import load_identity, sign_message
+from .remote_content_policy import DEFAULT_RESPONSE_LIMIT, RejectRedirects, SafeRemoteError
 
 BASE_URL = "https://technocore.chat"
 ALLOWED_READ_PATHS = {"/healthz", "/rooms", "/rooms?format=json", "/r/lobby?format=json", "/llms.txt", "/skill.md", "/patterns.md", "/.well-known/agent.json", "/config"}
@@ -19,17 +21,38 @@ DID_NOTE_PATH = "/kv/did-4e/1df29904c79a56"
 
 
 def _request(url: str, payload: Dict[str, Any] | None = None) -> Any:
+    parsed = urllib.parse.urlparse(url)
+    if (parsed.scheme != "https" or parsed.netloc != "technocore.chat"
+            or parsed.username or parsed.password or parsed.fragment):
+        raise ValueError("Technocore target is not the configured official origin")
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {} if data is None else {"Content-Type": "application/json"}
     req = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
     try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            body = response.read().decode("utf-8")
+        with urllib.request.build_opener(RejectRedirects()).open(req, timeout=20) as response:
+            if response.geturl() != url:
+                raise SafeRemoteError("FINAL_ORIGIN_MISMATCH")
+            body_bytes = response.read(DEFAULT_RESPONSE_LIMIT + 1)
+            if len(body_bytes) > DEFAULT_RESPONSE_LIMIT:
+                raise SafeRemoteError(
+                    "RESPONSE_TOO_LARGE", response_length=len(body_bytes),
+                    content_sha256=hashlib.sha256(body_bytes[:DEFAULT_RESPONSE_LIMIT]).hexdigest(),
+                    truncated=True)
+            try:
+                body = body_bytes.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise SafeRemoteError(
+                    "INVALID_UTF8", response_length=len(body_bytes),
+                    content_sha256=hashlib.sha256(body_bytes).hexdigest()) from error
             content_type = response.headers.get("Content-Type", "")
             return json.loads(body) if "json" in content_type else body
     except urllib.error.HTTPError as error:
-        body = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Technocore HTTP {error.code}: {body}") from error
+        body = error.read(DEFAULT_RESPONSE_LIMIT + 1)
+        bounded = body[:DEFAULT_RESPONSE_LIMIT]
+        raise SafeRemoteError(
+            "HTTP_ERROR", status=error.code, response_length=len(body),
+            content_sha256=hashlib.sha256(bounded).hexdigest(),
+            truncated=len(body) > DEFAULT_RESPONSE_LIMIT) from error
 
 
 def read_official(path: str) -> Any:
@@ -45,8 +68,8 @@ def read_presence_note(path: str) -> Any:
         raise ValueError("not a public presence-note path")
     try:
         return _request(BASE_URL + path)
-    except RuntimeError as error:
-        if "Technocore HTTP 404:" in str(error):
+    except SafeRemoteError as error:
+        if error.status == 404:
             return None
         raise
 

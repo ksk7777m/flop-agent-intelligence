@@ -17,11 +17,27 @@ from pathlib import Path
 from typing import Any, Dict, Mapping
 from urllib.parse import urlparse
 
+from .remote_content_policy import (
+    ContractProvenance,
+    RemoteOrigin,
+    SinkClass,
+    authorize_sink,
+    discovered_remote_value,
+)
+
 
 SCHEMA = "flop-testnet-config-v0"
 RECEIPT_SCHEMA = "flop-testnet-activity-receipt-v0"
 TOKEN = "FLOP"
 PLACEHOLDER_WALLET = "0xTEST_WALLET_PLACEHOLDER"
+CONFIGURED_OFFICIAL_SOURCE_URLS = frozenset({
+    "https://flop.finance/",
+    "https://flop.finance/teaser/",
+    "https://github.com/flop-labs/technocore-chat",
+    "https://x.com/flop_labs",
+    "https://technocore.chat/llms.txt",
+    "https://technocore.chat/skill.md",
+})
 
 
 class LiveActionDisabled(PermissionError):
@@ -77,6 +93,7 @@ def empty_config() -> Dict[str, Any]:
         "inference_api_url": None,
         "token_symbol": TOKEN,
         "token_contract": None,
+        "contract_provenance": ContractProvenance.UNVERIFIED.value,
         "source_url": None,
         "source_tier": None,
         "spec_status": None,
@@ -91,15 +108,10 @@ def classify_source(url: str | None) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.username or parsed.password:
         return "UNVERIFIED"
+    normalized = parsed.geturl()
+    if normalized in CONFIGURED_OFFICIAL_SOURCE_URLS:
+        return "TIER_1_OFFICIAL"
     host, path = (parsed.hostname or "").lower(), parsed.path.lower()
-    if host in {"flop.finance", "www.flop.finance", "technocore.chat"}:
-        return "TIER_1_OFFICIAL"
-    if host == "github.com" and path.startswith("/flop-labs/"):
-        return "TIER_1_OFFICIAL"
-    if host == "raw.githubusercontent.com" and path.startswith("/flop-labs/"):
-        return "TIER_1_OFFICIAL"
-    if host in {"x.com", "twitter.com"} and path.startswith("/flop_labs"):
-        return "TIER_1_OFFICIAL"
     if host in {"x.com", "twitter.com"} and path.startswith("/cryptohayes"):
         return "REVIEW_REQUIRED"
     return "UNVERIFIED"
@@ -113,6 +125,10 @@ def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONFIGURATION_SOURCE", "activation": "DO_NOT_ACTIVATE"}
     if config.get("token_contract") and not re.fullmatch(r"0x[a-fA-F0-9]{40}", str(config["token_contract"])):
         return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONTRACT", "activation": "DO_NOT_ACTIVATE"}
+    if (config.get("token_contract")
+            and config.get("contract_provenance") != ContractProvenance.VERIFIED_FOR_TESTNET_USE.value):
+        return {"status": "REVIEW_REQUIRED", "reason": "CONTRACT_PROVENANCE_REQUIRED",
+                "activation": "DO_NOT_ACTIVATE"}
     return {
         "status": "READY" if populated else "OFFICIAL_DRAFT",
         "reason": "CONFIG_CANDIDATE_REQUIRES_HUMAN_REVIEW" if populated else "NO_OPERATIONAL_ENDPOINTS",
@@ -141,8 +157,15 @@ def classify_instruction(text: str, endpoint: str | None = None) -> Dict[str, An
     risks = sorted(name for name, pattern in SECURITY_PATTERNS.items() if pattern.search(text))
     if risks:
         return {"status": "CRITICAL_SECURITY_RISK", "risks": risks, "connection_prohibited": True}
-    if endpoint and classify_source(endpoint) != "TIER_1_OFFICIAL":
-        return {"status": "UNVERIFIED_ENDPOINT", "risks": ["unknown_endpoint"], "connection_prohibited": True}
+    if endpoint:
+        remote_endpoint = discovered_remote_value(
+            endpoint, RemoteOrigin.REMOTE_DISCOVERED_URL, "testnet-candidate")
+        decision = authorize_sink(
+            remote_endpoint, SinkClass.HTTP_READ_ONLY,
+            configured_urls=CONFIGURED_OFFICIAL_SOURCE_URLS)
+        if not decision.allowed:
+            return {"status": "UNVERIFIED_ENDPOINT", "risks": ["unknown_endpoint"],
+                    "connection_prohibited": True}
     return {"status": "READ_ONLY", "risks": [], "connection_prohibited": False}
 
 

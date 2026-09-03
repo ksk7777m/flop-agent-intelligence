@@ -2,6 +2,31 @@ const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintena
 const OBSERVATORY_DATA = ["status", "rooms", "engagement"];
 const KV_DATA = ["status", "namespaces", "changes", "presence"];
 const safeStatus = value => String(value || "UNKNOWN").toUpperCase();
+const REVIEWED_OFFICIAL_LINKS = new Set([
+  "https://flop.finance/",
+  "https://flop.finance/teaser/",
+  "https://github.com/flop-labs/technocore-chat/blob/main/src/patterns.md",
+  "https://github.com/ksk7777m/flop-agent-intelligence",
+  "https://technocore.chat/#r/lobby/929750",
+  "https://x.com/Giappone_Medici/status/2092613806434218126"
+]);
+const navigationState = (value, declaredState) => {
+  if (declaredState !== "REVIEWED_OFFICIAL" || !REVIEWED_OFFICIAL_LINKS.has(value)) return "INERT";
+  try {
+    const target = new URL(value);
+    return target.protocol === "https:" && !target.username && !target.password
+      ? "APPROVED_FOR_NAVIGATION" : "INERT";
+  } catch (_) { return "INERT"; }
+};
+const appendSafeNavigation = (parent, value, label, declaredState) => {
+  if (navigationState(value, declaredState) !== "APPROVED_FOR_NAVIGATION") {
+    parent.append(text("span", label));
+    return "INERT";
+  }
+  const link = text("a", label); link.href = value; link.rel = "noopener noreferrer";
+  parent.append(link);
+  return "APPROVED_FOR_NAVIGATION";
+};
 const statusClass = value => "status-" + safeStatus(value).toLowerCase().replaceAll(" ", "-").replaceAll("_", "-");
 const text = (tag, value, className) => {
   const node = document.createElement(tag);
@@ -332,9 +357,8 @@ function renderSignals(data) {
     const meta = text("div", "", "signal-meta");
     meta.append(text("div", item.timestamp), text("div", `TIER ${item.source_tier} · ${item.verification_status}`), text("div", item.source));
     const body = text("div");
-    const link = text("a", item.title);
-    link.href = item.url; link.rel = "noopener noreferrer";
-    const heading = text("h3"); heading.append(link);
+    const heading = text("h3");
+    appendSafeNavigation(heading, item.url, item.title, item.link_state);
     body.append(heading, text("p", item.summary));
     row.append(meta, body, text("span", item.classification, "classification"));
     root.append(row);
@@ -419,12 +443,16 @@ function renderEvidence(data) {
     x_explanation: "X explanation"
   };
   const root = document.querySelector("#evidence");
+  const reviewedLinks = {
+    repository: "REVIEWED_OFFICIAL", technocore_permalink: "REVIEWED_OFFICIAL",
+    x_explanation: "REVIEWED_OFFICIAL"
+  };
   for (const [key, label] of Object.entries(labels)) {
     const row = text("div");
     const dd = text("dd");
     const value = data[key];
     if (typeof value === "string" && value.startsWith("https://")) {
-      const a = text("a", value); a.href = value; a.rel = "noopener noreferrer"; dd.append(a);
+      appendSafeNavigation(dd, value, value, reviewedLinks[key] || "INERT");
     } else dd.textContent = value;
     row.append(text("dt", label), dd); root.append(row);
   }

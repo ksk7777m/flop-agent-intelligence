@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from enum import IntEnum
 from typing import Dict
 
+from .remote_content_policy import ContractProvenance, SourceTrustTier
+
 
 class SourceTier(IntEnum):
     AUTHORITATIVE = 1
@@ -35,16 +37,51 @@ TIER_1 = {
 }
 
 
+@dataclass(frozen=True)
+class SourceAssessmentV2:
+    source_id: str
+    source_trust_tier: SourceTrustTier
+    contract_provenance: ContractProvenance
+    reason: str
+
+    def as_dict(self) -> Dict[str, object]:
+        value = asdict(self)
+        value["source_trust_tier"] = self.source_trust_tier.value
+        value["contract_provenance"] = self.contract_provenance.value
+        return value
+
+
+def assess_source_v2(source_id: str, *, signed_community: bool = False,
+                     conflicting: bool = False) -> SourceAssessmentV2:
+    """Classify source identity without granting contract authority."""
+    if conflicting:
+        tier = SourceTrustTier.TIER_3_SUSPICIOUS_CONFLICTING
+        reason = "source evidence is suspicious or conflicting"
+    elif source_id in TIER_1:
+        tier = SourceTrustTier.TIER_0_OFFICIAL
+        reason = "explicitly configured first-party source"
+    elif signed_community:
+        tier = SourceTrustTier.TIER_1_SIGNED_COMMUNITY
+        reason = "DID signature authenticates a community signer, not official authority"
+    else:
+        tier = SourceTrustTier.TIER_2_UNSIGNED_COMMUNITY
+        reason = "unsigned or otherwise unverified community source"
+    return SourceAssessmentV2(
+        source_id, tier,
+        ContractProvenance.CONFLICTING if conflicting else ContractProvenance.UNVERIFIED,
+        reason,
+    )
+
+
 def assess_source(source_id: str, directly_linked_by_tier1: bool = False) -> SourceAssessment:
     if source_id in TIER_1:
         return SourceAssessment(source_id, 1, True, True, "configured first-party source")
     if directly_linked_by_tier1:
         return SourceAssessment(
-            source_id, 2, False, True,
-            "document directly linked by a configured first-party source; provenance must be retained",
+            source_id, 2, False, False,
+            "linked targets do not inherit first-party trust; exact provenance review is required",
         )
     return SourceAssessment(
         source_id, 3, False, False,
         "community, mirror, aggregator, or otherwise unverified source",
     )
-

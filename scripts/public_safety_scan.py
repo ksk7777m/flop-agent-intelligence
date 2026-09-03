@@ -15,7 +15,7 @@ PUBLIC_TOP = {
     "ai-onboarding.json", "llms.txt", "openapi.json", "index.html",
     "dashboard.js", "sitemap.xml",
 }
-PUBLIC_DIRS = ("docs", "schemas", "api", "examples", "prompts")
+PUBLIC_DIRS = ("docs", "schemas", "api", "data", "examples", "prompts")
 
 FORBIDDEN_PATTERNS = {
     "local filesystem path": re.compile(

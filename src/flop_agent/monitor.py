@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import urllib.request
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -14,6 +13,7 @@ from typing import Any, Callable, Dict, Iterable, List
 from .classifier import classify
 from .receipt import read_receipt, verify_receipt
 from .readiness import OFFICIAL_SPECS
+from .remote_content_policy import RemoteOrigin, discovered_remote_value, read_configured_endpoint
 
 
 VERSION = "flop-readiness-health-monitor-v1"
@@ -201,11 +201,7 @@ def classify_source_failure(consecutive_failures: int) -> Dict[str, Any]:
 
 
 def fetch_bytes(url: str) -> bytes:
-    if url not in ALLOWED_URLS:
-        raise ValueError("URL is not in the monitor allowlist")
-    request = urllib.request.Request(url, headers={"User-Agent": "flop-readiness-monitor/1"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read()
+    return read_configured_endpoint(url, "flop-readiness-monitor", ALLOWED_URLS)
 
 
 def _result(status: str, detail: str, **extra: Any) -> Dict[str, Any]:
@@ -213,13 +209,17 @@ def _result(status: str, detail: str, **extra: Any) -> Dict[str, Any]:
 
 
 def evaluate_did_note(body: bytes) -> Dict[str, Any]:
-    text = body.decode("utf-8", errors="replace")
+    remote = discovered_remote_value(
+        body.decode("utf-8", errors="replace"), RemoteOrigin.TECHNOCORE_DID_NOTE,
+        "configured-did-note")
+    text = remote.value_for_classification_only
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     value = next((line for line in reversed(lines) if line.startswith("did:key:")), "")
     digest = hashlib.sha256(value.encode()).hexdigest()
     expected_parts = (DID, "repo:https://github.com/ksk7777m/flop-agent-intelligence", f"x25519:{X25519_PUBLIC}")
     if digest != DID_NOTE_HASH or value != DID_NOTE_VALUE or "mailbox:" in value or not all(part in value for part in expected_parts):
-        return _result("REVIEW_REQUIRED", "DID Note missing or changed", sha256=digest)
+        return _result("REVIEW_REQUIRED", "DID Note missing or changed", sha256=digest,
+                       source_content_sha256=remote.content_sha256)
     return _result("READY", "Expected DID, repository and X25519 key match; mailbox omitted", sha256=digest)
 
 
@@ -236,7 +236,9 @@ def evaluate_mailbox(body: bytes) -> Dict[str, Any]:
     unsafe = []
     for message in newer:
         # Message bodies remain inert data. Classification performs no fetch or execution.
-        outcome = classify(str(message.get("text", "")), official=False)
+        remote = discovered_remote_value(
+            message.get("text", ""), RemoteOrigin.TECHNOCORE_MAILBOX, "technocore-mailbox")
+        outcome = classify(remote.value_for_classification_only, official=False)
         if outcome.security_review_required:
             unsafe.append(message.get("seq"))
     if newer:

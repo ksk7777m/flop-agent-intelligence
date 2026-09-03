@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict
 from urllib.parse import urlparse
+
+from .remote_content_policy import read_configured_endpoint
 
 
 OFFICIAL_SPECS = {
@@ -34,15 +35,13 @@ SCHEMAS = {
     "capacity_evidence.json": "technocore-capacity-evidence-v1",
     "teaser.json": "flop-teaser-monitor-v1",
     "testnet_adapter.json": "flop-testnet-adapter-status-v0",
+    "technocore_compatibility.json": "technocore-compatibility-manifest-v1",
 }
 
 
 def fetch_bytes(url: str) -> bytes:
-    if url not in set(OFFICIAL_SPECS.values()) | set(READINESS_ENDPOINTS.values()):
-        raise ValueError("URL is not in the readiness checker allowlist")
-    request = urllib.request.Request(url, headers={"User-Agent": "flop-agent-readiness/1"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read()
+    allowed = set(OFFICIAL_SPECS.values()) | set(READINESS_ENDPOINTS.values())
+    return read_configured_endpoint(url, "flop-readiness-checker", allowed)
 
 
 def validate_dashboard_data(data_dir: Path) -> None:

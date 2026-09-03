@@ -113,6 +113,24 @@ class TestnetAdapterTests(unittest.TestCase):
         self.assertEqual(result["reason"], "UNVERIFIED_CONTRACT")
         self.assertEqual(result["activation"], "DO_NOT_ACTIVATE")
 
+    def test_valid_address_from_official_source_still_needs_contract_provenance(self):
+        config = empty_config()
+        config.update({
+            "network_name": "UNVERIFIED_TESTNET",
+            "token_contract": "0x1111111111111111111111111111111111111111",
+            "source_url": "https://flop.finance/teaser/",
+            "source_tier": "TIER_1_OFFICIAL",
+            "verified_at": "2026-09-03T00:00:00Z",
+        })
+        result = validate_config(config)
+        self.assertEqual(result["reason"], "CONTRACT_PROVENANCE_REQUIRED")
+        self.assertEqual(result["activation"], "DO_NOT_ACTIVATE")
+
+    def test_official_looking_discovered_endpoint_remains_inert(self):
+        result = classify_instruction("candidate", "https://flop.finance/")
+        self.assertEqual(result["status"], "UNVERIFIED_ENDPOINT")
+        self.assertTrue(result["connection_prohibited"])
+
     def test_unknown_network_is_not_activated(self):
         result = validate_config(fixture("unknown_network.json"))
         self.assertEqual(result["reason"], "UNVERIFIED_CONFIGURATION_SOURCE")

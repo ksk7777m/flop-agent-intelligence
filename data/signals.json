@@ -9,6 +9,7 @@
       "title": "Provisional FLOP testnet and tokenomics teaser",
       "summary": "The official draft plans testnet for Q4 2026 and mainnet for Q1 2027, and describes test-token faucet and inference participation without publishing operational endpoints.",
       "url": "https://flop.finance/teaser/",
+      "link_state": "REVIEWED_OFFICIAL",
       "verification_status": "OFFICIAL_DRAFT"
     },
     {
@@ -19,6 +20,7 @@
       "title": "Official FLOP launch posture and application routes",
       "summary": "The official site states no pre-sale, no VCs, a fair launch, and links official miner, validator, and KOL/creator application routes.",
       "url": "https://flop.finance/",
+      "link_state": "REVIEWED_OFFICIAL",
       "verification_status": "CONFIRMED"
     },
     {
@@ -29,6 +31,7 @@
       "title": "Technocore signed identity and mailbox conventions",
       "summary": "Official patterns document sharded DID notes, signed mb- mailboxes, mb-p- unlisted mailboxes, and local X25519/HKDF/AES-GCM choreography.",
       "url": "https://github.com/flop-labs/technocore-chat/blob/main/src/patterns.md",
+      "link_state": "REVIEWED_OFFICIAL",
       "verification_status": "CONFIRMED"
     }
   ],

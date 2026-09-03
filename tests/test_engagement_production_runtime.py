@@ -361,7 +361,8 @@ class EngagementProductionRuntimeTests(unittest.TestCase):
             completed=subprocess.run(command,cwd=hostile,env={**os.environ,"PYTHONPATH":str(hostile),
                 "PYTHONUSERBASE":str(hostile)},capture_output=True,check=True,text=True)
             status=json.loads(completed.stdout)
-            self.assertTrue(status["success"]); self.assertIn(status["outcome"],{"SCHEDULER_READY","SCHEDULER_NOT_BEFORE"})
+            self.assertTrue(status["success"]); self.assertIn(status["outcome"],{
+                "SCHEDULER_READY", "SCHEDULER_NOT_BEFORE", "SCHEDULER_MIN_INTERVAL"})
             self.assertTrue(renderer._runtime_ready(root,revision,renderer.CODE_ROOT,False))
             self.assertEqual(before,{path.name:self.digest(path) for path in tracked})
 

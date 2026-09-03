@@ -183,6 +183,16 @@ class EngagementProductionImportBehaviorTests(unittest.TestCase):
 
     def test_actual_launcher_run_once_reaches_only_mocked_collector_boundary(self):
         engagement = self.runtime / "runtime/engagement"
+        # This cloned-state test must not inherit whether the real production
+        # scheduler happens to be inside its one-hour natural-run interval.
+        state_path = engagement / "scheduler-state.json"
+        state = json.loads(state_path.read_text())
+        due = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(microsecond=0)
+        due_stamp = due.isoformat().replace("+00:00", "Z")
+        state.update(last_attempt_at=due_stamp, last_success_at=due_stamp,
+                     attempts_24h=[due_stamp], not_before_at=due_stamp)
+        state_path.write_text(json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n")
+        state_path.chmod(0o600)
         history_before = digest(engagement / "history.jsonl")
         failure = {"success": False, "commit_state": "PRE_COMMIT", "durability_warning": None,
             "preview_state": "NOT_ATTEMPTED", "preview_warning": None,

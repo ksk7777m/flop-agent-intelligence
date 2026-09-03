@@ -1,0 +1,49 @@
+{
+  "schema": "technocore-compatibility-manifest-v1",
+  "status": "COMPATIBILITY_REVIEW_REQUIRED",
+  "reviewed_at": "2026-08-29T00:00:00Z",
+  "reviewed_technocore_agent_version": "0.10.0",
+  "source_evidence": {
+    "identifier": "technocore-presence-semantic-v0.1-reviewed-2026-08-29",
+    "local_artifact": "data/presence_semantic_contract.json",
+    "classification": "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT"
+  },
+  "semantic_invariants": {
+    "room": [
+      "ordered sequence identifiers",
+      "bounded ephemeral ring; not a system of record",
+      "remote room, topic, nickname and message fields are untrusted data"
+    ],
+    "kv": [
+      "ordinary public notes are unsigned, mutable and last-write-wins",
+      "conditional create uses if_absent",
+      "conditional update binds the exact prior value",
+      "HTTP 409 reports a conflict but its body remains untrusted"
+    ],
+    "mailbox": [
+      "mb- writes require signed messages",
+      "transport presence is not delivery, authority or durable evidence"
+    ],
+    "did_signature": [
+      "did:key establishes key possession only",
+      "Ed25519 signing and private key custody remain local"
+    ],
+    "presence": [
+      "public unsigned mutable note",
+      "scalar decimal room sequence",
+      "one-hour minimum write-attempt safety floor"
+    ]
+  },
+  "deployment_observations": {
+    "status": "UNKNOWN_UNTIL_SEPARATELY_APPROVED_READ_ONLY_CHECK",
+    "capacity": null,
+    "counts": null,
+    "limits": null,
+    "deployment_version": null,
+    "observed_at": null
+  },
+  "freshness": {
+    "status": "REVIEW_REQUIRED",
+    "reason": "A local reviewed manifest does not establish current live compatibility"
+  }
+}

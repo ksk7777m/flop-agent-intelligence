@@ -18,6 +18,8 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .remote_content_policy import DEFAULT_RESPONSE_LIMIT, RemoteOrigin, discovered_remote_value
+
 OBSERVER_VERSION = "kv-observatory-v0"
 SCHEMA_VERSION = 1
 OFFICIAL_ORIGIN = "https://technocore.chat"
@@ -110,6 +112,8 @@ def parse_key_list(body: str, namespace: str) -> list[str]:
         raise ApiContractError("listing contained malformed or private key")
     if len(keys) != len(set(keys)):
         raise ApiContractError("listing contained duplicate keys")
+    for key in keys:
+        discovered_remote_value(key, RemoteOrigin.TECHNOCORE_KV_KEY, f"kv:{namespace}")
     return sorted(keys)
 
 
@@ -313,7 +317,12 @@ def official_get(url: str) -> tuple[int, str, Mapping[str, str]]:
     request = Request(url, method="GET", headers={"Accept": "application/json", "User-Agent": OBSERVER_VERSION})
     try:
         with build_opener(_NoRedirect()).open(request, timeout=20) as response:  # nosec: exact origin; redirects disabled
-            return response.status, response.read().decode("utf-8"), dict(response.headers)
+            if response.geturl() != url:
+                raise ApiContractError("official KV final origin changed")
+            body = response.read(DEFAULT_RESPONSE_LIMIT + 1)
+            if len(body) > DEFAULT_RESPONSE_LIMIT:
+                raise ApiContractError("official KV response exceeded the resource bound")
+            return response.status, body.decode("utf-8"), dict(response.headers)
     except HTTPError as exc:
         return exc.code, "", dict(exc.headers)
 
@@ -374,7 +383,9 @@ class Observer:
                     if code != 200:
                         raise ApiContractError(f"key listed but read returned HTTP {code}")
                     raw = note_value(value_body)
-                    hashes[key] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+                    remote = discovered_remote_value(
+                        raw, RemoteOrigin.TECHNOCORE_KV_VALUE, f"kv:{config.name}/{key}")
+                    hashes[key] = remote.content_sha256
                     del raw
                 self.store.observe(config, hashes, observed_at, cycle_id)
                 result["successful"] += 1

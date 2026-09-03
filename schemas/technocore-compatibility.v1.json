@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/technocore-compatibility.v1.json",
+  "title": "Technocore Compatibility Manifest V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "status", "reviewed_at", "reviewed_technocore_agent_version",
+    "source_evidence", "semantic_invariants", "deployment_observations", "freshness"
+  ],
+  "properties": {
+    "schema": {"const": "technocore-compatibility-manifest-v1"},
+    "status": {"const": "COMPATIBILITY_REVIEW_REQUIRED"},
+    "reviewed_at": {"type": "string", "format": "date-time"},
+    "reviewed_technocore_agent_version": {"type": "string", "minLength": 1},
+    "source_evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["identifier", "local_artifact", "classification"],
+      "properties": {
+        "identifier": {"type": "string", "minLength": 1},
+        "local_artifact": {"const": "data/presence_semantic_contract.json"},
+        "classification": {"const": "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT"}
+      }
+    },
+    "semantic_invariants": {
+      "type": "object", "additionalProperties": false,
+      "required": ["room", "kv", "mailbox", "did_signature", "presence"],
+      "properties": {
+        "room": {"$ref": "#/$defs/nonEmptyStrings"},
+        "kv": {"$ref": "#/$defs/nonEmptyStrings"},
+        "mailbox": {"$ref": "#/$defs/nonEmptyStrings"},
+        "did_signature": {"$ref": "#/$defs/nonEmptyStrings"},
+        "presence": {"$ref": "#/$defs/nonEmptyStrings"}
+      }
+    },
+    "deployment_observations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "capacity", "counts", "limits", "deployment_version", "observed_at"],
+      "properties": {
+        "status": {"const": "UNKNOWN_UNTIL_SEPARATELY_APPROVED_READ_ONLY_CHECK"},
+        "capacity": {"type": ["integer", "null"]},
+        "counts": {"type": ["object", "null"]},
+        "limits": {"type": ["object", "null"]},
+        "deployment_version": {"type": ["string", "null"]},
+        "observed_at": {"type": ["string", "null"], "format": "date-time"}
+      }
+    },
+    "freshness": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {"const": "REVIEW_REQUIRED"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyStrings": {
+      "type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

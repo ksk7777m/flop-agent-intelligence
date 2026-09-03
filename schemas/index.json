@@ -36,6 +36,13 @@
       ]
     },
     {
+      "name": "Technocore Compatibility Manifest V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/technocore-compatibility.v1.json",
+      "path": "schemas/technocore-compatibility.v1.json",
+      "purpose": "Separates locally reviewed protocol invariants from unknown mutable deployment observations.",
+      "related_endpoint": null
+    },
+    {
       "name": "Capabilities V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/capabilities.v1.json",
       "path": "schemas/capabilities.v1.json",
