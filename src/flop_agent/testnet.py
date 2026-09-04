@@ -14,15 +14,17 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Dict, Mapping
-from urllib.parse import urlparse
 
 from .remote_content_policy import (
     ContractProvenance,
     RemoteOrigin,
+    ReviewedSourceId,
     SinkClass,
     authorize_sink,
     discovered_remote_value,
+    evaluate_contract_provenance,
 )
 
 
@@ -30,14 +32,8 @@ SCHEMA = "flop-testnet-config-v0"
 RECEIPT_SCHEMA = "flop-testnet-activity-receipt-v0"
 TOKEN = "FLOP"
 PLACEHOLDER_WALLET = "0xTEST_WALLET_PLACEHOLDER"
-CONFIGURED_OFFICIAL_SOURCE_URLS = frozenset({
-    "https://flop.finance/",
-    "https://flop.finance/teaser/",
-    "https://github.com/flop-labs/technocore-chat",
-    "https://x.com/flop_labs",
-    "https://technocore.chat/llms.txt",
-    "https://technocore.chat/skill.md",
-})
+COMPATIBILITY_MANIFEST = Path(__file__).resolve().parents[2] / "data" / "technocore_compatibility.json"
+_CONFIG_SOURCE_EVIDENCE_BUNDLES: Mapping[str, ReviewedSourceId] = MappingProxyType({})
 
 
 class LiveActionDisabled(PermissionError):
@@ -94,7 +90,9 @@ def empty_config() -> Dict[str, Any]:
         "token_symbol": TOKEN,
         "token_contract": None,
         "contract_provenance": ContractProvenance.UNVERIFIED.value,
+        "contract_evidence_bundle_id": None,
         "source_url": None,
+        "source_evidence_bundle_id": None,
         "source_tier": None,
         "spec_status": None,
         "verified_at": None,
@@ -102,38 +100,55 @@ def empty_config() -> Dict[str, Any]:
     }
 
 
-def classify_source(url: str | None) -> str:
-    if not url:
-        return "UNVERIFIED"
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.username or parsed.password:
-        return "UNVERIFIED"
-    normalized = parsed.geturl()
-    if normalized in CONFIGURED_OFFICIAL_SOURCE_URLS:
+def classify_source(source_id: ReviewedSourceId | None) -> str:
+    if isinstance(source_id, ReviewedSourceId):
         return "TIER_1_OFFICIAL"
-    host, path = (parsed.hostname or "").lower(), parsed.path.lower()
-    if host in {"x.com", "twitter.com"} and path.startswith("/cryptohayes"):
-        return "REVIEW_REQUIRED"
     return "UNVERIFIED"
 
 
 def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
-    source_class = classify_source(config.get("source_url"))
+    source_class = classify_source(_CONFIG_SOURCE_EVIDENCE_BUNDLES.get(
+        str(config.get("source_evidence_bundle_id") or "")))
     required_provenance = all(config.get(key) for key in ("source_url", "source_tier", "verified_at"))
     populated = any(config.get(key) is not None for key in ("network_name", "chain_id", "rpc_url", "faucet_url", "inference_api_url", "token_contract"))
-    if populated and (source_class != "TIER_1_OFFICIAL" or not required_provenance):
-        return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONFIGURATION_SOURCE", "activation": "DO_NOT_ACTIVATE"}
     if config.get("token_contract") and not re.fullmatch(r"0x[a-fA-F0-9]{40}", str(config["token_contract"])):
         return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONTRACT", "activation": "DO_NOT_ACTIVATE"}
-    if (config.get("token_contract")
-            and config.get("contract_provenance") != ContractProvenance.VERIFIED_FOR_TESTNET_USE.value):
+    derived_provenance = evaluate_contract_provenance(
+        config.get("contract_evidence_bundle_id"), str(config.get("token_contract") or ""))
+    if config.get("token_contract") and derived_provenance is not ContractProvenance.VERIFIED_FOR_TESTNET_USE:
         return {"status": "REVIEW_REQUIRED", "reason": "CONTRACT_PROVENANCE_REQUIRED",
+                "contract_provenance": derived_provenance.value, "activation": "DO_NOT_ACTIVATE"}
+    if populated and (source_class != "TIER_1_OFFICIAL" or not required_provenance):
+        return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONFIGURATION_SOURCE", "activation": "DO_NOT_ACTIVATE"}
+    if populated and compatibility_status() != "COMPATIBILITY_CURRENT":
+        return {"status": "REVIEW_REQUIRED", "reason": "COMPATIBILITY_REVIEW_REQUIRED",
                 "activation": "DO_NOT_ACTIVATE"}
     return {
         "status": "READY" if populated else "OFFICIAL_DRAFT",
         "reason": "CONFIG_CANDIDATE_REQUIRES_HUMAN_REVIEW" if populated else "NO_OPERATIONAL_ENDPOINTS",
         "activation": "DO_NOT_ACTIVATE",
     }
+
+
+def compatibility_status() -> str:
+    """Resolve compatibility only from the repository-controlled manifest."""
+    try:
+        manifest = json.loads(COMPATIBILITY_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "COMPATIBILITY_REVIEW_REQUIRED"
+    return "COMPATIBILITY_CURRENT" if (
+        manifest.get("status") == "COMPATIBILITY_CURRENT"
+        and manifest.get("freshness", {}).get("status") == "CURRENT"
+    ) else "COMPATIBILITY_REVIEW_REQUIRED"
+
+
+def sensitive_readiness(action: str) -> Dict[str, Any]:
+    reviewed_actions = {"faucet_claim", "inference", "contract", "wallet", "signing"}
+    if action not in reviewed_actions:
+        return {"action": action, "allowed": False, "status": "UNREVIEWED_SENSITIVE_ACTION"}
+    allowed = compatibility_status() == "COMPATIBILITY_CURRENT"
+    return {"action": action, "allowed": allowed,
+            "status": "READY" if allowed else "COMPATIBILITY_REVIEW_REQUIRED"}
 
 
 def configuration_candidate(signal: Mapping[str, Any]) -> Dict[str, Any]:
@@ -161,8 +176,7 @@ def classify_instruction(text: str, endpoint: str | None = None) -> Dict[str, An
         remote_endpoint = discovered_remote_value(
             endpoint, RemoteOrigin.REMOTE_DISCOVERED_URL, "testnet-candidate")
         decision = authorize_sink(
-            remote_endpoint, SinkClass.HTTP_READ_ONLY,
-            configured_urls=CONFIGURED_OFFICIAL_SOURCE_URLS)
+            remote_endpoint, SinkClass.HTTP_READ_ONLY)
         if not decision.allowed:
             return {"status": "UNVERIFIED_ENDPOINT", "risks": ["unknown_endpoint"],
                     "connection_prohibited": True}
@@ -186,14 +200,16 @@ class FaucetAdapter:
         return {"status": "FAUCET_DETECTED" if endpoint else "NOT_AVAILABLE", "endpoint": endpoint}
 
     def validate_source(self) -> str:
-        return classify_source(self.config.get("source_url"))
+        return classify_source(_CONFIG_SOURCE_EVIDENCE_BUNDLES.get(
+            str(self.config.get("source_evidence_bundle_id") or "")))
 
     def preview_claim(self) -> Dict[str, Any]:
         endpoint = self.config.get("faucet_url")
         safety = classify_instruction("faucet claim preview", endpoint)
         return {
             "mode": "DRY_RUN",
-            "state": "CLAIM_REQUIRES_APPROVAL" if endpoint and safety["status"] == "READ_ONLY" else "REVIEW_REQUIRED",
+            "state": ("CLAIM_REQUIRES_APPROVAL" if endpoint and safety["status"] == "READ_ONLY"
+                      and sensitive_readiness("faucet_claim")["allowed"] else "REVIEW_REQUIRED"),
             "endpoint": endpoint,
             "network": self.config.get("network_name"),
             "wallet": PLACEHOLDER_WALLET,
@@ -253,7 +269,8 @@ class InferenceAdapter:
     def preview(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         return {
             "mode": "DRY_RUN",
-            "state": "INFERENCE_REQUIRES_APPROVAL",
+            "state": ("INFERENCE_REQUIRES_APPROVAL" if sensitive_readiness("inference")["allowed"]
+                      else "REVIEW_REQUIRED"),
             "request_id": request.get("request_id"),
             "model": request.get("model"),
             "provider": request.get("provider"),

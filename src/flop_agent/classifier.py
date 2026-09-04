@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List
 from .remote_content_policy import (
     RemoteContentClass,
     RemoteOrigin,
+    ReviewedSourceId,
     SourceTrustTier,
     discovered_remote_value,
 )
@@ -36,11 +37,12 @@ def _hits(text: str, phrases: Iterable[str]) -> List[str]:
     return [phrase for phrase in phrases if phrase in lowered]
 
 
-def classify(text: str, official: bool) -> Classification:
+def classify(text: str, source_id: ReviewedSourceId | None = None) -> Classification:
+    official = isinstance(source_id, ReviewedSourceId)
     remote = discovered_remote_value(
         text,
         RemoteOrigin.FETCHED_CONTENT if official else RemoteOrigin.TECHNOCORE_MESSAGE,
-        "configured-official-content" if official else "untrusted-content",
+        source_id.value if official else "untrusted-content",
         trust_tier=(SourceTrustTier.TIER_0_OFFICIAL if official
                     else SourceTrustTier.TIER_2_UNSIGNED_COMMUNITY),
     )

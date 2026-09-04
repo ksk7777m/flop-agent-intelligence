@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -152,6 +153,7 @@ def main() -> None:
             print(json.dumps(verify_testnet_receipt(load_fixture(Path(args.file))), indent=2))
     elif args.command == "presence":
         from .presence import load_config, observe, preview_first_write
+        from .remote_content_policy import LocalActionClass, ReviewedSourceId, reviewed_local_intent
         from .technocore import read_official, read_presence_note
 
         config = load_config(Path(args.config))
@@ -159,7 +161,18 @@ def main() -> None:
             result = observe(config, Path(args.state))
         else:
             def presence_reader(path: str):
-                return read_presence_note(path) if path == config.note_path else read_official(path)
+                if path == config.note_path:
+                    intent = reviewed_local_intent(
+                        LocalActionClass.PRESENCE_NOTE_READ, path, "local Presence configuration")
+                    return read_presence_note(path, intent=intent)
+                sources = {
+                    "/.well-known/agent.json": ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST,
+                    "/config": ReviewedSourceId.TECHNOCORE_CONFIG,
+                    "/rooms?format=json": ReviewedSourceId.TECHNOCORE_ROOMS_JSON,
+                }
+                if path not in sources:
+                    raise PermissionError("Presence requested an unregistered read path")
+                return read_official(sources[path])
 
             result = preview_first_write(
                 config, Path(args.state), reader=presence_reader,
@@ -206,7 +219,24 @@ def main() -> None:
 
         approved = signal_from_dict(json.loads(Path(args.approved_signal).read_text(encoding="utf-8")))
         validate_publish_approval(approved, args.text)
-        message = post_signed(IDENTITY, args.room, args.text)
+        from .remote_content_policy import HumanApprovalEvidence, LocalActionClass, reviewed_local_intent
+        subject = args.room + "\0" + args.text
+        approval_evidence = HumanApprovalEvidence(
+            approved.approved_by or "", approved.approved_at or "",
+            "human-approved CLI publication",
+            hashlib.sha256(subject.encode()).hexdigest())
+        intent = reviewed_local_intent(
+            LocalActionClass.SIGNED_ROOM_POST, subject,
+            "human-approved CLI publication", approval=approval_evidence)
+        message = post_signed(IDENTITY, args.room, args.text, intent=intent)
+        activity_text = str(message.get("swept_text", message["text"]))
+        activity_approval = HumanApprovalEvidence(
+            approved.approved_by or "", approved.approved_at or "",
+            "public hash-only activity evidence",
+            hashlib.sha256(activity_text.encode()).hexdigest())
+        activity_intent = reviewed_local_intent(
+            LocalActionClass.LOCAL_ACTIVITY_RAW, activity_text,
+            "public hash-only activity evidence", approval=activity_approval)
         append_activity(
             ROOT / "data/activity.jsonl", ROOT / "docs/ACTIVITY_LOG.md", args.room, message,
             evidence={
@@ -222,6 +252,7 @@ def main() -> None:
                 "note_hash": args.note_hash,
                 "x25519_public_key": args.x25519_public_key,
             },
+            local_provenance=activity_intent,
         )
         print(json.dumps(message, indent=2))
 

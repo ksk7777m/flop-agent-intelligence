@@ -9,6 +9,7 @@ from typing import Dict, Optional
 
 from .classifier import classify
 from .source_policy import assess_source
+from .remote_content_policy import ReviewedSourceId
 
 
 class WorkflowState(str, Enum):
@@ -41,16 +42,16 @@ class SignalEnvelope:
 
 
 def prepare_signal(
-    *, source_id: str, source_evidence: str, text: str, summary: str,
+    *, source_id: ReviewedSourceId | str, source_evidence: str, text: str, summary: str,
     recommended_text: str, directly_linked_by_tier1: bool = False,
     detected_at: Optional[str] = None,
 ) -> SignalEnvelope:
     source = assess_source(source_id, directly_linked_by_tier1)
-    result = classify(text, official=source.can_confirm_sensitive_claims)
+    result = classify(text, source_id=source_id if isinstance(source_id, ReviewedSourceId) else None)
     safety = "QUARANTINED" if result.security_review_required or result.category == "IGNORE" else "PASS"
     return SignalEnvelope(
         version="1", state=WorkflowState.REVIEW_REQUIRED.value,
-        classification=result.category, source_id=source_id, source_tier=source.tier,
+        classification=result.category, source_id=source.source_id, source_tier=source.tier,
         source_evidence=source_evidence, summary=summary, safety_result=safety,
         recommended_text=recommended_text,
         detected_at=detected_at or datetime.now(timezone.utc).isoformat(),

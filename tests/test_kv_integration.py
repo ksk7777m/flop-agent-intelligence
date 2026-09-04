@@ -109,6 +109,13 @@ class KVIntegrationTests(unittest.TestCase):
         for harmless in ("keep-private-key material out", "step-by-step", "~/Library/<placeholder>",
                          "https://technocore.chat/openapi.json", "value_sha256"):
             self.assertFalse(scanner.scan_text(harmless), harmless)
+        self.assertEqual(
+            scanner.remote_evidence_raw_fields({
+                "content_origin": "REMOTE_OR_UNKNOWN", "message_body": "remote raw"
+            }), ["message_body"])
+        self.assertEqual(scanner.remote_evidence_raw_fields({
+            "content_origin": "TYPED_LOCAL", "text_after_sweep": "local"
+        }), [])
         for name in ("state.sqlite", "state.sqlite3", "state.db", "state.db-wal", "state.sqlite-shm"):
             self.assertTrue(scanner.is_database_artifact(name))
         for name in ("deps/pkg.whl","runtime/python-wheelhouse/x","runtime/wheelhouse/x",

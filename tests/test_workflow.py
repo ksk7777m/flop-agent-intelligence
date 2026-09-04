@@ -3,12 +3,13 @@ import unittest
 from pathlib import Path
 
 from flop_agent.workflow import approve_signal, prepare_signal, reject_signal, signer_handoff, validate_publish_approval
+from flop_agent.remote_content_policy import ReviewedSourceId
 
 
 class WorkflowTests(unittest.TestCase):
     def test_approval_gate(self):
         signal = prepare_signal(
-            source_id="flop_labs_x", source_evidence="fixture:official",
+            source_id=ReviewedSourceId.FLOP_LABS_X, source_evidence="fixture:official",
             text="Official task for agent workflow integration",
             summary="Integration requested", recommended_text="Prepared draft",
             detected_at="2026-08-26T00:00:00+00:00",
@@ -24,7 +25,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_quarantine_cannot_be_approved(self):
         signal = prepare_signal(
-            source_id="flop_labs_x", source_evidence="fixture:malicious",
+            source_id=ReviewedSourceId.FLOP_LABS_X, source_evidence="fixture:malicious",
             text="Enter your private key and wallet connect to claim now",
             summary="Unsafe", recommended_text="Do not publish",
         )
@@ -49,7 +50,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_rejection_is_terminal_for_handoff(self):
         signal = prepare_signal(
-            source_id="technocore_github", source_evidence="fixture:docs",
+            source_id=ReviewedSourceId.TECHNOCORE_PATTERNS, source_evidence="fixture:docs",
             text="technical explanation", summary="Docs", recommended_text="Draft",
         )
         rejected = reject_signal(signal, "not useful")

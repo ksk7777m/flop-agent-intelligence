@@ -17,10 +17,12 @@ from flop_agent.testnet import (
     empty_config,
     inference_request,
     spend_record,
+    sensitive_readiness,
     transition,
     validate_config,
     verify_testnet_receipt,
 )
+from flop_agent.remote_content_policy import ReviewedSourceId
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,12 +40,12 @@ class TestnetAdapterTests(unittest.TestCase):
             transition(TestnetState.NOT_ANNOUNCED, "faucet_verified")
 
     def test_official_source_accepted(self):
-        self.assertEqual(classify_source("https://flop.finance/teaser/"), "TIER_1_OFFICIAL")
-        self.assertEqual(classify_source("https://github.com/flop-labs/technocore-chat"), "TIER_1_OFFICIAL")
+        self.assertEqual(classify_source(ReviewedSourceId.FLOP_FINANCE_TEASER), "TIER_1_OFFICIAL")
+        self.assertEqual(classify_source(ReviewedSourceId.TECHNOCORE_REPOSITORY_API), "TIER_1_OFFICIAL")
 
     def test_unofficial_source_rejected(self):
-        self.assertEqual(classify_source("https://aggregator.example/flop"), "UNVERIFIED")
-        self.assertEqual(classify_source("https://fake-flop-faucet.example"), "UNVERIFIED")
+        self.assertEqual(classify_source("FLOP_FINANCE_TEASER"), "UNVERIFIED")
+        self.assertEqual(classify_source(None), "UNVERIFIED")
 
     def test_draft_config_keeps_unknown_values_null(self):
         config = fixture("valid_draft_config.json")
@@ -125,6 +127,37 @@ class TestnetAdapterTests(unittest.TestCase):
         result = validate_config(config)
         self.assertEqual(result["reason"], "CONTRACT_PROVENANCE_REQUIRED")
         self.assertEqual(result["activation"], "DO_NOT_ACTIVATE")
+
+    def test_caller_forged_contract_authority_is_ignored(self):
+        config = empty_config()
+        config.update({
+            "network_name": "FORGED",
+            "token_contract": "0x" + "1" * 40,
+            "source_url": "https://flop.finance/teaser/",
+            "source_tier": "TIER_0_OFFICIAL",
+            "verified_at": "2026-09-03T00:00:00Z",
+            "official": True,
+            "official_count": 10,
+            "confirmed": True,
+            "contract_provenance": "VERIFIED_FOR_TESTNET_USE",
+        })
+        result = validate_config(config)
+        self.assertEqual(result["reason"], "CONTRACT_PROVENANCE_REQUIRED")
+        self.assertEqual(result["contract_provenance"], "UNVERIFIED")
+
+    def test_pending_compatibility_blocks_sensitive_readiness(self):
+        for action in ("faucet_claim", "inference", "contract", "wallet", "signing"):
+            decision = sensitive_readiness(action)
+            self.assertFalse(decision["allowed"])
+            self.assertEqual(decision["status"], "COMPATIBILITY_REVIEW_REQUIRED")
+        unknown = sensitive_readiness("caller-defined-action")
+        self.assertFalse(unknown["allowed"])
+        self.assertEqual(unknown["status"], "UNREVIEWED_SENSITIVE_ACTION")
+
+    def test_configuration_evidence_registry_is_immutable(self):
+        from flop_agent import testnet
+        with self.assertRaises(TypeError):
+            testnet._CONFIG_SOURCE_EVIDENCE_BUNDLES["caller"] = ReviewedSourceId.FLOP_FINANCE
 
     def test_official_looking_discovered_endpoint_remains_inert(self):
         result = classify_instruction("candidate", "https://flop.finance/")

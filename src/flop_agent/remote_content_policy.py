@@ -15,7 +15,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Iterable, Mapping
+from types import MappingProxyType
+from typing import Any, Callable, Mapping, TypeVar
 from urllib.parse import urlparse
 
 
@@ -93,6 +94,7 @@ class SinkClass(str, Enum):
     WALLET = "WALLET"
     CLAIM = "CLAIM"
     PAYMENT = "PAYMENT"
+    SECRET_ACCESS = "SECRET_ACCESS"
 
 
 class DecisionCode(str, Enum):
@@ -139,6 +141,7 @@ class UntrustedRemoteValue:
     content_sha256: str
     findings: tuple[SafetyFinding, ...]
     _value: str = field(repr=False, compare=False)
+    _authority: object | None = field(default=None, repr=False, compare=False)
     policy_version: str = POLICY_VERSION
 
     @property
@@ -167,6 +170,135 @@ class HumanApprovalEvidence:
     approved_at: str
     purpose: str
     subject_sha256: str
+
+
+class ReviewedSourceId(str, Enum):
+    TECHNOCORE_README = "TECHNOCORE_README"
+    TECHNOCORE_SECURITY = "TECHNOCORE_SECURITY"
+    TECHNOCORE_PATTERNS = "TECHNOCORE_PATTERNS"
+    TECHNOCORE_LLMS = "TECHNOCORE_LLMS"
+    TECHNOCORE_SKILL = "TECHNOCORE_SKILL"
+    TECHNOCORE_HEALTH = "TECHNOCORE_HEALTH"
+    TECHNOCORE_DID_NOTE = "TECHNOCORE_DID_NOTE"
+    TECHNOCORE_CONTRIBUTION = "TECHNOCORE_CONTRIBUTION"
+    TECHNOCORE_AGENT_MANIFEST = "TECHNOCORE_AGENT_MANIFEST"
+    TECHNOCORE_ROOMS_SUMMARY = "TECHNOCORE_ROOMS_SUMMARY"
+    TECHNOCORE_ROOMS = "TECHNOCORE_ROOMS"
+    TECHNOCORE_ROOMS_JSON = "TECHNOCORE_ROOMS_JSON"
+    TECHNOCORE_LOBBY_JSON = "TECHNOCORE_LOBBY_JSON"
+    TECHNOCORE_PATTERNS_HOSTED = "TECHNOCORE_PATTERNS_HOSTED"
+    TECHNOCORE_CONFIG = "TECHNOCORE_CONFIG"
+    PUBLIC_REPOSITORY_API = "PUBLIC_REPOSITORY_API"
+    TECHNOCORE_REPOSITORY_API = "TECHNOCORE_REPOSITORY_API"
+    ORIGINAL_COMMIT_API = "ORIGINAL_COMMIT_API"
+    DASHBOARD_COMMIT_API = "DASHBOARD_COMMIT_API"
+    PUBLIC_DASHBOARD = "PUBLIC_DASHBOARD"
+    PUBLIC_EVIDENCE = "PUBLIC_EVIDENCE"
+    FLOP_FINANCE = "FLOP_FINANCE"
+    FLOP_FINANCE_TEASER = "FLOP_FINANCE_TEASER"
+    FLOP_LABS_X = "FLOP_LABS_X"
+    CONTRIBUTION_X = "CONTRIBUTION_X"
+
+
+@dataclass(frozen=True)
+class ReviewedSource:
+    source_id: ReviewedSourceId
+    url: str
+    method: str = "GET"
+    redirects: bool = False
+    max_bytes: int = DEFAULT_RESPONSE_LIMIT
+    timeout: int = DEFAULT_HTTP_TIMEOUT_SECONDS
+
+    def __post_init__(self) -> None:
+        parsed = urlparse(self.url)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                or parsed.password or self.method != "GET"):
+            raise ValueError("reviewed sources must be credential-free HTTPS GET endpoints")
+        if (not isinstance(self.max_bytes, int) or isinstance(self.max_bytes, bool)
+                or self.max_bytes <= 0):
+            raise ValueError("reviewed source byte cap must be a positive integer")
+        if (not isinstance(self.timeout, int) or isinstance(self.timeout, bool)
+                or self.timeout <= 0):
+            raise ValueError("reviewed source timeout must be a positive integer")
+
+
+_REVIEWED_AUTHORITY = object()
+_LOCAL_AUTHORITY = object()
+_REVIEWED_SOURCES: Mapping[ReviewedSourceId, ReviewedSource] = MappingProxyType({
+    ReviewedSourceId.TECHNOCORE_README: ReviewedSource(ReviewedSourceId.TECHNOCORE_README, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/README.md"),
+    ReviewedSourceId.TECHNOCORE_SECURITY: ReviewedSource(ReviewedSourceId.TECHNOCORE_SECURITY, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/SECURITY.md"),
+    ReviewedSourceId.TECHNOCORE_PATTERNS: ReviewedSource(ReviewedSourceId.TECHNOCORE_PATTERNS, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/src/patterns.md"),
+    ReviewedSourceId.TECHNOCORE_LLMS: ReviewedSource(ReviewedSourceId.TECHNOCORE_LLMS, "https://technocore.chat/llms.txt"),
+    ReviewedSourceId.TECHNOCORE_SKILL: ReviewedSource(ReviewedSourceId.TECHNOCORE_SKILL, "https://technocore.chat/skill.md"),
+    ReviewedSourceId.TECHNOCORE_HEALTH: ReviewedSource(ReviewedSourceId.TECHNOCORE_HEALTH, "https://technocore.chat/healthz"),
+    ReviewedSourceId.TECHNOCORE_DID_NOTE: ReviewedSource(ReviewedSourceId.TECHNOCORE_DID_NOTE, "https://technocore.chat/kv/did-4e/1df29904c79a56"),
+    ReviewedSourceId.TECHNOCORE_CONTRIBUTION: ReviewedSource(ReviewedSourceId.TECHNOCORE_CONTRIBUTION, "https://technocore.chat/r/lobby?since=929749&limit=1&format=json"),
+    ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST: ReviewedSource(ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST, "https://technocore.chat/.well-known/agent.json"),
+    ReviewedSourceId.TECHNOCORE_ROOMS_SUMMARY: ReviewedSource(ReviewedSourceId.TECHNOCORE_ROOMS_SUMMARY, "https://technocore.chat/rooms?limit=1&format=json"),
+    ReviewedSourceId.TECHNOCORE_ROOMS: ReviewedSource(ReviewedSourceId.TECHNOCORE_ROOMS, "https://technocore.chat/rooms"),
+    ReviewedSourceId.TECHNOCORE_ROOMS_JSON: ReviewedSource(ReviewedSourceId.TECHNOCORE_ROOMS_JSON, "https://technocore.chat/rooms?format=json"),
+    ReviewedSourceId.TECHNOCORE_LOBBY_JSON: ReviewedSource(ReviewedSourceId.TECHNOCORE_LOBBY_JSON, "https://technocore.chat/r/lobby?format=json"),
+    ReviewedSourceId.TECHNOCORE_PATTERNS_HOSTED: ReviewedSource(ReviewedSourceId.TECHNOCORE_PATTERNS_HOSTED, "https://technocore.chat/patterns.md"),
+    ReviewedSourceId.TECHNOCORE_CONFIG: ReviewedSource(ReviewedSourceId.TECHNOCORE_CONFIG, "https://technocore.chat/config"),
+    ReviewedSourceId.PUBLIC_REPOSITORY_API: ReviewedSource(ReviewedSourceId.PUBLIC_REPOSITORY_API, "https://api.github.com/repos/ksk7777m/flop-agent-intelligence"),
+    ReviewedSourceId.TECHNOCORE_REPOSITORY_API: ReviewedSource(ReviewedSourceId.TECHNOCORE_REPOSITORY_API, "https://api.github.com/repos/flop-labs/technocore-chat"),
+    ReviewedSourceId.ORIGINAL_COMMIT_API: ReviewedSource(ReviewedSourceId.ORIGINAL_COMMIT_API, "https://api.github.com/repos/ksk7777m/flop-agent-intelligence/commits/e388c6fd549de2931c40f1647dc1540a78b5c920"),
+    ReviewedSourceId.DASHBOARD_COMMIT_API: ReviewedSource(ReviewedSourceId.DASHBOARD_COMMIT_API, "https://api.github.com/repos/ksk7777m/flop-agent-intelligence/commits/1fdc4b014a24bb7bcaf9ca0c0851959dcdef3bc7"),
+    ReviewedSourceId.PUBLIC_DASHBOARD: ReviewedSource(ReviewedSourceId.PUBLIC_DASHBOARD, "https://ksk7777m.github.io/flop-agent-intelligence/"),
+    ReviewedSourceId.PUBLIC_EVIDENCE: ReviewedSource(ReviewedSourceId.PUBLIC_EVIDENCE, "https://ksk7777m.github.io/flop-agent-intelligence/data/evidence.json"),
+    ReviewedSourceId.FLOP_FINANCE: ReviewedSource(ReviewedSourceId.FLOP_FINANCE, "https://flop.finance/"),
+    ReviewedSourceId.FLOP_FINANCE_TEASER: ReviewedSource(ReviewedSourceId.FLOP_FINANCE_TEASER, "https://flop.finance/teaser/"),
+    ReviewedSourceId.FLOP_LABS_X: ReviewedSource(ReviewedSourceId.FLOP_LABS_X, "https://x.com/flop_labs"),
+    ReviewedSourceId.CONTRIBUTION_X: ReviewedSource(ReviewedSourceId.CONTRIBUTION_X, "https://x.com/Giappone_Medici/status/2092613806434218126"),
+})
+
+
+class LocalActionClass(str, Enum):
+    SIGNED_ROOM_POST = "SIGNED_ROOM_POST"
+    SIGNED_RECORD_LOOKUP = "SIGNED_RECORD_LOOKUP"
+    DID_NOTE_CAS = "DID_NOTE_CAS"
+    PRESENCE_NOTE_READ = "PRESENCE_NOTE_READ"
+    LOCAL_ACTIVITY_RAW = "LOCAL_ACTIVITY_RAW"
+
+
+@dataclass(frozen=True)
+class ReviewedLocalIntent:
+    action: LocalActionClass
+    subject_sha256: str
+    purpose: str
+    _authority: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._authority is not _LOCAL_AUTHORITY:
+            raise PermissionError("local authority cannot be caller-constructed")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.subject_sha256):
+            raise ValueError("local intent requires a SHA-256 subject binding")
+
+
+def reviewed_local_intent(action: LocalActionClass, subject: str, purpose: str, *,
+                          approval: HumanApprovalEvidence | None = None) -> ReviewedLocalIntent:
+    if not isinstance(action, LocalActionClass) or not purpose.strip():
+        raise ValueError("reviewed local intent requires a known action and purpose")
+    subject_sha256 = hashlib.sha256(subject.encode()).hexdigest()
+    approval_required = action in {
+        LocalActionClass.SIGNED_ROOM_POST, LocalActionClass.SIGNED_RECORD_LOOKUP,
+        LocalActionClass.DID_NOTE_CAS, LocalActionClass.LOCAL_ACTIVITY_RAW,
+    }
+    if approval_required and (
+        not isinstance(approval, HumanApprovalEvidence)
+        or approval.subject_sha256 != subject_sha256
+        or not approval.reviewer.strip()
+        or not approval.approved_at.strip()
+    ):
+        raise PermissionError("hash-bound typed human approval required for local authority")
+    return ReviewedLocalIntent(action, subject_sha256, purpose, _LOCAL_AUTHORITY)
+
+
+def require_local_intent(intent: ReviewedLocalIntent, action: LocalActionClass, subject: str) -> None:
+    if not isinstance(intent, ReviewedLocalIntent) or intent._authority is not _LOCAL_AUTHORITY:
+        raise PermissionError("typed local intent required")
+    if intent.action is not action or intent.subject_sha256 != hashlib.sha256(subject.encode()).hexdigest():
+        raise PermissionError("local intent does not match action subject")
 
 
 @dataclass(frozen=True)
@@ -223,7 +355,8 @@ _PATTERNS: tuple[tuple[RemoteContentClass, re.Pattern[str]], ...] = (
         r"\b(?:install|add|connect|invoke|enable)\s+(?:this\s+)?MCP\b", re.I)),
     (RemoteContentClass.SECRET_REQUEST, re.compile(
         r"\b(?:paste|provide|reveal|import|send|upload)\b.{0,40}\b(?:seed(?: phrase)?|mnemonic|"
-        r"private key|signing key|wallet key|API key|SSH key)\b", re.I)),
+        r"private key|signing key|wallet key|API key|SSH key)\b|"
+        r"\b(?:dump|print|show|reveal)\b.{0,24}\b(?:environment|env(?:ironment)? variables?)\b", re.I)),
     (RemoteContentClass.SIGNING_REQUEST, re.compile(
         r"\b(?:sign|approve)\s+(?:this\s+)?(?:arbitrary\s+)?(?:payload|message|transaction)\b", re.I)),
     (RemoteContentClass.WALLET_CONNECT_REQUEST, re.compile(
@@ -263,15 +396,23 @@ def evaluate_remote_content(value: Any, metadata: RemoteOriginMetadata) -> Untru
     )
 
 
-def configured_official_value(url: str, source_id: str, *, observed_at: str | None = None) -> UntrustedRemoteValue:
+def resolve_reviewed_source(source_id: ReviewedSourceId) -> ReviewedSource:
+    if not isinstance(source_id, ReviewedSourceId):
+        raise PermissionError("reviewed source ID must be an internal enum value")
+    return _REVIEWED_SOURCES[source_id]
+
+
+def configured_official_value(source_id: ReviewedSourceId, *, observed_at: str | None = None) -> UntrustedRemoteValue:
+    source = resolve_reviewed_source(source_id)
     metadata = RemoteOriginMetadata(
         RemoteOrigin.CONFIGURED_OFFICIAL_ENDPOINT,
-        source_id,
+        source.source_id.value,
         observed_at or utc_now(),
         SourceTrustTier.TIER_0_OFFICIAL,
         "CONFIGURED",
     )
-    return evaluate_remote_content(url, metadata)
+    value = evaluate_remote_content(source.url, metadata)
+    return UntrustedRemoteValue(**{**value.__dict__, "_authority": _REVIEWED_AUTHORITY})
 
 
 def discovered_remote_value(value: Any, origin: RemoteOrigin, source_id: str,
@@ -284,19 +425,19 @@ def discovered_remote_value(value: Any, origin: RemoteOrigin, source_id: str,
 
 
 def authorize_sink(value: UntrustedRemoteValue, sink: SinkClass, *,
-                   configured_urls: Iterable[str] = (),
                    approval: HumanApprovalEvidence | None = None,
                    contract_provenance: ContractProvenance = ContractProvenance.UNVERIFIED) -> ActionDecision:
     del approval  # Sensitive sinks remain disabled in this package even with evidence.
-    configured = frozenset(configured_urls)
     if sink in {SinkClass.HTTP_READ_ONLY, SinkClass.PUBLIC_NAVIGATION}:
-        if value.metadata.origin is not RemoteOrigin.CONFIGURED_OFFICIAL_ENDPOINT:
+        if (value.metadata.origin is not RemoteOrigin.CONFIGURED_OFFICIAL_ENDPOINT
+                or value._authority is not _REVIEWED_AUTHORITY):
             decision = DecisionCode.DENY_DISCOVERED_URL if any(
                 item.content_class is RemoteContentClass.URL for item in value.findings
             ) else DecisionCode.DENY_UNTRUSTED_INPUT
             return ActionDecision(False, decision, sink, "remote-discovered targets are inert")
+        source = resolve_reviewed_source(ReviewedSourceId(value.metadata.source_id))
         parsed = urlparse(value.value_for_classification_only)
-        if (value.value_for_classification_only not in configured or parsed.scheme != "https"
+        if (value.value_for_classification_only != source.url or parsed.scheme != "https"
                 or parsed.username or parsed.password or not parsed.hostname
                 or value.metadata.trust_tier is not SourceTrustTier.TIER_0_OFFICIAL):
             return ActionDecision(False, DecisionCode.REQUIRE_PROVENANCE_REVIEW, sink,
@@ -317,38 +458,116 @@ def authorize_sink(value: UntrustedRemoteValue, sink: SinkClass, *,
                           "remote values cannot authorize execution or filesystem sinks")
 
 
-def navigation_state(value: UntrustedRemoteValue, configured_urls: Iterable[str]) -> NavigationState:
-    decision = authorize_sink(value, SinkClass.PUBLIC_NAVIGATION, configured_urls=configured_urls)
+def navigation_state(value: UntrustedRemoteValue) -> NavigationState:
+    decision = authorize_sink(value, SinkClass.PUBLIC_NAVIGATION)
     return NavigationState.REVIEWED_OFFICIAL if decision.allowed else NavigationState.INERT
 
 
 _SECRET_FIELD_RE = re.compile(
-    r"(?:private|secret|seed|mnemonic|credential|password|token|api[_-]?key|ssh[_-]?key)", re.I)
+    r"(?:private[_-]?key|secret[_-]?key|seed(?:[_-]?phrase)?|mnemonic|signing[_-]?key|"
+    r"wallet[_-]?key|x25519[_-]?private|api[_-]?key|ssh[_-]?key|password|token[_-]?secret)", re.I)
+_SECRET_VALUE_RE = re.compile(
+    r"BEGIN [A-Z ]*PRIVATE KEY|(?:private|secret|signing|wallet|api|ssh)[ _-]?key\s*[:=]|"
+    r"\b(?:private key|secret key|signing key|wallet key|api key|ssh key|seed phrase|mnemonic)\b", re.I)
+MCP_MAX_DEPTH = 2
+MCP_MAX_KEYS = 24
+MCP_MAX_STRING = 4096
 
 
 def authorize_remote_mcp_payload(payload: Mapping[str, Any]) -> ActionDecision:
     """Permit only an explicitly small, public evidence vocabulary."""
     allowed = {"public_did", "public_key", "signature", "signed_envelope", "content_sha256", "evidence_sha256"}
-    for key in payload:
-        if key not in allowed or _SECRET_FIELD_RE.search(key):
-            return ActionDecision(False, DecisionCode.DENY_MCP_CUSTODY, SinkClass.MCP_INVOCATION,
-                                  "payload contains a non-public or unrecognized field")
+    envelope_allowed = allowed - {"signed_envelope"}
+    count = 0
+
+    def validate(value: Any, depth: int, names: set[str]) -> bool:
+        nonlocal count
+        if depth > MCP_MAX_DEPTH or not isinstance(value, Mapping):
+            return False
+        if not value:
+            return False
+        count += len(value)
+        if count > MCP_MAX_KEYS:
+            return False
+        for key, child in value.items():
+            if not isinstance(key, str) or key not in names or _SECRET_FIELD_RE.search(key):
+                return False
+            if key == "signed_envelope":
+                if (not isinstance(child, Mapping)
+                        or not {"signature", "content_sha256"} <= set(child)
+                        or not validate(child, depth + 1, envelope_allowed)):
+                    return False
+            elif not isinstance(child, str) or len(child) > MCP_MAX_STRING or _SECRET_VALUE_RE.search(child):
+                return False
+            elif key.endswith("sha256") and not re.fullmatch(r"[0-9a-f]{64}", child):
+                return False
+            elif key == "public_did" and not re.fullmatch(r"did:key:[A-Za-z0-9._:-]{8,500}", child):
+                return False
+            elif key in {"public_key", "signature"} and not re.fullmatch(r"[A-Za-z0-9_-]{16,1024}", child):
+                return False
+        return True
+
+    if not validate(payload, 0, allowed):
+        return ActionDecision(False, DecisionCode.DENY_MCP_CUSTODY, SinkClass.MCP_INVOCATION,
+                              "payload contains secret, oversized, malformed, or unrecognized material")
     return ActionDecision(False, DecisionCode.REQUIRE_HUMAN_APPROVAL, SinkClass.MCP_INVOCATION,
                           "payload is public-only; MCP invocation still requires a future approved integration")
 
 
-def evaluate_contract_provenance(source_tier: SourceTrustTier, *, independent_confirmations: int = 0,
-                                 conflicting: bool = False,
-                                 exact_artifact_verified: bool = False) -> ContractProvenance:
-    if conflicting:
+@dataclass(frozen=True)
+class ContractEvidenceRecord:
+    contract: str
+    source_id: ReviewedSourceId
+    artifact_sha256: str
+    observed_at: str
+    independent_source_id: str
+    exact_artifact_verified: bool
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", self.contract):
+            raise ValueError("contract evidence requires an exact address candidate")
+        if not isinstance(self.source_id, ReviewedSourceId):
+            raise ValueError("contract evidence requires an internal reviewed source ID")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.artifact_sha256):
+            raise ValueError("contract evidence requires an exact artifact hash")
+        if not self.observed_at.strip() or not self.independent_source_id.strip():
+            raise ValueError("contract evidence requires timestamp and independent identity")
+
+
+@dataclass(frozen=True)
+class ContractEvidenceBundle:
+    bundle_id: str
+    records: tuple[ContractEvidenceRecord, ...]
+    approved_for_testnet_use: bool = False
+
+
+_CONTRACT_EVIDENCE_BUNDLES: Mapping[str, ContractEvidenceBundle] = MappingProxyType({})
+
+
+def _derive_contract_records(records: tuple[ContractEvidenceRecord, ...], contract: str,
+                             *, approved_for_testnet_use: bool = False) -> ContractProvenance:
+    exact = [record for record in records if record.contract == contract and record.exact_artifact_verified]
+    if any(record.contract != contract for record in records):
         return ContractProvenance.CONFLICTING
-    if source_tier is not SourceTrustTier.TIER_0_OFFICIAL:
+    if not exact:
         return ContractProvenance.UNVERIFIED
-    if independent_confirmations < 1:
+    official = [record for record in exact if record.source_id in _REVIEWED_SOURCES]
+    if not official:
+        return ContractProvenance.UNVERIFIED
+    identities = {record.independent_source_id for record in official}
+    if len(identities) < 2:
         return ContractProvenance.OFFICIAL_SOURCE_REFERENCED
-    if not exact_artifact_verified:
+    if not approved_for_testnet_use:
         return ContractProvenance.MULTI_SOURCE_CONFIRMED
     return ContractProvenance.VERIFIED_FOR_TESTNET_USE
+
+
+def evaluate_contract_provenance(bundle_id: str | None, contract: str) -> ContractProvenance:
+    if not bundle_id or bundle_id not in _CONTRACT_EVIDENCE_BUNDLES:
+        return ContractProvenance.UNVERIFIED
+    bundle = _CONTRACT_EVIDENCE_BUNDLES[bundle_id]
+    return _derive_contract_records(
+        bundle.records, contract, approved_for_testnet_use=bundle.approved_for_testnet_use)
 
 
 def minimized_remote_evidence(value: UntrustedRemoteValue) -> dict[str, Any]:
@@ -368,25 +587,30 @@ def _bounded_error_metadata(error: urllib.error.HTTPError, limit: int) -> SafeRe
     )
 
 
-def read_configured_endpoint(url: str, source_id: str, configured_urls: Iterable[str], *,
+def read_configured_endpoint(source_id: ReviewedSourceId, *,
                              opener: Any = None,
-                             timeout: int = DEFAULT_HTTP_TIMEOUT_SECONDS,
-                             max_bytes: int = DEFAULT_RESPONSE_LIMIT) -> bytes:
+                             timeout: int | None = None,
+                             max_bytes: int | None = None) -> bytes:
     """GET an exact configured endpoint with no redirects and bounded bytes."""
+    source = resolve_reviewed_source(source_id)
+    timeout = source.timeout if timeout is None else timeout
+    max_bytes = source.max_bytes if max_bytes is None else max_bytes
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
         raise ValueError("timeout must be a positive integer")
     if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
         raise ValueError("max_bytes must be a positive integer")
-    remote = configured_official_value(url, source_id)
-    decision = authorize_sink(remote, SinkClass.HTTP_READ_ONLY, configured_urls=configured_urls)
+    if timeout > source.timeout or max_bytes > source.max_bytes:
+        raise ValueError("caller cannot expand a reviewed source resource bound")
+    remote = configured_official_value(source_id)
+    decision = authorize_sink(remote, SinkClass.HTTP_READ_ONLY)
     if not decision.allowed:
         raise PermissionError(decision.decision.value)
-    request = urllib.request.Request(url, method="GET", headers={"User-Agent": POLICY_VERSION})
+    request = urllib.request.Request(source.url, method=source.method, headers={"User-Agent": POLICY_VERSION})
     open_request = opener or urllib.request.build_opener(RejectRedirects()).open
     try:
         with open_request(request, timeout=timeout) as response:
             final_url = response.geturl()
-            if final_url != url:
+            if final_url != source.url:
                 raise SafeRemoteError("FINAL_ORIGIN_MISMATCH")
             declared = response.headers.get("Content-Length")
             if declared is not None:
@@ -405,3 +629,15 @@ def read_configured_endpoint(url: str, source_id: str, configured_urls: Iterable
         raise _bounded_error_metadata(error, max_bytes) from error
     except urllib.error.URLError as error:
         raise SafeRemoteError("TRANSPORT_ERROR") from error
+
+
+T = TypeVar("T")
+
+
+def invoke_remote_sink(value: UntrustedRemoteValue, sink: SinkClass,
+                       operation: Callable[[], T]) -> T:
+    """Single production guard used before a remote value can reach any sink."""
+    decision = authorize_sink(value, sink)
+    if not decision.allowed:
+        raise PermissionError(decision.decision.value)
+    return operation()

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from enum import IntEnum
 from typing import Dict
 
-from .remote_content_policy import ContractProvenance, SourceTrustTier
+from .remote_content_policy import ContractProvenance, ReviewedSourceId, SourceTrustTier
 
 
 class SourceTier(IntEnum):
@@ -27,16 +27,6 @@ class SourceAssessment:
         return asdict(self)
 
 
-TIER_1 = {
-    "crypto_hayes_x",
-    "flop_labs_x",
-    "flop_finance",
-    "flop_labs_github",
-    "technocore_live",
-    "technocore_github",
-}
-
-
 @dataclass(frozen=True)
 class SourceAssessmentV2:
     source_id: str
@@ -51,13 +41,13 @@ class SourceAssessmentV2:
         return value
 
 
-def assess_source_v2(source_id: str, *, signed_community: bool = False,
+def assess_source_v2(source_id: ReviewedSourceId | str, *, signed_community: bool = False,
                      conflicting: bool = False) -> SourceAssessmentV2:
     """Classify source identity without granting contract authority."""
     if conflicting:
         tier = SourceTrustTier.TIER_3_SUSPICIOUS_CONFLICTING
         reason = "source evidence is suspicious or conflicting"
-    elif source_id in TIER_1:
+    elif isinstance(source_id, ReviewedSourceId):
         tier = SourceTrustTier.TIER_0_OFFICIAL
         reason = "explicitly configured first-party source"
     elif signed_community:
@@ -67,21 +57,22 @@ def assess_source_v2(source_id: str, *, signed_community: bool = False,
         tier = SourceTrustTier.TIER_2_UNSIGNED_COMMUNITY
         reason = "unsigned or otherwise unverified community source"
     return SourceAssessmentV2(
-        source_id, tier,
+        source_id.value if isinstance(source_id, ReviewedSourceId) else source_id, tier,
         ContractProvenance.CONFLICTING if conflicting else ContractProvenance.UNVERIFIED,
         reason,
     )
 
 
-def assess_source(source_id: str, directly_linked_by_tier1: bool = False) -> SourceAssessment:
-    if source_id in TIER_1:
-        return SourceAssessment(source_id, 1, True, True, "configured first-party source")
+def assess_source(source_id: ReviewedSourceId | str, directly_linked_by_tier1: bool = False) -> SourceAssessment:
+    if isinstance(source_id, ReviewedSourceId):
+        return SourceAssessment(source_id.value, 1, True, True, "internally registered first-party source")
+    source_name = str(source_id)
     if directly_linked_by_tier1:
         return SourceAssessment(
-            source_id, 2, False, False,
+            source_name, 2, False, False,
             "linked targets do not inherit first-party trust; exact provenance review is required",
         )
     return SourceAssessment(
-        source_id, 3, False, False,
+        source_name, 3, False, False,
         "community, mirror, aggregator, or otherwise unverified source",
     )

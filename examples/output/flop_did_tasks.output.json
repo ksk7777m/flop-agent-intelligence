@@ -3,7 +3,7 @@
   "state": "REVIEW_REQUIRED",
   "classification": "ACTION",
   "source_id": "crypto_hayes_x",
-  "source_tier": 1,
+  "source_tier": 3,
   "source_evidence": "https://x.com/CryptoHayes/status/2092163906537918944",
   "summary": "Future Technocore tasks will require a unique agent DID and reward task completion.",
   "safety_result": "PASS",
@@ -11,4 +11,3 @@
   "detected_at": "2026-08-26T00:00:00+00:00",
   "approval_status": "REVIEW_REQUIRED"
 }
-

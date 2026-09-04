@@ -299,6 +299,32 @@ class Store:
 
 
 HttpGet = Callable[[str], tuple[int, str, Mapping[str, str]]]
+_KV_TARGET_AUTHORITY = object()
+
+
+class ReviewedKvTarget(str):
+    """String-compatible target that cannot be produced by remote JSON/text."""
+    def __new__(cls, url: str, authority: object):
+        if authority is not _KV_TARGET_AUTHORITY:
+            raise PermissionError("reviewed KV target requires local configuration authority")
+        value = str.__new__(cls, url)
+        value._authority = authority
+        return value
+
+
+def _kv_target(namespace: str | None = None, key: str | None = None, *, manifest: bool = False) -> ReviewedKvTarget:
+    if manifest:
+        return ReviewedKvTarget(f"{OFFICIAL_ORIGIN}/.well-known/agent.json", _KV_TARGET_AUTHORITY)
+    if not namespace or not NAME_RE.fullmatch(namespace) or PRIVATE_RE.match(namespace):
+        raise ApiContractError("invalid locally configured KV namespace")
+    suffix = f"/kv/{quote(namespace, safe='')}"
+    if key is None:
+        suffix += "?format=json"
+    else:
+        if not NAME_RE.fullmatch(key) or PRIVATE_RE.match(key):
+            raise ApiContractError("invalid reviewed KV key")
+        suffix += f"/{quote(key, safe='')}"
+    return ReviewedKvTarget(OFFICIAL_ORIGIN + suffix, _KV_TARGET_AUTHORITY)
 
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl): return None
@@ -309,7 +335,9 @@ def sanitize_retry_after(value: str | None) -> str | None:
     return value if RETRY_AFTER_RE.fullmatch(value) and int(value) <= 86400 else None
 
 
-def official_get(url: str) -> tuple[int, str, Mapping[str, str]]:
+def official_get(url: ReviewedKvTarget) -> tuple[int, str, Mapping[str, str]]:
+    if not isinstance(url, ReviewedKvTarget) or getattr(url, "_authority", None) is not _KV_TARGET_AUTHORITY:
+        raise ApiContractError("typed reviewed KV target required")
     parsed = urlparse(url)
     allowed_path = parsed.path.startswith("/kv/") or parsed.path == "/.well-known/agent.json"
     if f"{parsed.scheme}://{parsed.netloc}" != OFFICIAL_ORIGIN or not allowed_path:
@@ -329,7 +357,7 @@ def official_get(url: str) -> tuple[int, str, Mapping[str, str]]:
 
 def current_read_interval(get: HttpGet = official_get) -> float:
     """Derive conservative request spacing from the deployment's live manifest."""
-    status, body, _ = get(f"{OFFICIAL_ORIGIN}/.well-known/agent.json")
+    status, body, _ = get(_kv_target(manifest=True))
     if status != 200:
         raise ApiContractError("cannot establish current read limit")
     try:
@@ -359,7 +387,7 @@ class Observer:
         cycle_id = self.store.begin_cycle(observed_at)
         result = {"successful": 0, "failed": 0, "rate_limited": 0, "writes": 0}
         for config in self.configs:
-            listing_url = f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}?format=json"
+            listing_url = _kv_target(config.name)
             status, body, headers = self._get(listing_url)
             if status == 429:
                 self.store.failed_poll(config.name, observed_at, "RATE_LIMITED", status, sanitize_retry_after(headers.get("Retry-After")), "HTTP_RATE_LIMIT", "NAMESPACE_LIST", cycle_id)
@@ -376,8 +404,7 @@ class Observer:
                     raise ApiContractError("configured local key budget exceeded")
                 hashes = {}
                 for key in keys:
-                    code, value_body, value_headers = self._get(
-                        f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}/{quote(key, safe='')}")
+                    code, value_body, value_headers = self._get(_kv_target(config.name, key))
                     if code == 429:
                         raise RateLimited(sanitize_retry_after(value_headers.get("Retry-After")))
                     if code != 200:

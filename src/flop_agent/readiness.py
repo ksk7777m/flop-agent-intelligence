@@ -9,21 +9,21 @@ from pathlib import Path
 from typing import Any, Callable, Dict
 from urllib.parse import urlparse
 
-from .remote_content_policy import read_configured_endpoint
+from .remote_content_policy import ReviewedSourceId, read_configured_endpoint
 
 
 OFFICIAL_SPECS = {
-    "README.md": "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/README.md",
-    "SECURITY.md": "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/SECURITY.md",
-    "patterns.md": "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/src/patterns.md",
-    "llms.txt": "https://technocore.chat/llms.txt",
-    "skill.md": "https://technocore.chat/skill.md",
+    "README.md": ReviewedSourceId.TECHNOCORE_README,
+    "SECURITY.md": ReviewedSourceId.TECHNOCORE_SECURITY,
+    "patterns.md": ReviewedSourceId.TECHNOCORE_PATTERNS,
+    "llms.txt": ReviewedSourceId.TECHNOCORE_LLMS,
+    "skill.md": ReviewedSourceId.TECHNOCORE_SKILL,
 }
 READINESS_ENDPOINTS = {
-    "technocore": "https://technocore.chat/healthz",
-    "did_note": "https://technocore.chat/kv/did-4e/1df29904c79a56",
-    "public_repo": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence",
-    "official_repo": "https://api.github.com/repos/flop-labs/technocore-chat",
+    "technocore": ReviewedSourceId.TECHNOCORE_HEALTH,
+    "did_note": ReviewedSourceId.TECHNOCORE_DID_NOTE,
+    "public_repo": ReviewedSourceId.PUBLIC_REPOSITORY_API,
+    "official_repo": ReviewedSourceId.TECHNOCORE_REPOSITORY_API,
 }
 SCHEMAS = {
     "readiness.json": "flop-readiness-v1",
@@ -39,9 +39,8 @@ SCHEMAS = {
 }
 
 
-def fetch_bytes(url: str) -> bytes:
-    allowed = set(OFFICIAL_SPECS.values()) | set(READINESS_ENDPOINTS.values())
-    return read_configured_endpoint(url, "flop-readiness-checker", allowed)
+def fetch_bytes(source_id: ReviewedSourceId) -> bytes:
+    return read_configured_endpoint(source_id)
 
 
 def validate_dashboard_data(data_dir: Path) -> None:
@@ -80,8 +79,8 @@ def compare_spec_hashes(
     expected: Dict[str, str], fetcher: Callable[[str], bytes] = fetch_bytes,
 ) -> Dict[str, Dict[str, str]]:
     results: Dict[str, Dict[str, str]] = {}
-    for name, url in OFFICIAL_SPECS.items():
-        actual = hashlib.sha256(fetcher(url)).hexdigest()
+    for name, source_id in OFFICIAL_SPECS.items():
+        actual = hashlib.sha256(fetcher(source_id)).hexdigest()
         baseline = expected.get(name)
         results[name] = {
             "sha256": actual,
@@ -95,9 +94,9 @@ def run_readiness_check(root: Path, fetcher: Callable[[str], bytes] = fetch_byte
     validate_dashboard_data(root / "data")
     expected = json.loads((root / "data" / "spec_hashes.json").read_text(encoding="utf-8"))["hashes"]
     checks: Dict[str, Dict[str, Any]] = {}
-    for name, url in READINESS_ENDPOINTS.items():
+    for name, source_id in READINESS_ENDPOINTS.items():
         try:
-            body = fetcher(url)
+            body = fetcher(source_id)
             checks[name] = {"status": "READY", "bytes": len(body)}
         except Exception as error:
             checks[name] = {"status": "ERROR", "error": type(error).__name__}

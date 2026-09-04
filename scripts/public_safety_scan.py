@@ -46,6 +46,27 @@ ENGAGEMENT_RAW_FIELDS = {
     "raw_response", "response_body", "raw_body", "room_message",
     "message_body", "topic", "topic_raw",
 }
+REMOTE_EVIDENCE_RAW_FIELDS = {
+    "input_text", "text_after_sweep", "message", "message_body", "topic",
+    "nickname", "note_value", "response_body", "raw_body", "raw_value",
+}
+
+
+def remote_evidence_raw_fields(value, inherited_remote: bool = False) -> list[str]:
+    findings: list[str] = []
+    if isinstance(value, dict):
+        remote = inherited_remote or value.get("content_origin") in {
+            "REMOTE_OR_UNKNOWN", "REMOTE_TECHNOCORE", "REMOTE"
+        }
+        for key, child in value.items():
+            if (remote and key.lower() in REMOTE_EVIDENCE_RAW_FIELDS
+                    and child is not None and child != ""):
+                findings.append(key)
+            findings.extend(remote_evidence_raw_fields(child, remote))
+    elif isinstance(value, list):
+        for child in value:
+            findings.extend(remote_evidence_raw_fields(child, inherited_remote))
+    return findings
 ENGAGEMENT_SOURCE_URL = "https://technocore.chat/rooms?format=json&limit=200"
 MAX_TRACKED_TEXT_BYTES = 1024 * 1024
 MAX_JSONL_RECORDS = 256
@@ -196,20 +217,35 @@ def scan() -> list[str]:
         if unsafe:
             findings.append(f"openapi.json: non-GET operation at {route}: {sorted(unsafe)}")
 
-    for path in sorted((ROOT / "api").rglob("*.json")):
-        payload = json.loads(required_bounded_text(path))
+    structured_paths = sorted((ROOT / "api").rglob("*.json"))
+    structured_paths += sorted((ROOT / "data").glob("*.json"))
+    structured_paths += sorted((ROOT / "data").glob("*.jsonl"))
+    for path in structured_paths:
+        text = required_bounded_text(path)
+        if path.suffix == ".jsonl":
+            payloads = [json.loads(line) for line in text.splitlines() if line.strip()]
+        else:
+            payloads = [json.loads(text)]
 
-        def visit(value):
+        def visit(value, remote_record=False):
             if isinstance(value, dict):
+                remote_record = remote_record or value.get("content_origin") in {
+                    "REMOTE_OR_UNKNOWN", "REMOTE_TECHNOCORE", "REMOTE"
+                }
                 for key, child in value.items():
                     if key.lower() in RAW_FIELDS:
                         findings.append(
                             f"{path.relative_to(ROOT)}: raw-value-shaped public field {key}"
                         )
-                    visit(child)
+                    if (remote_record and key.lower() in REMOTE_EVIDENCE_RAW_FIELDS
+                            and child is not None and child != ""):
+                        findings.append(
+                            f"{path.relative_to(ROOT)}: raw remote evidence field {key}"
+                        )
+                    visit(child, remote_record)
             elif isinstance(value, list):
                 for child in value:
-                    visit(child)
+                    visit(child, remote_record)
             elif (
                 path.parent.name == "kv"
                 and isinstance(value, str)
@@ -220,7 +256,12 @@ def scan() -> list[str]:
                     f"{path.relative_to(ROOT)}: note-derived or unexpected URL in public API"
                 )
 
-        visit(payload)
+        for payload in payloads:
+            visit(payload)
+            for key in remote_evidence_raw_fields(payload):
+                finding = f"{path.relative_to(ROOT)}: raw remote evidence field {key}"
+                if finding not in findings:
+                    findings.append(finding)
 
         if path.name.startswith("engagement-"):
             def visit_engagement(value):
@@ -233,7 +274,8 @@ def scan() -> list[str]:
                         visit_engagement(child)
                 elif isinstance(value, list):
                     for child in value: visit_engagement(child)
-            visit_engagement(payload)
+            for payload in payloads:
+                visit_engagement(payload)
 
     schema_jobs = (
         ("api/engagement-status.json", "schemas/engagement-api.v1.json", "status"),

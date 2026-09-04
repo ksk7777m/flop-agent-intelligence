@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, Iterable, List
 from .classifier import classify
 from .receipt import read_receipt, verify_receipt
 from .readiness import OFFICIAL_SPECS
-from .remote_content_policy import RemoteOrigin, discovered_remote_value, read_configured_endpoint
+from .remote_content_policy import RemoteOrigin, ReviewedSourceId, discovered_remote_value, read_configured_endpoint
 
 
 VERSION = "flop-readiness-health-monitor-v1"
@@ -30,23 +30,22 @@ X25519_PUBLIC = "a-EbwHNshrhf00Aqq4P7xrZ8Cqmncxr3HW_wTSOoXW0"
 KNOWN_MAILBOX_SEQ = 1
 
 ENDPOINTS = {
-    "technocore": "https://technocore.chat/healthz",
-    "did_note": "https://technocore.chat/kv/did-4e/1df29904c79a56",
-    "contribution": "https://technocore.chat/r/lobby?since=929749&limit=1&format=json",
-    "repo": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence",
-    "original_commit": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence/commits/e388c6fd549de2931c40f1647dc1540a78b5c920",
-    "dashboard_commit": "https://api.github.com/repos/ksk7777m/flop-agent-intelligence/commits/1fdc4b014a24bb7bcaf9ca0c0851959dcdef3bc7",
-    "dashboard": "https://ksk7777m.github.io/flop-agent-intelligence/",
-    "public_evidence": "https://ksk7777m.github.io/flop-agent-intelligence/data/evidence.json",
-    "official_repo": "https://api.github.com/repos/flop-labs/technocore-chat",
-    "flop_site": "https://flop.finance/",
-    "teaser": TEASER_URL,
-    "x_official": "https://x.com/flop_labs",
-    "x_evidence": "https://x.com/Giappone_Medici/status/2092613806434218126",
-    "capacity_manifest": "https://technocore.chat/.well-known/agent.json",
-    "rooms_summary": "https://technocore.chat/rooms?limit=1&format=json",
+    "technocore": ReviewedSourceId.TECHNOCORE_HEALTH,
+    "did_note": ReviewedSourceId.TECHNOCORE_DID_NOTE,
+    "contribution": ReviewedSourceId.TECHNOCORE_CONTRIBUTION,
+    "repo": ReviewedSourceId.PUBLIC_REPOSITORY_API,
+    "original_commit": ReviewedSourceId.ORIGINAL_COMMIT_API,
+    "dashboard_commit": ReviewedSourceId.DASHBOARD_COMMIT_API,
+    "dashboard": ReviewedSourceId.PUBLIC_DASHBOARD,
+    "public_evidence": ReviewedSourceId.PUBLIC_EVIDENCE,
+    "official_repo": ReviewedSourceId.TECHNOCORE_REPOSITORY_API,
+    "flop_site": ReviewedSourceId.FLOP_FINANCE,
+    "teaser": ReviewedSourceId.FLOP_FINANCE_TEASER,
+    "x_official": ReviewedSourceId.FLOP_LABS_X,
+    "x_evidence": ReviewedSourceId.CONTRIBUTION_X,
+    "capacity_manifest": ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST,
+    "rooms_summary": ReviewedSourceId.TECHNOCORE_ROOMS_SUMMARY,
 }
-ALLOWED_URLS = set(ENDPOINTS.values()) | set(OFFICIAL_SPECS.values())
 SENSITIVE_TERMS = {
     "testnet", "faucet", "did task", "did-gated", "reward", "snapshot",
     "eligibility", "claim", "contract", "deadline", "security", "upgrade",
@@ -200,8 +199,8 @@ def classify_source_failure(consecutive_failures: int) -> Dict[str, Any]:
     return _result("UNKNOWN", "Official source temporarily unavailable")
 
 
-def fetch_bytes(url: str) -> bytes:
-    return read_configured_endpoint(url, "flop-readiness-monitor", ALLOWED_URLS)
+def fetch_bytes(source_id: ReviewedSourceId) -> bytes:
+    return read_configured_endpoint(source_id)
 
 
 def _result(status: str, detail: str, **extra: Any) -> Dict[str, Any]:
@@ -238,7 +237,7 @@ def evaluate_mailbox(body: bytes) -> Dict[str, Any]:
         # Message bodies remain inert data. Classification performs no fetch or execution.
         remote = discovered_remote_value(
             message.get("text", ""), RemoteOrigin.TECHNOCORE_MAILBOX, "technocore-mailbox")
-        outcome = classify(remote.value_for_classification_only, official=False)
+        outcome = classify(remote.value_for_classification_only)
         if outcome.security_review_required:
             unsafe.append(message.get("seq"))
     if newer:

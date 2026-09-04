@@ -2,24 +2,24 @@ const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintena
 const OBSERVATORY_DATA = ["status", "rooms", "engagement"];
 const KV_DATA = ["status", "namespaces", "changes", "presence"];
 const safeStatus = value => String(value || "UNKNOWN").toUpperCase();
-const REVIEWED_OFFICIAL_LINKS = new Set([
-  "https://flop.finance/",
-  "https://flop.finance/teaser/",
-  "https://github.com/flop-labs/technocore-chat/blob/main/src/patterns.md",
-  "https://github.com/ksk7777m/flop-agent-intelligence",
-  "https://technocore.chat/#r/lobby/929750",
-  "https://x.com/Giappone_Medici/status/2092613806434218126"
-]);
-const navigationState = (value, declaredState) => {
-  if (declaredState !== "REVIEWED_OFFICIAL" || !REVIEWED_OFFICIAL_LINKS.has(value)) return "INERT";
+const REVIEWED_OFFICIAL_LINKS = Object.freeze({
+  FLOP_FINANCE: "https://flop.finance/",
+  FLOP_FINANCE_TEASER: "https://flop.finance/teaser/",
+  TECHNOCORE_PATTERNS: "https://github.com/flop-labs/technocore-chat/blob/main/src/patterns.md",
+  PUBLIC_REPOSITORY: "https://github.com/ksk7777m/flop-agent-intelligence",
+  CONTRIBUTION_RECORD: "https://technocore.chat/#r/lobby/929750",
+  CONTRIBUTION_X: "https://x.com/Giappone_Medici/status/2092613806434218126"
+});
+const navigationState = (value, reviewedSourceId) => {
+  if (typeof reviewedSourceId !== "string" || REVIEWED_OFFICIAL_LINKS[reviewedSourceId] !== value) return "INERT";
   try {
     const target = new URL(value);
     return target.protocol === "https:" && !target.username && !target.password
       ? "APPROVED_FOR_NAVIGATION" : "INERT";
   } catch (_) { return "INERT"; }
 };
-const appendSafeNavigation = (parent, value, label, declaredState) => {
-  if (navigationState(value, declaredState) !== "APPROVED_FOR_NAVIGATION") {
+const appendSafeNavigation = (parent, value, label, reviewedSourceId) => {
+  if (navigationState(value, reviewedSourceId) !== "APPROVED_FOR_NAVIGATION") {
     parent.append(text("span", label));
     return "INERT";
   }
@@ -358,7 +358,7 @@ function renderSignals(data) {
     meta.append(text("div", item.timestamp), text("div", `TIER ${item.source_tier} · ${item.verification_status}`), text("div", item.source));
     const body = text("div");
     const heading = text("h3");
-    appendSafeNavigation(heading, item.url, item.title, item.link_state);
+    appendSafeNavigation(heading, item.url, item.title, item.reviewed_source_id);
     body.append(heading, text("p", item.summary));
     row.append(meta, body, text("span", item.classification, "classification"));
     root.append(row);
@@ -444,8 +444,8 @@ function renderEvidence(data) {
   };
   const root = document.querySelector("#evidence");
   const reviewedLinks = {
-    repository: "REVIEWED_OFFICIAL", technocore_permalink: "REVIEWED_OFFICIAL",
-    x_explanation: "REVIEWED_OFFICIAL"
+    repository: "PUBLIC_REPOSITORY", technocore_permalink: "CONTRIBUTION_RECORD",
+    x_explanation: "CONTRIBUTION_X"
   };
   for (const [key, label] of Object.entries(labels)) {
     const row = text("div");
@@ -468,6 +468,7 @@ function renderMaintenance(data) {
   }
 }
 
+function startDashboard() {
 loadData().then(data => {
   renderObservatory(data.observatory_status, data.observatory_rooms, data.observatory_engagement);
   renderPromptPack();
@@ -491,3 +492,10 @@ loadEngagementMonitorData().then(data => renderEngagementMonitor(
 loadKvData().then(kv => {
   renderKv(kv.kv_status, kv.kv_namespaces, kv.kv_changes, kv.kv_presence);
 }).catch(() => renderKvError());
+}
+
+if (globalThis.__FLOP_DASHBOARD_TEST_MODE__) {
+  globalThis.__FLOP_DASHBOARD_TEST_API__ = {navigationState, appendSafeNavigation, REVIEWED_OFFICIAL_LINKS};
+} else {
+  startDashboard();
+}

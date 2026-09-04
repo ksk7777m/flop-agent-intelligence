@@ -7,49 +7,77 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .technocore import permalink
-from .remote_content_policy import MAX_LOCAL_RAW_EVIDENCE_CHARS
+from .remote_content_policy import (
+    MAX_LOCAL_RAW_EVIDENCE_CHARS,
+    LocalActionClass,
+    ReviewedLocalIntent,
+    RemoteOrigin,
+    discovered_remote_value,
+    require_local_intent,
+)
 
 
 def append_activity(
     jsonl_path: Path, markdown_path: Path, room: str, message: Dict[str, Any],
     evidence: Dict[str, Any] | None = None,
+    *, local_provenance: ReviewedLocalIntent | None = None,
+    output_scope: str = "PUBLIC",
 ) -> None:
     evidence = evidence or {}
-    message_origin = evidence.get("content_origin", "LOCAL_APPROVED_OUTBOUND")
     raw_text = str(message.get("swept_text", message["text"]))
     raw_input = str(message.get("input_text", message["text"]))
-    raw_allowed = message_origin == "LOCAL_APPROVED_OUTBOUND"
+    local_origin = False
+    if local_provenance is not None:
+        require_local_intent(local_provenance, LocalActionClass.LOCAL_ACTIVITY_RAW, raw_text)
+        local_origin = True
+    raw_allowed = local_origin and output_scope == "LOCAL_ONLY"
+    message_origin = ("TYPED_LOCAL_RAW" if raw_allowed else
+                      "TYPED_LOCAL_HASH_ONLY" if local_origin else "REMOTE_OR_UNKNOWN")
     if raw_allowed and (len(raw_text) > MAX_LOCAL_RAW_EVIDENCE_CHARS
                         or len(raw_input) > MAX_LOCAL_RAW_EVIDENCE_CHARS):
         raise ValueError("approved outbound evidence text exceeds the local bound")
-    note = evidence.get("note_value")
+    local_evidence = evidence if local_origin else {}
+    note = local_evidence.get("note_value")
+    remote_summary: Dict[str, Any] = {}
+    if not raw_allowed:
+        remote_summary = discovered_remote_value(
+            raw_text, RemoteOrigin.TECHNOCORE_MESSAGE, "activity-message").evidence()
     record = {
-        "activity_type": evidence.get("activity_type", message.get("activity_type", "signed_message")),
+        "activity_type": local_evidence.get("activity_type", "signed_message" if local_origin else "remote_observation"),
         "proof_type": "signed_message",
-        "official_status": message.get("official_status", "OFFICIAL_RECOMMENDED"),
+        "official_status": message.get("official_status", "OFFICIAL_RECOMMENDED") if local_origin else "UNVERIFIED",
         "source": "technocore.chat",
-        "did": message["from"], "room": room, "seq": message["seq"], "timestamp": message["ts"],
-        "nonce": message.get("nonce"),
+        "did": message["from"] if local_origin else None,
+        "did_sha256": hashlib.sha256(str(message.get("from", "")).encode()).hexdigest(),
+        "room": room if local_origin else None,
+        "room_length": len(room.encode("utf-8")),
+        "room_sha256": hashlib.sha256(room.encode("utf-8")).hexdigest(),
+        "seq": message["seq"] if isinstance(message.get("seq"), int) else None,
+        "timestamp": message["ts"] if local_origin else datetime.now(timezone.utc).isoformat(),
+        "source_timestamp_sha256": hashlib.sha256(str(message.get("ts", "")).encode()).hexdigest(),
+        "nonce": message.get("nonce") if local_origin else None,
         "content_origin": message_origin,
         "content_length": len(raw_text.encode("utf-8")),
         "content_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "classifications": remote_summary.get("classifications", ["UNKNOWN"]),
+        "source_id": remote_summary.get("source_id", "unknown"),
         "input_text": raw_input if raw_allowed else None,
         "text_after_sweep": raw_text if raw_allowed else None,
-        "signature": message.get("signature"),
-        "contribution": evidence.get("contribution"),
-        "repository": evidence.get("repository"),
-        "git_commit_hash": evidence.get("git_commit_hash"),
-        "receipt_fingerprint": evidence.get("receipt_fingerprint"),
-        "approval_status": evidence.get("approval_status"),
-        "mailbox": evidence.get("mailbox"),
-        "note_path": evidence.get("note_path"),
+        "signature": message.get("signature") if local_origin else None,
+        "contribution": local_evidence.get("contribution"),
+        "repository": local_evidence.get("repository"),
+        "git_commit_hash": local_evidence.get("git_commit_hash"),
+        "receipt_fingerprint": local_evidence.get("receipt_fingerprint"),
+        "approval_status": local_evidence.get("approval_status"),
+        "mailbox": local_evidence.get("mailbox"),
+        "note_path": local_evidence.get("note_path"),
         "note_length": len(str(note).encode("utf-8")) if note is not None else None,
-        "note_hash": (evidence.get("note_hash")
+        "note_hash": (local_evidence.get("note_hash")
                       or (hashlib.sha256(str(note).encode("utf-8")).hexdigest() if note is not None else None)),
-        "x25519_public_key": evidence.get("x25519_public_key"),
+        "x25519_public_key": local_evidence.get("x25519_public_key"),
         "verification_method": "Ed25519 over UTF-8 room|nonce|text_after_sweep; server-verified DID",
         "persistence": "Technocore room ring; local JSONL is the retained receipt",
-        "permalink": permalink(room, message["seq"]),
+        "permalink": permalink(room, message["seq"]) if local_origin else None,
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
     record = {key: value for key, value in record.items() if value is not None}
@@ -57,5 +85,8 @@ def append_activity(
     with jsonl_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     with markdown_path.open("a", encoding="utf-8") as handle:
-        display = raw_text if raw_allowed else f"remote content SHA-256 {record['content_sha256']}"
-        handle.write(f"\n- {record['timestamp']} — `{room}` seq {record['seq']} — {display} — [permalink]({record['permalink']}) — DID `{record['did']}`\n")
+        display = raw_text if raw_allowed else f"remote or unknown content SHA-256 {record['content_sha256']}"
+        room_display = room if local_origin else f"room SHA-256 {record['room_sha256']}"
+        link = f" — [permalink]({record['permalink']})" if record.get("permalink") else ""
+        did_display = record.get("did") or f"DID SHA-256 {record['did_sha256']}"
+        handle.write(f"\n- {record['timestamp']} — `{room_display}` seq {record.get('seq', 'unknown')} — {display}{link} — `{did_display}`\n")
