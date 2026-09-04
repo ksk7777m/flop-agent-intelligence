@@ -40,10 +40,14 @@ Remote-derived values cannot select or authorize HTTP targets, subprocesses,
 shells, eval/exec, filesystem paths or writes, repositories, package
 installers, MCP installation/invocation, signers, wallets, claims, or payments.
 Sensitive sinks remain disabled in V1 even when a caller supplies human
-approval evidence.
+approval evidence. The public approval record is descriptive only and cannot
+mint authority.
 
-Future action approval must be a purpose-, subject-hash-, reviewer-, and
-timestamp-bound evidence object. A caller-controlled boolean is insufficient.
+Future action approval must resolve from an immutable trusted local approval
+store and bind the action, subject, target, payload hash, revision, configuration
+version, purpose, trusted reviewer, and a valid fresh timestamp. The store is
+intentionally empty in this package. External JSON and caller-created objects
+cannot create signing or write authority.
 Legacy Technocore reads resolve an internal source ID; local writes, signing,
 record lookup, and Presence-note reads require a typed, hash-bound local intent.
 Serialized remote data cannot be deserialized directly into that capability.
@@ -62,16 +66,17 @@ Contract provenance is independently one of `UNVERIFIED`,
 `VERIFIED_FOR_TESTNET_USE`. Official source trust alone never verifies a
 contract. A community DID signature authenticates a signer, not official FLOP
 authority. Final provenance is derived only from a repository-owned evidence
-bundle containing exact contract, artifact hash, reviewed source identity,
-observation time, and independent-source identity records. Configuration
-strings and caller counts/booleans are ignored.
+bundle containing exact contract, artifact hash, reviewed source identity, and
+observation time. Independence is derived from immutable provenance-root and
+canonical-artifact identities; same-publisher aliases and duplicate artifacts
+deduplicate. Configuration strings and caller labels/counts are ignored.
 
 ## Remote MCP no custody
 
-`REMOTE_MCP_NO_CUSTODY` permits only bounded public DID/public keys, signatures,
-strict public-only signed envelopes, and non-secret hashes/evidence at a future
-remote boundary. Keys and values are recursively checked with depth, key-count,
-type, and string-size limits.
+`REMOTE_MCP_NO_CUSTODY` recognizes only exact public schemas: Ed25519 `did:key`
+identities, matching 32-byte base64url public keys, 64-byte Ed25519 signatures
+inside a domain-separated verifiable envelope, and bounded hash/status/receipt
+evidence. Unknown keys and arbitrary nested strings fail closed.
 DID, X25519, wallet, payment/signing, API, and SSH private material is always
 forbidden. All signing remains local. This package does not install or invoke
 an MCP.

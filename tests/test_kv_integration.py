@@ -109,10 +109,26 @@ class KVIntegrationTests(unittest.TestCase):
         for harmless in ("keep-private-key material out", "step-by-step", "~/Library/<placeholder>",
                          "https://technocore.chat/openapi.json", "value_sha256"):
             self.assertFalse(scanner.scan_text(harmless), harmless)
-        self.assertEqual(
-            scanner.remote_evidence_raw_fields({
-                "content_origin": "REMOTE_OR_UNKNOWN", "message_body": "remote raw"
-            }), ["message_body"])
+        for field in ("topic_text", "message_text", "error_body", "note_text", "payload",
+                      "value", "data", "content", "details", "arbitrary_renamed_key"):
+            with self.subTest(field=field):
+                self.assertIn(field, scanner.remote_evidence_raw_fields({
+                    "content_origin": "REMOTE_OR_UNKNOWN", field: "remote raw"
+                }))
+        self.assertEqual(scanner.remote_evidence_raw_fields({
+            "content_origin": "REMOTE_OR_UNKNOWN", "activity_type": "remote_observation",
+            "proof_type": "signed_message", "official_status": "UNVERIFIED",
+            "source": "technocore.chat", "content_length": 12,
+            "content_sha256": "a" * 64, "classifications": ["PLAIN_TEXT"],
+            "source_id": "activity-message",
+        }), [])
+        self.assertEqual(scanner.remote_evidence_raw_fields({
+            "policy_version": "technocore-untrusted-input-policy-v1",
+            "origin": "TECHNOCORE_MESSAGE", "source_id": "fixture",
+            "observed_at": "2026-09-03T00:00:00Z", "trust_tier": "TIER_2_UNSIGNED_COMMUNITY",
+            "freshness": "UNKNOWN", "length": 4, "content_sha256": "b" * 64,
+            "classifications": ["PLAIN_TEXT"],
+        }), [])
         self.assertEqual(scanner.remote_evidence_raw_fields({
             "content_origin": "TYPED_LOCAL", "text_after_sweep": "local"
         }), [])

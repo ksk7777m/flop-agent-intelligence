@@ -9,6 +9,8 @@ that an identical URL discovered in remote text remains inert.
 from __future__ import annotations
 
 import hashlib
+import base64
+import binascii
 import re
 import urllib.error
 import urllib.request
@@ -18,6 +20,9 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, TypeVar
 from urllib.parse import urlparse
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
 POLICY_VERSION = "technocore-untrusted-input-policy-v1"
@@ -166,6 +171,10 @@ class UntrustedRemoteValue:
 
 @dataclass(frozen=True)
 class HumanApprovalEvidence:
+    """Non-authoritative display evidence retained for compatibility.
+
+    Caller-provided fields are never accepted as a local capability.
+    """
     reviewer: str
     approved_at: str
     purpose: str
@@ -224,6 +233,7 @@ class ReviewedSource:
 
 _REVIEWED_AUTHORITY = object()
 _LOCAL_AUTHORITY = object()
+_LOCAL_APPROVAL_AUTHORITY = object()
 _REVIEWED_SOURCES: Mapping[ReviewedSourceId, ReviewedSource] = MappingProxyType({
     ReviewedSourceId.TECHNOCORE_README: ReviewedSource(ReviewedSourceId.TECHNOCORE_README, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/README.md"),
     ReviewedSourceId.TECHNOCORE_SECURITY: ReviewedSource(ReviewedSourceId.TECHNOCORE_SECURITY, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/SECURITY.md"),
@@ -265,6 +275,11 @@ class LocalActionClass(str, Enum):
 class ReviewedLocalIntent:
     action: LocalActionClass
     subject_sha256: str
+    target_sha256: str
+    payload_sha256: str
+    revision: str
+    config_version: str
+    approval_id: str
     purpose: str
     _authority: object = field(repr=False, compare=False)
 
@@ -273,25 +288,104 @@ class ReviewedLocalIntent:
             raise PermissionError("local authority cannot be caller-constructed")
         if not re.fullmatch(r"[0-9a-f]{64}", self.subject_sha256):
             raise ValueError("local intent requires a SHA-256 subject binding")
+        if (not re.fullmatch(r"[0-9a-f]{64}", self.target_sha256)
+                or not re.fullmatch(r"[0-9a-f]{64}", self.payload_sha256)
+                or not self.config_version or not self.approval_id):
+            raise ValueError("local intent requires complete immutable bindings")
+        if (self.action is not LocalActionClass.PRESENCE_NOTE_READ
+                and not re.fullmatch(r"[0-9a-f]{40}", self.revision)):
+            raise ValueError("sensitive local intent requires an exact revision")
+
+
+@dataclass(frozen=True)
+class _ValidatedLocalApproval:
+    approval_id: str
+    reviewer: str
+    approved_at: str
+    action: LocalActionClass
+    subject_sha256: str
+    target_sha256: str
+    payload_sha256: str
+    revision: str
+    config_version: str
+    purpose: str
+    _authority: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._authority is not _LOCAL_APPROVAL_AUTHORITY:
+            raise PermissionError("validated approval cannot be caller-constructed")
+
+
+# Sensitive approvals are deliberately empty until a separately reviewed local
+# approval store exists. JSON, CLI fields, and remote records cannot populate it.
+_TRUSTED_LOCAL_REVIEWERS = frozenset()
+_LOCAL_APPROVAL_RECORDS: Mapping[str, Mapping[str, str]] = MappingProxyType({})
+
+
+def _parse_approval_time(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as error:
+        raise PermissionError("approval timestamp is invalid") from error
+    if parsed.tzinfo is None:
+        raise PermissionError("approval timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def trusted_local_intent(approval_id: str, action: LocalActionClass, subject: str, *,
+                         target: str, payload: str, revision: str, config_version: str,
+                         purpose: str) -> ReviewedLocalIntent:
+    """Mint a sensitive capability only from the immutable local approval store."""
+    record = _LOCAL_APPROVAL_RECORDS.get(approval_id)
+    if record is None:
+        raise PermissionError("approval is not present in the trusted local store")
+    if not isinstance(action, LocalActionClass) or action is LocalActionClass.PRESENCE_NOTE_READ:
+        raise PermissionError("sensitive action class required")
+    if (not re.fullmatch(r"[0-9a-f]{40}", revision)
+            or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", config_version)
+            or not target or not payload or not purpose.strip()):
+        raise PermissionError("approval binding inputs are malformed")
+    approved_at = _parse_approval_time(record.get("approved_at", ""))
+    current = _parse_approval_time(utc_now())
+    age = (current - approved_at).total_seconds()
+    if age < 0 or age > 900:
+        raise PermissionError("approval is stale or future-dated")
+    bindings = {
+        "action": action.value,
+        "subject_sha256": hashlib.sha256(subject.encode()).hexdigest(),
+        "target_sha256": hashlib.sha256(target.encode()).hexdigest(),
+        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+        "revision": revision,
+        "config_version": config_version,
+        "purpose": purpose,
+    }
+    if record.get("reviewer") not in _TRUSTED_LOCAL_REVIEWERS:
+        raise PermissionError("approval reviewer is not trusted local configuration")
+    if any(record.get(key) != value for key, value in bindings.items()):
+        raise PermissionError("approval does not exactly bind this action")
+    validated = _ValidatedLocalApproval(
+        approval_id, record["reviewer"], record["approved_at"], action,
+        bindings["subject_sha256"], bindings["target_sha256"], bindings["payload_sha256"],
+        revision, config_version, purpose, _LOCAL_APPROVAL_AUTHORITY,
+    )
+    return ReviewedLocalIntent(
+        action, validated.subject_sha256, validated.target_sha256,
+        validated.payload_sha256, revision, config_version, approval_id, purpose,
+        _LOCAL_AUTHORITY,
+    )
 
 
 def reviewed_local_intent(action: LocalActionClass, subject: str, purpose: str, *,
                           approval: HumanApprovalEvidence | None = None) -> ReviewedLocalIntent:
+    """Create the sole public low-risk intent: a bounded Presence note read."""
     if not isinstance(action, LocalActionClass) or not purpose.strip():
         raise ValueError("reviewed local intent requires a known action and purpose")
     subject_sha256 = hashlib.sha256(subject.encode()).hexdigest()
-    approval_required = action in {
-        LocalActionClass.SIGNED_ROOM_POST, LocalActionClass.SIGNED_RECORD_LOOKUP,
-        LocalActionClass.DID_NOTE_CAS, LocalActionClass.LOCAL_ACTIVITY_RAW,
-    }
-    if approval_required and (
-        not isinstance(approval, HumanApprovalEvidence)
-        or approval.subject_sha256 != subject_sha256
-        or not approval.reviewer.strip()
-        or not approval.approved_at.strip()
-    ):
-        raise PermissionError("hash-bound typed human approval required for local authority")
-    return ReviewedLocalIntent(action, subject_sha256, purpose, _LOCAL_AUTHORITY)
+    if action is not LocalActionClass.PRESENCE_NOTE_READ or approval is not None:
+        raise PermissionError("sensitive intents require trusted stored local approval")
+    return ReviewedLocalIntent(
+        action, subject_sha256, subject_sha256, hashlib.sha256(b"").hexdigest(),
+        "STATIC_READ", POLICY_VERSION, "STATIC_PRESENCE_READ", purpose, _LOCAL_AUTHORITY)
 
 
 def require_local_intent(intent: ReviewedLocalIntent, action: LocalActionClass, subject: str) -> None:
@@ -466,48 +560,114 @@ def navigation_state(value: UntrustedRemoteValue) -> NavigationState:
 _SECRET_FIELD_RE = re.compile(
     r"(?:private[_-]?key|secret[_-]?key|seed(?:[_-]?phrase)?|mnemonic|signing[_-]?key|"
     r"wallet[_-]?key|x25519[_-]?private|api[_-]?key|ssh[_-]?key|password|token[_-]?secret)", re.I)
-_SECRET_VALUE_RE = re.compile(
-    r"BEGIN [A-Z ]*PRIVATE KEY|(?:private|secret|signing|wallet|api|ssh)[ _-]?key\s*[:=]|"
-    r"\b(?:private key|secret key|signing key|wallet key|api key|ssh key|seed phrase|mnemonic)\b", re.I)
-MCP_MAX_DEPTH = 2
 MCP_MAX_KEYS = 24
-MCP_MAX_STRING = 4096
+
+
+def _decode_base64url(value: str, expected_length: int) -> bytes | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (binascii.Error, ValueError):
+        return None
+    return decoded if len(decoded) == expected_length else None
+
+
+def _decode_base58btc(value: str) -> bytes | None:
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    if not value.startswith("z") or any(char not in alphabet for char in value[1:]):
+        return None
+    number = 0
+    for char in value[1:]:
+        number = number * 58 + alphabet.index(char)
+    decoded = number.to_bytes((number.bit_length() + 7) // 8, "big") if number else b""
+    leading = len(value[1:]) - len(value[1:].lstrip("1"))
+    return b"\0" * leading + decoded
+
+
+def _did_ed25519_key(value: str) -> bytes | None:
+    if not isinstance(value, str) or not value.startswith("did:key:z"):
+        return None
+    decoded = _decode_base58btc(value[len("did:key:"):])
+    if decoded is None or len(decoded) != 34 or decoded[:2] != b"\xed\x01":
+        return None
+    return decoded[2:]
+
+
+def _valid_public_key(value: Any, did_key: bytes) -> bool:
+    return (isinstance(value, Mapping)
+            and set(value) == {"type", "encoding", "value"}
+            and value.get("type") == "Ed25519VerificationKey2020"
+            and value.get("encoding") == "base64url"
+            and _decode_base64url(value.get("value", ""), 32) == did_key)
+
+
+def _valid_signature(value: Any) -> bool:
+    return (isinstance(value, Mapping)
+            and set(value) == {"algorithm", "encoding", "value"}
+            and value.get("algorithm") == "Ed25519"
+            and value.get("encoding") == "base64url"
+            and _decode_base64url(value.get("value", ""), 64) is not None)
+
+
+def _valid_signed_envelope(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema", "context", "public_did", "public_key", "payload_sha256", "signature"
+    }:
+        return False
+    public_key = _did_ed25519_key(value.get("public_did", ""))
+    if (value.get("schema") != "flop-public-signed-evidence-v1"
+            or value.get("context") != "FLOP_PUBLIC_EVIDENCE"
+            or public_key is None
+            or not _valid_public_key(value.get("public_key"), public_key)
+            or not isinstance(value.get("payload_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value["payload_sha256"])
+            or not _valid_signature(value.get("signature"))):
+        return False
+    signature = _decode_base64url(value["signature"]["value"], 64)
+    signed = b"FLOP_PUBLIC_EVIDENCE\0" + value["payload_sha256"].encode("ascii")
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key).verify(signature, signed)
+    except (InvalidSignature, ValueError):
+        return False
+    return True
 
 
 def authorize_remote_mcp_payload(payload: Mapping[str, Any]) -> ActionDecision:
-    """Permit only an explicitly small, public evidence vocabulary."""
-    allowed = {"public_did", "public_key", "signature", "signed_envelope", "content_sha256", "evidence_sha256"}
-    envelope_allowed = allowed - {"signed_envelope"}
-    count = 0
-
-    def validate(value: Any, depth: int, names: set[str]) -> bool:
-        nonlocal count
-        if depth > MCP_MAX_DEPTH or not isinstance(value, Mapping):
-            return False
-        if not value:
-            return False
-        count += len(value)
-        if count > MCP_MAX_KEYS:
-            return False
-        for key, child in value.items():
-            if not isinstance(key, str) or key not in names or _SECRET_FIELD_RE.search(key):
-                return False
-            if key == "signed_envelope":
-                if (not isinstance(child, Mapping)
-                        or not {"signature", "content_sha256"} <= set(child)
-                        or not validate(child, depth + 1, envelope_allowed)):
-                    return False
-            elif not isinstance(child, str) or len(child) > MCP_MAX_STRING or _SECRET_VALUE_RE.search(child):
-                return False
-            elif key.endswith("sha256") and not re.fullmatch(r"[0-9a-f]{64}", child):
-                return False
-            elif key == "public_did" and not re.fullmatch(r"did:key:[A-Za-z0-9._:-]{8,500}", child):
-                return False
-            elif key in {"public_key", "signature"} and not re.fullmatch(r"[A-Za-z0-9_-]{16,1024}", child):
-                return False
-        return True
-
-    if not validate(payload, 0, allowed):
+    """Validate exact public-material schemas; never infer custody from a field name."""
+    if not isinstance(payload, Mapping) or not payload or len(payload) > MCP_MAX_KEYS:
+        valid = False
+    else:
+        allowed = {"public_did", "public_key", "content_sha256", "evidence_sha256",
+                   "public_receipt_id", "status", "signed_envelope", "evidence"}
+        valid = set(payload) <= allowed and not any(_SECRET_FIELD_RE.search(str(k)) for k in payload)
+        for key in ("content_sha256", "evidence_sha256"):
+            if key in payload:
+                valid = valid and isinstance(payload[key], str) and bool(re.fullmatch(r"[0-9a-f]{64}", payload[key]))
+        if "public_receipt_id" in payload:
+            valid = valid and isinstance(payload["public_receipt_id"], str) and bool(re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", payload["public_receipt_id"]))
+        if "status" in payload:
+            valid = valid and payload["status"] in {"OBSERVED", "VERIFIED", "REJECTED", "UNKNOWN"}
+        did_key = _did_ed25519_key(payload.get("public_did", "")) if "public_did" in payload else None
+        if "public_did" in payload:
+            valid = valid and did_key is not None
+        if "public_key" in payload:
+            valid = valid and did_key is not None and _valid_public_key(payload["public_key"], did_key)
+        if "signed_envelope" in payload:
+            envelope = payload["signed_envelope"]
+            valid = valid and _valid_signed_envelope(envelope)
+        if "evidence" in payload:
+            evidence = payload["evidence"]
+            valid = valid and isinstance(evidence, Mapping) and set(evidence) <= {
+                "schema", "content_sha256", "evidence_sha256", "public_did",
+                "public_receipt_id", "status"
+            } and evidence.get("schema") == "flop-public-evidence-v1"
+            if valid:
+                nested = dict(evidence)
+                nested.pop("schema")
+                nested_decision = authorize_remote_mcp_payload(nested)
+                valid = nested_decision.decision is DecisionCode.REQUIRE_HUMAN_APPROVAL
+    if not valid:
         return ActionDecision(False, DecisionCode.DENY_MCP_CUSTODY, SinkClass.MCP_INVOCATION,
                               "payload contains secret, oversized, malformed, or unrecognized material")
     return ActionDecision(False, DecisionCode.REQUIRE_HUMAN_APPROVAL, SinkClass.MCP_INVOCATION,
@@ -520,7 +680,6 @@ class ContractEvidenceRecord:
     source_id: ReviewedSourceId
     artifact_sha256: str
     observed_at: str
-    independent_source_id: str
     exact_artifact_verified: bool
 
     def __post_init__(self) -> None:
@@ -530,8 +689,7 @@ class ContractEvidenceRecord:
             raise ValueError("contract evidence requires an internal reviewed source ID")
         if not re.fullmatch(r"[0-9a-f]{64}", self.artifact_sha256):
             raise ValueError("contract evidence requires an exact artifact hash")
-        if not self.observed_at.strip() or not self.independent_source_id.strip():
-            raise ValueError("contract evidence requires timestamp and independent identity")
+        _parse_approval_time(self.observed_at)
 
 
 @dataclass(frozen=True)
@@ -542,6 +700,20 @@ class ContractEvidenceBundle:
 
 
 _CONTRACT_EVIDENCE_BUNDLES: Mapping[str, ContractEvidenceBundle] = MappingProxyType({})
+_SOURCE_PROVENANCE_ROOTS: Mapping[ReviewedSourceId, str] = MappingProxyType({
+    source_id: (
+        "TECHNOCORE_PROJECT" if source_id.name.startswith("TECHNOCORE_") else
+        "FLOP_AGENT_PROJECT" if source_id in {
+            ReviewedSourceId.PUBLIC_REPOSITORY_API, ReviewedSourceId.ORIGINAL_COMMIT_API,
+            ReviewedSourceId.DASHBOARD_COMMIT_API, ReviewedSourceId.PUBLIC_DASHBOARD,
+            ReviewedSourceId.PUBLIC_EVIDENCE,
+        } else
+        "FLOP_FINANCE" if source_id in {
+            ReviewedSourceId.FLOP_FINANCE, ReviewedSourceId.FLOP_FINANCE_TEASER,
+        } else
+        source_id.value
+    ) for source_id in ReviewedSourceId
+})
 
 
 def _derive_contract_records(records: tuple[ContractEvidenceRecord, ...], contract: str,
@@ -554,8 +726,11 @@ def _derive_contract_records(records: tuple[ContractEvidenceRecord, ...], contra
     official = [record for record in exact if record.source_id in _REVIEWED_SOURCES]
     if not official:
         return ContractProvenance.UNVERIFIED
-    identities = {record.independent_source_id for record in official}
-    if len(identities) < 2:
+    # Independence is derived solely from immutable reviewed-source provenance
+    # and canonical artifact hashes. Caller labels cannot affect the count.
+    provenance_roots = {_SOURCE_PROVENANCE_ROOTS[record.source_id] for record in official}
+    artifact_hashes = {record.artifact_sha256 for record in official}
+    if len(provenance_roots) < 2 or len(artifact_hashes) < 2:
         return ContractProvenance.OFFICIAL_SOURCE_REFERENCED
     if not approved_for_testnet_use:
         return ContractProvenance.MULTI_SOURCE_CONFIRMED

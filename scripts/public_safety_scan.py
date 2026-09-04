@@ -50,19 +50,81 @@ REMOTE_EVIDENCE_RAW_FIELDS = {
     "input_text", "text_after_sweep", "message", "message_body", "topic",
     "nickname", "note_value", "response_body", "raw_body", "raw_value",
 }
+REMOTE_ORIGINS = {"REMOTE_OR_UNKNOWN", "REMOTE_TECHNOCORE", "REMOTE"}
+REMOTE_SOURCE_ORIGINS = {
+    "TECHNOCORE_ROOM", "TECHNOCORE_TOPIC", "TECHNOCORE_MESSAGE", "TECHNOCORE_NICK",
+    "TECHNOCORE_KV_NAMESPACE", "TECHNOCORE_KV_KEY", "TECHNOCORE_KV_VALUE",
+    "TECHNOCORE_MAILBOX", "TECHNOCORE_DID_NOTE", "FETCHED_CONTENT", "HTTP_ERROR_BODY",
+    "REMOTE_DISCOVERED_URL", "REMOTE_FIXTURE",
+}
+REMOTE_ACTIVITY_FIELDS = {
+    "activity_type", "proof_type", "official_status", "source", "did_sha256",
+    "room_length", "room_sha256", "seq", "timestamp", "source_timestamp_sha256",
+    "content_origin", "content_length", "content_sha256", "classifications",
+    "source_id", "verification_method", "persistence", "recorded_at",
+}
+REMOTE_SUMMARY_FIELDS = {
+    "policy_version", "origin", "source_id", "observed_at", "trust_tier",
+    "freshness", "length", "content_sha256", "classifications",
+}
+
+
+def _valid_remote_metadata(key: str, value) -> bool:
+    if key.endswith("_sha256"):
+        return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    if key in {"length", "content_length", "room_length", "seq"}:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    if key == "classifications":
+        return (isinstance(value, list) and len(value) <= 32
+                and all(isinstance(item, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", item)
+                        for item in value))
+    if key == "content_origin": return value in REMOTE_ORIGINS
+    if key == "activity_type": return value == "remote_observation"
+    if key == "proof_type": return value == "signed_message"
+    if key == "official_status": return value == "UNVERIFIED"
+    if key == "source": return value == "technocore.chat"
+    if key == "source_id": return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9:_./-]{1,128}", value) is not None
+    if key in {"timestamp", "observed_at", "recorded_at"}:
+        return isinstance(value, str) and len(value) <= 40 and "T" in value
+    if key == "policy_version": return value == "technocore-untrusted-input-policy-v1"
+    if key == "origin": return isinstance(value, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", value) is not None
+    if key in {"trust_tier", "freshness"}:
+        return isinstance(value, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", value) is not None
+    if key == "verification_method":
+        return value == "Ed25519 over UTF-8 room|nonce|text_after_sweep; server-verified DID"
+    if key == "persistence":
+        return value == "Technocore room ring; local JSONL is the retained receipt"
+    return False
 
 
 def remote_evidence_raw_fields(value, inherited_remote: bool = False) -> list[str]:
     findings: list[str] = []
     if isinstance(value, dict):
-        remote = inherited_remote or value.get("content_origin") in {
-            "REMOTE_OR_UNKNOWN", "REMOTE_TECHNOCORE", "REMOTE"
-        }
+        keys = set(value)
+        direct_remote = (value.get("content_origin") in REMOTE_ORIGINS
+                         or (value.get("source") == "technocore.chat"
+                             and value.get("official_status") == "UNVERIFIED"
+                             and {"content_sha256", "classifications"} <= keys))
+        summary_remote = (value.get("policy_version") == "technocore-untrusted-input-policy-v1"
+                          or value.get("origin") in REMOTE_SOURCE_ORIGINS
+                          or {"origin", "source_id", "length", "content_sha256",
+                              "classifications"} <= keys)
+        remote = inherited_remote or direct_remote or summary_remote
+        schema = REMOTE_ACTIVITY_FIELDS if direct_remote else REMOTE_SUMMARY_FIELDS
+        if direct_remote:
+            for missing in {"content_origin", "content_length", "content_sha256",
+                            "classifications", "source_id"} - keys:
+                findings.append(f"<missing:{missing}>")
+        elif summary_remote:
+            for missing in {"origin", "source_id", "observed_at", "length",
+                            "content_sha256", "classifications"} - keys:
+                findings.append(f"<missing:{missing}>")
         for key, child in value.items():
-            if (remote and key.lower() in REMOTE_EVIDENCE_RAW_FIELDS
-                    and child is not None and child != ""):
-                findings.append(key)
-            findings.extend(remote_evidence_raw_fields(child, remote))
+            if remote and child is not None and child != "":
+                if key not in schema or not _valid_remote_metadata(key, child):
+                    findings.append(key)
+            # Approved metadata objects do not permit arbitrary nested objects.
+            findings.extend(remote_evidence_raw_fields(child, remote and key not in schema))
     elif isinstance(value, list):
         for child in value:
             findings.extend(remote_evidence_raw_fields(child, inherited_remote))
@@ -229,18 +291,11 @@ def scan() -> list[str]:
 
         def visit(value, remote_record=False):
             if isinstance(value, dict):
-                remote_record = remote_record or value.get("content_origin") in {
-                    "REMOTE_OR_UNKNOWN", "REMOTE_TECHNOCORE", "REMOTE"
-                }
+                remote_record = remote_record or value.get("content_origin") in REMOTE_ORIGINS
                 for key, child in value.items():
                     if key.lower() in RAW_FIELDS:
                         findings.append(
                             f"{path.relative_to(ROOT)}: raw-value-shaped public field {key}"
-                        )
-                    if (remote_record and key.lower() in REMOTE_EVIDENCE_RAW_FIELDS
-                            and child is not None and child != ""):
-                        findings.append(
-                            f"{path.relative_to(ROOT)}: raw remote evidence field {key}"
                         )
                     visit(child, remote_record)
             elif isinstance(value, list):

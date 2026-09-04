@@ -6,8 +6,8 @@ from unittest import mock
 from pathlib import Path
 
 from flop_agent.kv_observatory import (
-    ApiContractError, ConfigError, NamespaceConfig, Observer, Store,
-    _NoRedirect, current_read_interval, load_config, note_value, official_get,
+    ApiContractError, ConfigError, NamespaceConfig, ObservedRemoteKey, Observer, Store,
+    _NoRedirect, _reviewed_kv_read_target, current_read_interval, load_config, note_value, official_get,
     parse_key_list, recover_snapshot_output, sanitize_retry_after, trust_class, write_snapshots,
 )
 
@@ -46,12 +46,42 @@ class KVObservatoryTests(unittest.TestCase):
             with self.assertRaises(ConfigError): load_config(bad)
 
     def test_no_global_guessing_and_full_list_parsing(self):
-        self.assertEqual(parse_key_list('{"ns":"lobby","keys":["b","a"]}', "lobby"), ["a", "b"])
+        parsed = parse_key_list('{"ns":"lobby","keys":["b","a"]}', "lobby")
+        self.assertEqual(parsed, ["a", "b"])
+        self.assertTrue(all(isinstance(key, ObservedRemoteKey) for key in parsed))
         urls = []
         def get(url):
             urls.append(url); return 200, '{"ns":"lobby","keys":[]}', {}
         Observer(self.configs, self.store, get).poll("2026-01-01T00:00:00Z")
         self.assertEqual(urls, ["https://technocore.chat/kv/lobby?format=json"])
+        with self.assertRaises(PermissionError):
+            _reviewed_kv_read_target(self.configs[0], "hb-caller")
+        with self.assertRaises(PermissionError):
+            _reviewed_kv_read_target(NamespaceConfig("other", key_prefixes=("hb-",)), parsed[0])
+
+    def test_remote_key_is_inert_until_explicit_local_prefix_policy_authorizes_it(self):
+        calls = []
+        def get(url):
+            calls.append(str(url))
+            if "?format=json" in url:
+                return 200, '{"ns":"lobby","keys":["attacker-path"]}', {}
+            return 200, BANNER + "value", {}
+        discovery_only = NamespaceConfig("lobby", "UNKNOWN", ())
+        result = Observer([discovery_only], self.store, get).poll("2026-01-01T00:00:00Z")
+        self.assertEqual(result["successful"], 1)
+        self.assertEqual(calls, ["https://technocore.chat/kv/lobby?format=json"])
+
+        calls.clear()
+        def reviewed_get(url):
+            calls.append(str(url))
+            if "?format=json" in url:
+                return 200, '{"ns":"lobby","keys":["hb-reviewed"]}', {}
+            return 200, BANNER + "value", {}
+        Observer(self.configs, self.store, reviewed_get).poll("2026-01-02T00:00:00Z")
+        self.assertEqual(calls, [
+            "https://technocore.chat/kv/lobby?format=json",
+            "https://technocore.chat/kv/lobby/hb-reviewed",
+        ])
 
     def test_cardinality_budget_fails_before_value_reads(self):
         config = [NamespaceConfig("lobby", "PRESENCE", ("hb-",), 1)]

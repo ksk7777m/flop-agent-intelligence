@@ -60,6 +60,21 @@ class NamespaceConfig:
     max_keys: int = 1000
 
 
+_OBSERVED_KEY_AUTHORITY = object()
+
+
+class ObservedRemoteKey(str):
+    """A grammar-checked key name observed in an untrusted remote listing."""
+
+    def __new__(cls, key: str, namespace: str, authority: object):
+        if authority is not _OBSERVED_KEY_AUTHORITY:
+            raise PermissionError("observed keys can only come from the listing parser")
+        value = str.__new__(cls, key)
+        value.namespace = namespace
+        value._authority = authority
+        return value
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -97,7 +112,7 @@ def load_config(path: Path) -> list[NamespaceConfig]:
     return result
 
 
-def parse_key_list(body: str, namespace: str) -> list[str]:
+def parse_key_list(body: str, namespace: str) -> list[ObservedRemoteKey]:
     """Parse the complete, non-paginated key list; never discover namespaces."""
     try:
         payload = json.loads(body)
@@ -112,9 +127,11 @@ def parse_key_list(body: str, namespace: str) -> list[str]:
         raise ApiContractError("listing contained malformed or private key")
     if len(keys) != len(set(keys)):
         raise ApiContractError("listing contained duplicate keys")
+    observed = []
     for key in keys:
         discovered_remote_value(key, RemoteOrigin.TECHNOCORE_KV_KEY, f"kv:{namespace}")
-    return sorted(keys)
+        observed.append(ObservedRemoteKey(key, namespace, _OBSERVED_KEY_AUTHORITY))
+    return sorted(observed)
 
 
 def note_value(body: str) -> str:
@@ -312,19 +329,33 @@ class ReviewedKvTarget(str):
         return value
 
 
-def _kv_target(namespace: str | None = None, key: str | None = None, *, manifest: bool = False) -> ReviewedKvTarget:
+def _kv_target(namespace: str | None = None, *, manifest: bool = False) -> ReviewedKvTarget:
     if manifest:
         return ReviewedKvTarget(f"{OFFICIAL_ORIGIN}/.well-known/agent.json", _KV_TARGET_AUTHORITY)
     if not namespace or not NAME_RE.fullmatch(namespace) or PRIVATE_RE.match(namespace):
         raise ApiContractError("invalid locally configured KV namespace")
-    suffix = f"/kv/{quote(namespace, safe='')}"
-    if key is None:
-        suffix += "?format=json"
-    else:
-        if not NAME_RE.fullmatch(key) or PRIVATE_RE.match(key):
-            raise ApiContractError("invalid reviewed KV key")
-        suffix += f"/{quote(key, safe='')}"
+    suffix = f"/kv/{quote(namespace, safe='')}?format=json"
     return ReviewedKvTarget(OFFICIAL_ORIGIN + suffix, _KV_TARGET_AUTHORITY)
+
+
+def _reviewed_kv_read_target(config: NamespaceConfig,
+                             key: ObservedRemoteKey) -> ReviewedKvTarget:
+    """Apply an explicit local namespace/prefix policy to an inert observed key."""
+    if (not isinstance(config, NamespaceConfig)
+            or not isinstance(key, ObservedRemoteKey)
+            or getattr(key, "_authority", None) is not _OBSERVED_KEY_AUTHORITY
+            or key.namespace != config.name):
+        raise PermissionError("KV value reads require a key from the matching listing")
+    # An empty prefix list is discovery-only.  Merely appearing in a remote
+    # listing never supplies fetch authority.
+    if not config.key_prefixes or not key.startswith(config.key_prefixes):
+        raise PermissionError("observed KV key is not covered by local fetch policy")
+    if not NAME_RE.fullmatch(key) or PRIVATE_RE.match(key):
+        raise ApiContractError("invalid reviewed KV key")
+    return ReviewedKvTarget(
+        f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}/{quote(key, safe='')}",
+        _KV_TARGET_AUTHORITY,
+    )
 
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl): return None
@@ -398,13 +429,16 @@ class Observer:
                 result["failed"] += 1
                 continue
             try:
-                keys = [k for k in parse_key_list(body, config.name)
-                        if not config.key_prefixes or k.startswith(config.key_prefixes)]
-                if len(keys) > config.max_keys:
+                observed_keys = parse_key_list(body, config.name)
+                if len(observed_keys) > config.max_keys:
                     raise ApiContractError("configured local key budget exceeded")
                 hashes = {}
-                for key in keys:
-                    code, value_body, value_headers = self._get(_kv_target(config.name, key))
+                for key in observed_keys:
+                    try:
+                        target = _reviewed_kv_read_target(config, key)
+                    except PermissionError:
+                        continue
+                    code, value_body, value_headers = self._get(target)
                     if code == 429:
                         raise RateLimited(sanitize_retry_after(value_headers.get("Retry-After")))
                     if code != 200:

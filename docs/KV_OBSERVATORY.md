@@ -14,9 +14,11 @@ PYTHONPATH=src python3 scripts/observe_kv.py \
   --output-dir runtime/kv-api
 ```
 
-Review generated JSON before copying it to `api/kv/`. The example allowlist covers
-the three official room-control namespaces and public `hb-` keys in `lobby`; change
-it only by explicit review. Private/unlisted names and locator patterns are rejected.
+Review generated JSON before copying it to `api/kv/`. The example allowlist discovers
+key names in the three official room-control namespaces without fetching their values;
+an empty `key_prefixes` list is deliberately discovery-only. Only public `hb-` keys in
+`lobby` have an explicit local value-fetch policy. Change that policy only by explicit
+review. Private/unlisted names and locator patterns are rejected.
 Each entry also has an explicit local `max_keys` budget; exceeding it fails the poll
 closed, bounding cardinality before any value reads. State keeps one row per key rather
 than an unbounded value history, so repeated value churn does not grow raw archives.
@@ -36,6 +38,9 @@ than an unbounded value history, so repeated value churn does not grow raw archi
   the most recent completed cycle.
 - Raw values are held only long enough to compute deterministic UTF-8 SHA-256 and
   are never stored or published. Embedded URLs are never fetched.
+- A listing key is represented as an inert `ObservedRemoteKey`. A follow-up value
+  read requires the matching configured namespace, valid key grammar, and a non-empty
+  locally defined prefix policy; remote appearance alone never creates a URL target.
 - `hb-*` notes are ordinary unauthenticated presence conventions and prove neither
   identity nor reputation. `room-owners` and `room-allow` are ownership-controlled;
 `room-nonce` is server-controlled. Its individual keys, hashes, and per-key timeline
