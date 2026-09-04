@@ -1,5 +1,6 @@
 import io
 import base64
+import copy
 import hashlib
 import json
 import subprocess
@@ -7,13 +8,14 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
+from datetime import datetime, timezone
 from unittest import mock
 
 import jsonschema
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from flop_agent.activity import append_activity
+from flop_agent.activity import append_activity, _append_activity_at_configured_paths
 from flop_agent.remote_content_policy import (
     ContractProvenance,
     ContractEvidenceRecord,
@@ -27,8 +29,11 @@ from flop_agent.remote_content_policy import (
     SinkClass,
     SourceTrustTier,
     ReviewedLocalIntent,
+    ReviewedContractEvidence,
     ReviewedSource,
     ReviewedSourceId,
+    _new_capability_store,
+    _new_evidence_store,
     _derive_contract_records,
     authorize_remote_mcp_payload,
     authorize_sink,
@@ -219,7 +224,9 @@ class RemoteContentPolicyTests(unittest.TestCase):
         signer_calls = []
         with mock.patch.object(technocore, "load_identity", side_effect=lambda *_: signer_calls.append("key")):
             with self.assertRaises(PermissionError):
-                technocore.post_signed(Path("unused"), "lobby", "payload", intent=value,
+                technocore.post_signed(
+                    Path("unused"), "lobby", "payload", intent=value, revision="a" * 40,
+                    config_version="v1", context="test",
                                        signer=lambda *_: signer_calls.append("sign"))
         self.assertEqual(signer_calls, [])
 
@@ -287,7 +294,7 @@ class RemoteContentPolicyTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             jsonl, markdown = Path(directory) / "activity.jsonl", Path(directory) / "activity.md"
-            append_activity(jsonl, markdown, "lobby", message,
+            _append_activity_at_configured_paths(jsonl, markdown, "lobby", message,
                             evidence={"content_origin": "trusted_local"})
             combined = jsonl.read_text() + markdown.read_text()
             self.assertNotIn("secret fixture", combined)
@@ -302,7 +309,7 @@ class RemoteContentPolicyTests(unittest.TestCase):
                    "ts": "2026-09-03T00:00:00Z", "text": "approved outbound"}
         with tempfile.TemporaryDirectory() as directory:
             jsonl, markdown = Path(directory) / "activity.jsonl", Path(directory) / "activity.md"
-            append_activity(jsonl, markdown, "lobby", message,
+            _append_activity_at_configured_paths(jsonl, markdown, "lobby", message,
                             evidence={"note_value": "remote note secret fixture"})
             record = json.loads(jsonl.read_text())
             self.assertNotIn("note_value", record)
@@ -326,60 +333,58 @@ class RemoteContentPolicyTests(unittest.TestCase):
                 config_version="v1", purpose="offline local fixture")
         with tempfile.TemporaryDirectory() as directory:
             jsonl, markdown = Path(directory) / "activity.jsonl", Path(directory) / "activity.md"
-            append_activity(jsonl, markdown, "lobby", message, output_scope="LOCAL_ONLY")
+            _append_activity_at_configured_paths(
+                jsonl, markdown, "lobby", message, output_scope="LOCAL_ONLY")
             self.assertNotIn(message["text"], jsonl.read_text())
 
     def test_sensitive_intent_is_exactly_bound_to_trusted_stored_approval(self):
         from flop_agent import remote_content_policy as policy
         subject, target, payload = "lobby\0approved text", "lobby", "approved text"
         revision, config_version = "a" * 40, "publisher-v1"
+        now = datetime(2026, 9, 3, 0, 5, tzinfo=timezone.utc)
         record = {
             "reviewer": "configured-reviewer", "approved_at": "2026-09-03T00:00:00Z",
             "action": LocalActionClass.SIGNED_ROOM_POST.value,
             "subject_sha256": hashlib.sha256(subject.encode()).hexdigest(),
             "target_sha256": hashlib.sha256(target.encode()).hexdigest(),
             "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+            "context_sha256": hashlib.sha256(b"exact publication").hexdigest(),
             "revision": revision, "config_version": config_version,
-            "purpose": "exact publication",
         }
+        issue, require = _new_capability_store(
+            {"approved-1": record}, frozenset({"configured-reviewer"}), lambda: now)
+        intent = issue(
+            "approved-1", LocalActionClass.SIGNED_ROOM_POST, subject,
+            target=target, payload=payload, context="exact publication", revision=revision,
+            config_version=config_version)
+        require(intent, LocalActionClass.SIGNED_ROOM_POST, subject, target=target,
+                payload=payload, context="exact publication", revision=revision,
+                config_version=config_version, consume=True)
+        with self.assertRaises(PermissionError):
+            require(intent, LocalActionClass.SIGNED_ROOM_POST, subject, target=target,
+                    payload=payload, context="exact publication", revision=revision,
+                    config_version=config_version, consume=True)
+        for changed in ({"target": "other"}, {"payload": "other"},
+                        {"action": LocalActionClass.PAYMENT}):
+            fresh = issue(
+                "approved-1", LocalActionClass.SIGNED_ROOM_POST, subject,
+                target=target, payload=payload, context="exact publication", revision=revision,
+                config_version=config_version)
+            args = {"action": LocalActionClass.SIGNED_ROOM_POST, "target": target,
+                    "payload": payload, **changed}
+            with self.assertRaises(PermissionError):
+                require(fresh, args["action"], subject, target=args["target"],
+                        payload=args["payload"], context="exact publication", revision=revision,
+                        config_version=config_version, consume=True)
+        with self.assertRaises(TypeError):
+            copy.copy(intent)
         with mock.patch.object(policy, "_TRUSTED_LOCAL_REVIEWERS", frozenset({"configured-reviewer"})), \
-             mock.patch.object(policy, "_LOCAL_APPROVAL_RECORDS", {"approved-1": record}), \
-             mock.patch.object(policy, "utc_now", return_value="2026-09-03T00:05:00Z"):
-            intent = trusted_local_intent(
+             mock.patch.object(policy, "_LOCAL_APPROVAL_RECORDS", {"approved-1": record}):
+            with self.assertRaises(PermissionError):
+                trusted_local_intent(
                 "approved-1", LocalActionClass.SIGNED_ROOM_POST, subject,
                 target=target, payload=payload, revision=revision,
                 config_version=config_version, purpose="exact publication")
-            require_local_intent(intent, LocalActionClass.SIGNED_ROOM_POST, subject)
-            for changed in (
-                {"subject": subject + "!"}, {"target": target + "-other"},
-                {"payload": payload + "!"}, {"revision": "b" * 40},
-                {"config_version": "publisher-v2"}, {"purpose": "generic signing"},
-            ):
-                args = {"subject": subject, "target": target, "payload": payload,
-                        "revision": revision, "config_version": config_version,
-                        "purpose": "exact publication", **changed}
-                with self.assertRaises(PermissionError), \
-                     mock.patch.object(policy, "utc_now", return_value="2026-09-03T00:05:00Z"):
-                    trusted_local_intent(
-                        "approved-1", LocalActionClass.SIGNED_ROOM_POST, args.pop("subject"),
-                        **args)
-            with self.assertRaises(PermissionError), \
-                 mock.patch.object(policy, "utc_now", return_value="2026-09-03T00:20:01Z"):
-                trusted_local_intent(
-                    "approved-1", LocalActionClass.SIGNED_ROOM_POST, subject,
-                    target=target, payload=payload, revision=revision,
-                    config_version=config_version, purpose="exact publication")
-            for field, value in (
-                ("reviewer", "caller-reviewer"), ("approved_at", "not-a-timestamp"),
-                ("action", LocalActionClass.DID_NOTE_CAS.value),
-            ):
-                bad_record = {**record, field: value}
-                with self.assertRaises(PermissionError), \
-                     mock.patch.object(policy, "_LOCAL_APPROVAL_RECORDS", {"approved-1": bad_record}):
-                    trusted_local_intent(
-                        "approved-1", LocalActionClass.SIGNED_ROOM_POST, subject,
-                        target=target, payload=payload, revision=revision,
-                        config_version=config_version, purpose="exact publication")
 
     def test_caller_manufactured_approval_never_reaches_signer_or_write(self):
         from flop_agent import technocore
@@ -393,6 +398,7 @@ class RemoteContentPolicyTests(unittest.TestCase):
                 LocalActionClass.SIGNED_ROOM_POST, subject, "sign anything", approval=approval)
             technocore.post_signed(
                 Path("unused"), "lobby", "payload", intent=intent,
+                revision="a" * 40, config_version="v1", context="sign anything",
                 signer=lambda *_: calls.append("sign"),
                 opener=lambda *_args, **_kwargs: calls.append("write"))
         self.assertEqual(calls, [])
@@ -466,7 +472,7 @@ class RemoteContentPolicyTests(unittest.TestCase):
             ContractEvidenceRecord("0x" + "2" * 40, ReviewedSourceId.TECHNOCORE_README,
                                    "b" * 64, "2026-09-03T00:00:00Z", True),
         )
-        self.assertEqual(_derive_contract_records(records, contract), ContractProvenance.CONFLICTING)
+        self.assertEqual(_derive_contract_records(records, contract), ContractProvenance.UNVERIFIED)
 
     def test_contract_independence_is_registry_derived_and_deduplicated(self):
         contract = "0x" + "1" * 40
@@ -480,16 +486,41 @@ class RemoteContentPolicyTests(unittest.TestCase):
             ContractEvidenceRecord(
                 contract, ReviewedSourceId.FLOP_FINANCE, "a" * 64,
                 "2026-09-03T00:00:00Z", True, independent_source_id="caller-label")
-        self.assertEqual(_derive_contract_records((one, one), contract),
+        for records in ((one, one), (one, alias), (one, distinct)):
+            self.assertEqual(_derive_contract_records(records, contract),
+                             ContractProvenance.UNVERIFIED)
+            with self.assertRaises(TypeError):
+                _derive_contract_records(records, contract, approved_for_testnet_use=True)
+        configured = {
+            "one": {"source_id": one.source_id.value, "contract": contract,
+                    "artifact_sha256": one.artifact_sha256, "observed_at": one.observed_at,
+                    "canonical_artifact_id": "flop-home-contract", "reviewed_at": one.observed_at,
+                    "provenance_root": "FLOP_FINANCE", "reviewer": "local-reviewer",
+                    "policy_version": "technocore-untrusted-input-policy-v1"},
+            "distinct": {"source_id": distinct.source_id.value, "contract": contract,
+                    "artifact_sha256": distinct.artifact_sha256,
+                    "observed_at": distinct.observed_at,
+                    "canonical_artifact_id": "technocore-readme-contract",
+                    "reviewed_at": distinct.observed_at,
+                    "provenance_root": "TECHNOCORE_PROJECT", "reviewer": "local-reviewer",
+                    "policy_version": "technocore-untrusted-input-policy-v1"},
+        }
+        issue, derive = _new_evidence_store(configured, {
+            "approved": {"contract": contract,
+                         "policy_version": "technocore-untrusted-input-policy-v1",
+                         "status": "APPROVED_FOR_TESTNET_USE"}})
+        reviewed_one, reviewed_distinct = issue("one", one), issue("distinct", distinct)
+        with self.assertRaises(PermissionError):
+            ReviewedContractEvidence(contract=contract, artifact_sha256="a" * 64)
+        with self.assertRaises(TypeError):
+            copy.copy(reviewed_one)
+        self.assertEqual(derive((reviewed_one, reviewed_one), contract),
                          ContractProvenance.OFFICIAL_SOURCE_REFERENCED)
-        self.assertEqual(_derive_contract_records((one, alias), contract),
-                         ContractProvenance.OFFICIAL_SOURCE_REFERENCED)
-        self.assertEqual(_derive_contract_records((one, distinct), contract),
+        self.assertEqual(derive((reviewed_one, reviewed_distinct), contract),
                          ContractProvenance.MULTI_SOURCE_CONFIRMED)
-        self.assertEqual(_derive_contract_records((one, one), contract,
-                         approved_for_testnet_use=True), ContractProvenance.OFFICIAL_SOURCE_REFERENCED)
-        self.assertEqual(_derive_contract_records((one, distinct), contract,
-                         approved_for_testnet_use=True), ContractProvenance.VERIFIED_FOR_TESTNET_USE)
+        self.assertEqual(derive((reviewed_one, reviewed_distinct), contract,
+                                approval_id="approved"),
+                         ContractProvenance.VERIFIED_FOR_TESTNET_USE)
 
     def test_real_sensitive_action_router_blocks_every_sink_classifier_independently(self):
         calls = {action: 0 for action in RemoteAction}

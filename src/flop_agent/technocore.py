@@ -78,9 +78,16 @@ def _request(source_id: ReviewedSourceId, *, opener: Any = None) -> Any:
 
 
 def _local_request(url: str, payload: Dict[str, Any] | None, *, intent: ReviewedLocalIntent,
-                   action: LocalActionClass, subject: str, opener: Any = None) -> Any:
+                   action: LocalActionClass, subject: str, target: str, capability_payload: str,
+                   context: str, revision: str, config_version: str, opener: Any = None) -> Any:
     """Perform an exact-origin request only after a hash-bound local capability."""
-    require_local_intent(intent, action, subject)
+    require_local_intent(intent, action, subject, target=target, payload=capability_payload,
+                         context=context, revision=revision, config_version=config_version)
+    return _authorized_local_request(url, payload, opener=opener)
+
+
+def _authorized_local_request(url: str, payload: Dict[str, Any] | None, *, opener: Any = None) -> Any:
+    """Internal transport called only after the public boundary consumed authority."""
     parsed = urllib.parse.urlparse(url)
     if (parsed.scheme != "https" or parsed.netloc != "technocore.chat"
             or parsed.username or parsed.password or parsed.fragment):
@@ -105,6 +112,8 @@ def read_presence_note(path: str, *, intent: ReviewedLocalIntent, opener: Any = 
     try:
         return _local_request(BASE_URL + path, None, intent=intent,
                               action=LocalActionClass.PRESENCE_NOTE_READ, subject=path,
+                              target=path, capability_payload="", context="presence-note-read",
+                              revision="0" * 40, config_version="technocore-read-v1",
                               opener=opener)
     except SafeRemoteError as error:
         if error.status == 404:
@@ -131,30 +140,35 @@ def conditional_note_payload(current: str, value: str) -> Dict[str, str]:
 
 
 def update_did_note_cas(current: str, value: str, *, intent: ReviewedLocalIntent,
+                        revision: str, config_version: str, context: str,
                         opener: Any = None) -> Any:
     """Update the configured DID Note only if its exact current value matches."""
     subject = current + "\0" + value
     return _local_request(BASE_URL + DID_NOTE_PATH, conditional_note_payload(current, value),
                           intent=intent, action=LocalActionClass.DID_NOTE_CAS,
-                          subject=subject, opener=opener)
+                          subject=subject, target=DID_NOTE_PATH, capability_payload=value,
+                          context=context, revision=revision, config_version=config_version,
+                          opener=opener)
 
 
 def post_signed(identity_path: Path, room: str, text: str, *, intent: ReviewedLocalIntent,
+                revision: str, config_version: str, context: str,
                 nonce: int | None = None, signer=sign_message, opener: Any = None) -> Dict[str, Any]:
     subject = room + "\0" + text
-    require_local_intent(intent, LocalActionClass.SIGNED_ROOM_POST, subject)
+    require_local_intent(intent, LocalActionClass.SIGNED_ROOM_POST, subject, target=room,
+                         payload=text, context=context, revision=revision,
+                         config_version=config_version)
     key, did = load_identity(identity_path)
     nonce = nonce or int(time.time_ns() // 1_000_000)
     signature, clean = signer(key, room, nonce, text)
     payload = {"did": did, "sig": signature, "nonce": str(nonce), "text": clean}
-    _local_request(f"{BASE_URL}/r/{urllib.parse.quote(room, safe='')}", payload,
-                   intent=intent, action=LocalActionClass.SIGNED_ROOM_POST,
-                   subject=subject, opener=opener)
+    _authorized_local_request(f"{BASE_URL}/r/{urllib.parse.quote(room, safe='')}", payload,
+                              opener=opener)
     # The live POST response may be the plain-text room view. Re-read JSON and
     # match all signed fields rather than parsing or trusting rendered content.
-    view = _local_request(f"{BASE_URL}/r/{urllib.parse.quote(room, safe='')}?limit=200&format=json", None,
-                          intent=intent, action=LocalActionClass.SIGNED_ROOM_POST,
-                          subject=subject, opener=opener)
+    view = _authorized_local_request(
+        f"{BASE_URL}/r/{urllib.parse.quote(room, safe='')}?limit=200&format=json", None,
+        opener=opener)
     if not isinstance(view, dict):
         raise RuntimeError("Technocore JSON verification read returned an unexpected shape")
     matches = [
@@ -174,15 +188,18 @@ def post_signed(identity_path: Path, room: str, text: str, *, intent: ReviewedLo
 
 
 def find_signed(identity_path: Path, room: str, text: str, *, intent: ReviewedLocalIntent,
+                revision: str, config_version: str, context: str,
                 opener: Any = None) -> Dict[str, Any]:
     """Recover a confirmed recent record without reposting it."""
     subject = room + "\0" + text
-    require_local_intent(intent, LocalActionClass.SIGNED_RECORD_LOOKUP, subject)
+    require_local_intent(intent, LocalActionClass.SIGNED_RECORD_LOOKUP, subject, target=room,
+                         payload=text, context=context, revision=revision,
+                         config_version=config_version)
     _, did = load_identity(identity_path)
     clean = text.strip()
-    view = _local_request(f"{BASE_URL}/r/{urllib.parse.quote(room, safe='')}?limit=200&format=json", None,
-                          intent=intent, action=LocalActionClass.SIGNED_RECORD_LOOKUP,
-                          subject=subject, opener=opener)
+    view = _authorized_local_request(
+        f"{BASE_URL}/r/{urllib.parse.quote(room, safe='')}?limit=200&format=json", None,
+        opener=opener)
     matches = [m for m in view.get("messages", []) if m.get("from") == did and m.get("text") == clean]
     if not matches:
         raise RuntimeError("signed record not found in recent room history")

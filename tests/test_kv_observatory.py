@@ -6,7 +6,7 @@ from unittest import mock
 from pathlib import Path
 
 from flop_agent.kv_observatory import (
-    ApiContractError, ConfigError, NamespaceConfig, ObservedRemoteKey, Observer, Store,
+    ApiContractError, ConfigError, NamespaceConfig, ObservedRemoteKey, Observer, ReviewedKvTarget, Store,
     _NoRedirect, _reviewed_kv_read_target, current_read_interval, load_config, note_value, official_get,
     parse_key_list, recover_snapshot_output, sanitize_retry_after, trust_class, write_snapshots,
 )
@@ -58,6 +58,35 @@ class KVObservatoryTests(unittest.TestCase):
             _reviewed_kv_read_target(self.configs[0], "hb-caller")
         with self.assertRaises(PermissionError):
             _reviewed_kv_read_target(NamespaceConfig("other", key_prefixes=("hb-",)), parsed[0])
+
+    def test_reconstructed_kv_target_never_reaches_http_but_reviewed_flow_does(self):
+        calls = []
+        for args in (("https://technocore.chat/kv/lobby/hb-caller",),
+                     ("https://technocore.chat/kv/lobby/hb-caller", object())):
+            with self.assertRaises(PermissionError):
+                ReviewedKvTarget(*args)
+        forged = str.__new__(ReviewedKvTarget, "https://technocore.chat/kv/lobby/hb-caller")
+        with self.assertRaises(ApiContractError):
+            official_get(forged)
+
+        class Response:
+            status, headers = 200, {}
+            def __init__(self, url): self.url = url
+            def __enter__(self): return self
+            def __exit__(self, *_): return None
+            def geturl(self): return self.url
+            def read(self, _limit): return b"{}"
+
+        class Opener:
+            def open(self, request, timeout):
+                calls.append(request.full_url)
+                return Response(request.full_url)
+
+        key = parse_key_list('{"ns":"lobby","keys":["hb-caller"]}', "lobby")[0]
+        target = _reviewed_kv_read_target(self.configs[0], key)
+        with mock.patch("flop_agent.kv_observatory.build_opener", return_value=Opener()):
+            self.assertEqual(official_get(target)[0], 200)
+        self.assertEqual(calls, ["https://technocore.chat/kv/lobby/hb-caller"])
 
     def test_remote_key_is_inert_until_explicit_local_prefix_policy_authorizes_it(self):
         calls = []

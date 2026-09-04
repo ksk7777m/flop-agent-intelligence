@@ -16,19 +16,47 @@ from .remote_content_policy import (
     require_local_intent,
 )
 
+_ROOT = Path(__file__).resolve().parents[2]
+_PUBLIC_ACTIVITY_JSONL = (_ROOT / "data/activity.jsonl").resolve()
+_PUBLIC_ACTIVITY_MARKDOWN = (_ROOT / "docs/ACTIVITY_LOG.md").resolve()
+
 
 def append_activity(
     jsonl_path: Path, markdown_path: Path, room: str, message: Dict[str, Any],
     evidence: Dict[str, Any] | None = None,
     *, local_provenance: ReviewedLocalIntent | None = None,
+    revision: str | None = None,
+    config_version: str | None = None,
+    context: str = "local-activity-record",
     output_scope: str = "PUBLIC",
 ) -> None:
+    """Write only to the two repository-configured activity destinations."""
+    if (jsonl_path.resolve() != _PUBLIC_ACTIVITY_JSONL
+            or markdown_path.resolve() != _PUBLIC_ACTIVITY_MARKDOWN):
+        raise PermissionError("activity output paths are fixed local configuration")
+    _append_activity_at_configured_paths(
+        jsonl_path, markdown_path, room, message, evidence,
+        local_provenance=local_provenance, revision=revision,
+        config_version=config_version, context=context, output_scope=output_scope)
+
+
+def _append_activity_at_configured_paths(
+    jsonl_path: Path, markdown_path: Path, room: str, message: Dict[str, Any],
+    evidence: Dict[str, Any] | None = None, *,
+    local_provenance: ReviewedLocalIntent | None = None,
+    revision: str | None = None, config_version: str | None = None,
+    context: str = "local-activity-record", output_scope: str = "PUBLIC",
+) -> None:
+    """Mechanism used by the fixed-path production wrapper and isolated tests."""
     evidence = evidence or {}
     raw_text = str(message.get("swept_text", message["text"]))
     raw_input = str(message.get("input_text", message["text"]))
     local_origin = False
     if local_provenance is not None:
-        require_local_intent(local_provenance, LocalActionClass.LOCAL_ACTIVITY_RAW, raw_text)
+        require_local_intent(
+            local_provenance, LocalActionClass.LOCAL_ACTIVITY_RAW, raw_text,
+            target=str(jsonl_path.resolve()), payload=raw_text, context=context,
+            revision=revision, config_version=config_version)
         local_origin = True
     raw_allowed = local_origin and output_scope == "LOCAL_ONLY"
     message_origin = ("TYPED_LOCAL_RAW" if raw_allowed else

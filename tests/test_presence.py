@@ -10,6 +10,7 @@ from flop_agent.presence import (
     approval_digest, apply_payload, canonical_sha256, classify_note,
     execute_approved_write, observe, presence_path, preview_first_write,
     load_semantic_contract, runtime_context, scalar_value, validate_approval,
+    _execute_approved_write_after_capability as execute_write_mechanism,
 )
 
 NOW = datetime(2026, 8, 29, 0, 0, tzinfo=timezone.utc)
@@ -193,7 +194,7 @@ class PresenceAdapterTests(unittest.TestCase):
         path = self.state.parent / "changed-contract.json"
         path.write_text(json.dumps(changed))
         with self.assertRaises(LiveWriteDisabled):
-            execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+            execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
                 writer=lambda *_: self.fail("writer called"), reader=lambda _: None,
                 now=NOW, semantic_contract_path=path)
 
@@ -231,7 +232,7 @@ class PresenceAdapterTests(unittest.TestCase):
     def test_kill_switch_prevents_write(self):
         preview = self.preview()
         with self.assertRaises(LiveWriteDisabled):
-            execute_approved_write(config(), self.state, self.audit, preview=preview,
+            execute_write_mechanism(config(), self.state, self.audit, preview=preview,
                 approval=self.approve(preview), writer=lambda *_: self.fail("writer called"),
                 reader=lambda _: "10", now=NOW)
         self.assertFalse(self.audit.exists())
@@ -261,7 +262,7 @@ class PresenceAdapterTests(unittest.TestCase):
     def test_readback_match_and_append_only_audit(self):
         cfg, preview, approval = self.enabled_preview()
         reads = iter((None, "10"))
-        result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+        result = execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
             writer=lambda path, body: {"status": 200, "body": "ok"}, reader=lambda path: next(reads), now=NOW)
         self.assertEqual(result["status"], "SUCCESS")
         self.assertEqual(result["state"]["last_successfully_published_seq"], 10)
@@ -272,7 +273,7 @@ class PresenceAdapterTests(unittest.TestCase):
     def test_alternate_2xx_performs_readback(self):
         cfg, preview, approval = self.enabled_preview()
         reads = iter((None, "10"))
-        result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+        result = execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
             writer=lambda *_: {"status": 204}, reader=lambda _: next(reads), now=NOW)
         self.assertEqual(result["status"], "SUCCESS")
 
@@ -285,7 +286,7 @@ class PresenceAdapterTests(unittest.TestCase):
                     self.audit.unlink()
                 cfg, preview, approval = self.enabled_preview()
                 calls = []
-                result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+                result = execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
                     writer=lambda *_: {"status": status},
                     reader=lambda _: calls.append("prewrite") or None, now=NOW)
                 self.assertEqual(result["status"], "RATE_LIMITED" if status == 429 else "HTTP_ERROR")
@@ -294,7 +295,7 @@ class PresenceAdapterTests(unittest.TestCase):
     def test_missing_status_fails_closed_without_readback(self):
         cfg, preview, approval = self.enabled_preview()
         calls = []
-        result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+        result = execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
             writer=lambda *_: {}, reader=lambda _: calls.append("prewrite") or None, now=NOW)
         self.assertEqual(result["status"], "HTTP_ERROR")
         self.assertEqual(calls, ["prewrite"])
@@ -302,14 +303,14 @@ class PresenceAdapterTests(unittest.TestCase):
     def test_readback_mismatch_kill_switches(self):
         cfg, preview, approval = self.enabled_preview()
         reads = iter((None, "11"))
-        result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+        result = execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
             writer=lambda *_: {"status": 200}, reader=lambda _: next(reads), now=NOW)
         self.assertEqual(result["status"], "READBACK_MISMATCH")
         self.assertFalse(result["state"]["live_write_ready"])
 
     def test_409_conflict_hashes_returned_value(self):
         cfg, preview, approval = self.enabled_preview()
-        result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+        result = execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
             writer=lambda *_: {"status": 409, "body": "untrusted"}, reader=lambda _: None, now=NOW)
         self.assertEqual(result["status"], "CONFLICT")
         self.assertNotIn("untrusted", self.state.read_text())
@@ -317,7 +318,7 @@ class PresenceAdapterTests(unittest.TestCase):
 
     def test_prewrite_reconciliation_blocks_changed_note(self):
         cfg, preview, approval = self.enabled_preview()
-        result = execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+        result = execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
             writer=lambda *_: self.fail("writer called"), reader=lambda _: "changed", now=NOW)
         self.assertEqual(result["status"], "CONFLICT")
         self.assertNotIn("changed", self.state.read_text())
@@ -328,7 +329,7 @@ class PresenceAdapterTests(unittest.TestCase):
         state["last_attempted_write_at"] = "2026-08-28T23:30:00Z"
         self.state.write_text(json.dumps(state))
         with self.assertRaises(LiveWriteDisabled):
-            execute_approved_write(cfg, self.state, self.audit, preview=preview, approval=approval,
+            execute_write_mechanism(cfg, self.state, self.audit, preview=preview, approval=approval,
                 writer=lambda *_: self.fail("writer called"), reader=lambda _: "10", now=NOW)
         self.assertEqual(json.loads(self.state.read_text())["frequency_guard_status"],
                          "FREQUENCY_GUARD_TRIPPED")

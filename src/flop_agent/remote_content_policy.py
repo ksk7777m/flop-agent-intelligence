@@ -11,11 +11,14 @@ from __future__ import annotations
 import hashlib
 import base64
 import binascii
+import dataclasses
 import re
+import threading
 import urllib.error
 import urllib.request
+import weakref
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, TypeVar
@@ -232,8 +235,6 @@ class ReviewedSource:
 
 
 _REVIEWED_AUTHORITY = object()
-_LOCAL_AUTHORITY = object()
-_LOCAL_APPROVAL_AUTHORITY = object()
 _REVIEWED_SOURCES: Mapping[ReviewedSourceId, ReviewedSource] = MappingProxyType({
     ReviewedSourceId.TECHNOCORE_README: ReviewedSource(ReviewedSourceId.TECHNOCORE_README, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/README.md"),
     ReviewedSourceId.TECHNOCORE_SECURITY: ReviewedSource(ReviewedSourceId.TECHNOCORE_SECURITY, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/SECURITY.md"),
@@ -269,51 +270,49 @@ class LocalActionClass(str, Enum):
     DID_NOTE_CAS = "DID_NOTE_CAS"
     PRESENCE_NOTE_READ = "PRESENCE_NOTE_READ"
     LOCAL_ACTIVITY_RAW = "LOCAL_ACTIVITY_RAW"
+    PRESENCE_WRITE = "PRESENCE_WRITE"
+    RECEIPT_SIGN = "RECEIPT_SIGN"
+    SUBPROCESS = "SUBPROCESS"
+    FILESYSTEM_WRITE = "FILESYSTEM_WRITE"
+    SECRET_ACCESS = "SECRET_ACCESS"
+    MCP_INVOKE = "MCP_INVOKE"
+    WALLET = "WALLET"
+    CLAIM = "CLAIM"
+    PAYMENT = "PAYMENT"
 
 
-@dataclass(frozen=True)
 class ReviewedLocalIntent:
-    action: LocalActionClass
-    subject_sha256: str
-    target_sha256: str
-    payload_sha256: str
-    revision: str
-    config_version: str
-    approval_id: str
-    purpose: str
-    _authority: object = field(repr=False, compare=False)
+    """Opaque process-local capability; its public constructor never issues authority."""
 
-    def __post_init__(self) -> None:
-        if self._authority is not _LOCAL_AUTHORITY:
-            raise PermissionError("local authority cannot be caller-constructed")
-        if not re.fullmatch(r"[0-9a-f]{64}", self.subject_sha256):
-            raise ValueError("local intent requires a SHA-256 subject binding")
-        if (not re.fullmatch(r"[0-9a-f]{64}", self.target_sha256)
-                or not re.fullmatch(r"[0-9a-f]{64}", self.payload_sha256)
-                or not self.config_version or not self.approval_id):
-            raise ValueError("local intent requires complete immutable bindings")
-        if (self.action is not LocalActionClass.PRESENCE_NOTE_READ
-                and not re.fullmatch(r"[0-9a-f]{40}", self.revision)):
-            raise ValueError("sensitive local intent requires an exact revision")
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: Any, **_kwargs: Any) -> "ReviewedLocalIntent":
+        raise PermissionError("local authority is issued only by the internal capability store")
+
+    def __copy__(self) -> "ReviewedLocalIntent":
+        raise TypeError("capabilities cannot be copied")
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> "ReviewedLocalIntent":
+        raise TypeError("capabilities cannot be copied")
+
+    def __reduce__(self) -> Any:
+        raise TypeError("capabilities cannot be serialized")
 
 
 @dataclass(frozen=True)
-class _ValidatedLocalApproval:
+class _CapabilityRecord:
     approval_id: str
-    reviewer: str
-    approved_at: str
     action: LocalActionClass
     subject_sha256: str
     target_sha256: str
     payload_sha256: str
+    context_sha256: str
     revision: str
     config_version: str
-    purpose: str
-    _authority: object = field(repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        if self._authority is not _LOCAL_APPROVAL_AUTHORITY:
-            raise PermissionError("validated approval cannot be caller-constructed")
+    issued_at: datetime
+    expires_at: datetime
+    one_shot: bool
+    used: bool = False
 
 
 # Sensitive approvals are deliberately empty until a separately reviewed local
@@ -332,47 +331,111 @@ def _parse_approval_time(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _new_capability_store(
+    approvals: Mapping[str, Mapping[str, str]], reviewers: frozenset[str],
+    clock: Callable[[], datetime],
+) -> tuple[Callable[..., ReviewedLocalIntent], Callable[..., None]]:
+    """Return issuer/validator closures over a registry callers cannot replace."""
+    configured = MappingProxyType({key: MappingProxyType(dict(value)) for key, value in approvals.items()})
+    trusted_reviewers = frozenset(reviewers)
+    registry: weakref.WeakKeyDictionary[ReviewedLocalIntent, _CapabilityRecord] = weakref.WeakKeyDictionary()
+    registry_lock = threading.Lock()
+
+    def issue(approval_id: str, action: LocalActionClass, subject: str, *, target: str,
+              payload: str, context: str, revision: str, config_version: str,
+              ttl_seconds: int = 900, one_shot: bool = True) -> ReviewedLocalIntent:
+        record = configured.get(approval_id)
+        if record is None or record.get("reviewer") not in trusted_reviewers:
+            raise PermissionError("approval is not present in the trusted local store")
+        now = clock().astimezone(timezone.utc)
+        approved_at = _parse_approval_time(record.get("approved_at", ""))
+        if (now - approved_at).total_seconds() < 0 or (now - approved_at).total_seconds() > 900:
+            raise PermissionError("approval is stale or future-dated")
+        if (not isinstance(action, LocalActionClass)
+                or action is LocalActionClass.PRESENCE_NOTE_READ
+                or not re.fullmatch(r"[0-9a-f]{40}", revision)
+                or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", config_version)
+                or not subject or not target or not payload or not context
+                or not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool)
+                or not 1 <= ttl_seconds <= 900):
+            raise PermissionError("capability binding inputs are malformed")
+        bindings = {
+            "action": action.value,
+            "subject_sha256": hashlib.sha256(subject.encode()).hexdigest(),
+            "target_sha256": hashlib.sha256(target.encode()).hexdigest(),
+            "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+            "context_sha256": hashlib.sha256(context.encode()).hexdigest(),
+            "revision": revision, "config_version": config_version,
+        }
+        if any(record.get(key) != value for key, value in bindings.items()):
+            raise PermissionError("approval does not exactly bind this action")
+        capability = object.__new__(ReviewedLocalIntent)
+        with registry_lock:
+            registry[capability] = _CapabilityRecord(
+                approval_id, action, bindings["subject_sha256"], bindings["target_sha256"],
+                bindings["payload_sha256"], bindings["context_sha256"], revision,
+                config_version, now, now + timedelta(seconds=ttl_seconds), one_shot)
+        return capability
+
+    def require(capability: ReviewedLocalIntent, action: LocalActionClass, subject: str, *,
+                target: str, payload: str, context: str, revision: str,
+                config_version: str, consume: bool = True) -> None:
+        now = clock().astimezone(timezone.utc)
+        expected = (
+            action, hashlib.sha256(subject.encode()).hexdigest(),
+            hashlib.sha256(target.encode()).hexdigest(), hashlib.sha256(payload.encode()).hexdigest(),
+            hashlib.sha256(context.encode()).hexdigest(), revision, config_version,
+        )
+        with registry_lock:
+            record = registry.get(capability) if isinstance(capability, ReviewedLocalIntent) else None
+            actual = None if record is None else (
+                record.action, record.subject_sha256, record.target_sha256, record.payload_sha256,
+                record.context_sha256, record.revision, record.config_version,
+            )
+            if record is None or actual != expected or now < record.issued_at or now > record.expires_at:
+                raise PermissionError("capability is absent, expired, or does not match the action")
+            if record.one_shot and record.used:
+                raise PermissionError("one-shot capability has already been consumed")
+            if consume and record.one_shot:
+                registry[capability] = dataclasses.replace(record, used=True)
+
+    return issue, require
+
+
+_PRODUCTION_ISSUE, _PRODUCTION_REQUIRE = _new_capability_store(
+    _LOCAL_APPROVAL_RECORDS, _TRUSTED_LOCAL_REVIEWERS,
+    lambda: datetime.now(timezone.utc),
+)
+
+
+def _new_static_read_store() -> tuple[
+    Callable[[str, str], ReviewedLocalIntent], Callable[[ReviewedLocalIntent, str], None]
+]:
+    registry: weakref.WeakKeyDictionary[ReviewedLocalIntent, tuple[str, str]] = weakref.WeakKeyDictionary()
+
+    def issue(subject: str, purpose: str) -> ReviewedLocalIntent:
+        capability = object.__new__(ReviewedLocalIntent)
+        registry[capability] = (hashlib.sha256(subject.encode()).hexdigest(), purpose)
+        return capability
+
+    def require(capability: ReviewedLocalIntent, subject: str) -> None:
+        expected = registry.get(capability) if isinstance(capability, ReviewedLocalIntent) else None
+        if expected is None or expected[0] != hashlib.sha256(subject.encode()).hexdigest():
+            raise PermissionError("Presence read capability is absent or has the wrong binding")
+
+    return issue, require
+
+
+_STATIC_READ_ISSUE, _STATIC_READ_REQUIRE = _new_static_read_store()
+
+
 def trusted_local_intent(approval_id: str, action: LocalActionClass, subject: str, *,
                          target: str, payload: str, revision: str, config_version: str,
                          purpose: str) -> ReviewedLocalIntent:
-    """Mint a sensitive capability only from the immutable local approval store."""
-    record = _LOCAL_APPROVAL_RECORDS.get(approval_id)
-    if record is None:
-        raise PermissionError("approval is not present in the trusted local store")
-    if not isinstance(action, LocalActionClass) or action is LocalActionClass.PRESENCE_NOTE_READ:
-        raise PermissionError("sensitive action class required")
-    if (not re.fullmatch(r"[0-9a-f]{40}", revision)
-            or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", config_version)
-            or not target or not payload or not purpose.strip()):
-        raise PermissionError("approval binding inputs are malformed")
-    approved_at = _parse_approval_time(record.get("approved_at", ""))
-    current = _parse_approval_time(utc_now())
-    age = (current - approved_at).total_seconds()
-    if age < 0 or age > 900:
-        raise PermissionError("approval is stale or future-dated")
-    bindings = {
-        "action": action.value,
-        "subject_sha256": hashlib.sha256(subject.encode()).hexdigest(),
-        "target_sha256": hashlib.sha256(target.encode()).hexdigest(),
-        "payload_sha256": hashlib.sha256(payload.encode()).hexdigest(),
-        "revision": revision,
-        "config_version": config_version,
-        "purpose": purpose,
-    }
-    if record.get("reviewer") not in _TRUSTED_LOCAL_REVIEWERS:
-        raise PermissionError("approval reviewer is not trusted local configuration")
-    if any(record.get(key) != value for key, value in bindings.items()):
-        raise PermissionError("approval does not exactly bind this action")
-    validated = _ValidatedLocalApproval(
-        approval_id, record["reviewer"], record["approved_at"], action,
-        bindings["subject_sha256"], bindings["target_sha256"], bindings["payload_sha256"],
-        revision, config_version, purpose, _LOCAL_APPROVAL_AUTHORITY,
-    )
-    return ReviewedLocalIntent(
-        action, validated.subject_sha256, validated.target_sha256,
-        validated.payload_sha256, revision, config_version, approval_id, purpose,
-        _LOCAL_AUTHORITY,
-    )
+    """Issue only from the immutable store captured when this module was loaded."""
+    return _PRODUCTION_ISSUE(
+        approval_id, action, subject, target=target, payload=payload, context=purpose,
+        revision=revision, config_version=config_version)
 
 
 def reviewed_local_intent(action: LocalActionClass, subject: str, purpose: str, *,
@@ -380,19 +443,33 @@ def reviewed_local_intent(action: LocalActionClass, subject: str, purpose: str, 
     """Create the sole public low-risk intent: a bounded Presence note read."""
     if not isinstance(action, LocalActionClass) or not purpose.strip():
         raise ValueError("reviewed local intent requires a known action and purpose")
-    subject_sha256 = hashlib.sha256(subject.encode()).hexdigest()
     if action is not LocalActionClass.PRESENCE_NOTE_READ or approval is not None:
         raise PermissionError("sensitive intents require trusted stored local approval")
-    return ReviewedLocalIntent(
-        action, subject_sha256, subject_sha256, hashlib.sha256(b"").hexdigest(),
-        "STATIC_READ", POLICY_VERSION, "STATIC_PRESENCE_READ", purpose, _LOCAL_AUTHORITY)
+    return _STATIC_READ_ISSUE(subject, purpose)
 
 
-def require_local_intent(intent: ReviewedLocalIntent, action: LocalActionClass, subject: str) -> None:
-    if not isinstance(intent, ReviewedLocalIntent) or intent._authority is not _LOCAL_AUTHORITY:
-        raise PermissionError("typed local intent required")
-    if intent.action is not action or intent.subject_sha256 != hashlib.sha256(subject.encode()).hexdigest():
-        raise PermissionError("local intent does not match action subject")
+def require_local_intent(intent: ReviewedLocalIntent, action: LocalActionClass, subject: str, *,
+                         target: str | None = None, payload: str | None = None,
+                         context: str | None = None, revision: str | None = None,
+                         config_version: str | None = None, consume: bool = True) -> None:
+    if action is LocalActionClass.PRESENCE_NOTE_READ:
+        _STATIC_READ_REQUIRE(intent, subject)
+        return
+    if None in (target, payload, context, revision, config_version):
+        raise PermissionError("sensitive intent validation requires all exact bindings")
+    _require_production_capability(
+        intent, action, subject, target=target, payload=payload, context=context,
+        revision=revision, config_version=config_version, consume=consume)
+
+
+def _require_production_capability(
+    intent: ReviewedLocalIntent, action: LocalActionClass, subject: str, *, target: str,
+    payload: str, context: str, revision: str, config_version: str, consume: bool,
+    _validator: Callable[..., None] = _PRODUCTION_REQUIRE,
+) -> None:
+    """Keep the production validator bound even if module globals are rebound."""
+    _validator(intent, action, subject, target=target, payload=payload, context=context,
+               revision=revision, config_version=config_version, consume=consume)
 
 
 @dataclass(frozen=True)
@@ -676,6 +753,7 @@ def authorize_remote_mcp_payload(payload: Mapping[str, Any]) -> ActionDecision:
 
 @dataclass(frozen=True)
 class ContractEvidenceRecord:
+    """Untrusted evidence proposal.  This object never conveys reviewed status."""
     contract: str
     source_id: ReviewedSourceId
     artifact_sha256: str
@@ -695,11 +773,43 @@ class ContractEvidenceRecord:
 @dataclass(frozen=True)
 class ContractEvidenceBundle:
     bundle_id: str
-    records: tuple[ContractEvidenceRecord, ...]
-    approved_for_testnet_use: bool = False
+    records: tuple["ReviewedContractEvidence", ...]
+
+
+class ReviewedContractEvidence:
+    """Opaque reference to evidence resolved in a private reviewed registry."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(cls, *_args: Any, **_kwargs: Any) -> "ReviewedContractEvidence":
+        raise PermissionError("reviewed contract evidence cannot be caller-constructed")
+
+    def __copy__(self) -> "ReviewedContractEvidence":
+        raise TypeError("reviewed evidence cannot be copied")
+
+    def __deepcopy__(self, _memo: dict[int, Any]) -> "ReviewedContractEvidence":
+        raise TypeError("reviewed evidence cannot be copied")
+
+    def __reduce__(self) -> Any:
+        raise TypeError("reviewed evidence cannot be serialized")
+
+
+@dataclass(frozen=True)
+class _ReviewedEvidenceRecord:
+    source_id: ReviewedSourceId
+    canonical_artifact_id: str
+    contract: str
+    artifact_sha256: str
+    observed_at: str
+    reviewed_at: str
+    provenance_root: str
+    reviewer: str
+    policy_version: str
 
 
 _CONTRACT_EVIDENCE_BUNDLES: Mapping[str, ContractEvidenceBundle] = MappingProxyType({})
+_REVIEWED_EVIDENCE_RECORDS: Mapping[str, Mapping[str, str]] = MappingProxyType({})
+_TESTNET_CONTRACT_APPROVALS: Mapping[str, Mapping[str, str]] = MappingProxyType({})
 _SOURCE_PROVENANCE_ROOTS: Mapping[ReviewedSourceId, str] = MappingProxyType({
     source_id: (
         "TECHNOCORE_PROJECT" if source_id.name.startswith("TECHNOCORE_") else
@@ -716,33 +826,83 @@ _SOURCE_PROVENANCE_ROOTS: Mapping[ReviewedSourceId, str] = MappingProxyType({
 })
 
 
-def _derive_contract_records(records: tuple[ContractEvidenceRecord, ...], contract: str,
-                             *, approved_for_testnet_use: bool = False) -> ContractProvenance:
-    exact = [record for record in records if record.contract == contract and record.exact_artifact_verified]
-    if any(record.contract != contract for record in records):
-        return ContractProvenance.CONFLICTING
-    if not exact:
-        return ContractProvenance.UNVERIFIED
-    official = [record for record in exact if record.source_id in _REVIEWED_SOURCES]
-    if not official:
-        return ContractProvenance.UNVERIFIED
-    # Independence is derived solely from immutable reviewed-source provenance
-    # and canonical artifact hashes. Caller labels cannot affect the count.
-    provenance_roots = {_SOURCE_PROVENANCE_ROOTS[record.source_id] for record in official}
-    artifact_hashes = {record.artifact_sha256 for record in official}
-    if len(provenance_roots) < 2 or len(artifact_hashes) < 2:
-        return ContractProvenance.OFFICIAL_SOURCE_REFERENCED
-    if not approved_for_testnet_use:
-        return ContractProvenance.MULTI_SOURCE_CONFIRMED
-    return ContractProvenance.VERIFIED_FOR_TESTNET_USE
+def _new_evidence_store(
+    configured_records: Mapping[str, Mapping[str, str]],
+    configured_approvals: Mapping[str, Mapping[str, str]],
+) -> tuple[Callable[[str, ContractEvidenceRecord], ReviewedContractEvidence], Callable[..., ContractProvenance]]:
+    configured = MappingProxyType({key: MappingProxyType(dict(value))
+                                   for key, value in configured_records.items()})
+    approvals = MappingProxyType({key: MappingProxyType(dict(value))
+                                  for key, value in configured_approvals.items()})
+    registry: weakref.WeakKeyDictionary[ReviewedContractEvidence, _ReviewedEvidenceRecord] = weakref.WeakKeyDictionary()
+
+    def issue(record_id: str, proposal: ContractEvidenceRecord) -> ReviewedContractEvidence:
+        source = configured.get(record_id)
+        if source is None or not isinstance(proposal, ContractEvidenceRecord):
+            raise PermissionError("evidence is not present in the reviewed source registry")
+        expected = {
+            "source_id": proposal.source_id.value, "contract": proposal.contract,
+            "artifact_sha256": proposal.artifact_sha256, "observed_at": proposal.observed_at,
+        }
+        if any(source.get(key) != value for key, value in expected.items()):
+            raise PermissionError("evidence does not match the reviewed artifact record")
+        if (proposal.source_id not in _REVIEWED_SOURCES
+                or source.get("provenance_root") != _SOURCE_PROVENANCE_ROOTS[proposal.source_id]
+                or not source.get("canonical_artifact_id") or not source.get("reviewer")
+                or source.get("policy_version") != POLICY_VERSION):
+            raise PermissionError("reviewed evidence registry entry is incomplete")
+        _parse_approval_time(source.get("reviewed_at", ""))
+        capability = object.__new__(ReviewedContractEvidence)
+        registry[capability] = _ReviewedEvidenceRecord(
+            proposal.source_id, source["canonical_artifact_id"], proposal.contract,
+            proposal.artifact_sha256, proposal.observed_at, source["reviewed_at"],
+            source["provenance_root"], source["reviewer"], source["policy_version"])
+        return capability
+
+    def derive(records: tuple[ReviewedContractEvidence, ...], contract: str, *,
+               approval_id: str | None = None) -> ContractProvenance:
+        resolved = [registry.get(item) if isinstance(item, ReviewedContractEvidence) else None
+                    for item in records]
+        if any(item is None for item in resolved) or not resolved:
+            return ContractProvenance.UNVERIFIED
+        valid = [item for item in resolved if item is not None]
+        if any(item.contract != contract for item in valid):
+            return ContractProvenance.CONFLICTING
+        roots = {item.provenance_root for item in valid}
+        artifacts = {(item.canonical_artifact_id, item.artifact_sha256) for item in valid}
+        if len(roots) < 2 or len(artifacts) < 2:
+            return ContractProvenance.OFFICIAL_SOURCE_REFERENCED
+        approval = approvals.get(approval_id or "")
+        if approval is None:
+            return ContractProvenance.MULTI_SOURCE_CONFIRMED
+        if (approval.get("contract") != contract
+                or approval.get("policy_version") != POLICY_VERSION
+                or approval.get("status") != "APPROVED_FOR_TESTNET_USE"):
+            return ContractProvenance.MULTI_SOURCE_CONFIRMED
+        return ContractProvenance.VERIFIED_FOR_TESTNET_USE
+
+    return issue, derive
+
+
+_ISSUE_REVIEWED_EVIDENCE, _DERIVE_REVIEWED_EVIDENCE = _new_evidence_store(
+    _REVIEWED_EVIDENCE_RECORDS, _TESTNET_CONTRACT_APPROVALS)
+
+
+def reviewed_contract_evidence(record_id: str,
+                               proposal: ContractEvidenceRecord) -> ReviewedContractEvidence:
+    return _ISSUE_REVIEWED_EVIDENCE(record_id, proposal)
+
+
+def _derive_contract_records(records: tuple[object, ...], contract: str) -> ContractProvenance:
+    """Compatibility boundary: public records never elevate trust."""
+    return _DERIVE_REVIEWED_EVIDENCE(records, contract)
 
 
 def evaluate_contract_provenance(bundle_id: str | None, contract: str) -> ContractProvenance:
     if not bundle_id or bundle_id not in _CONTRACT_EVIDENCE_BUNDLES:
         return ContractProvenance.UNVERIFIED
     bundle = _CONTRACT_EVIDENCE_BUNDLES[bundle_id]
-    return _derive_contract_records(
-        bundle.records, contract, approved_for_testnet_use=bundle.approved_for_testnet_use)
+    return _DERIVE_REVIEWED_EVIDENCE(bundle.records, contract, approval_id=bundle.bundle_id)
 
 
 def minimized_remote_evidence(value: UntrustedRemoteValue) -> dict[str, Any]:

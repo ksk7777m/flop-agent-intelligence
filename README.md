@@ -179,13 +179,11 @@ FLOP-CONTRIBUTION-RECEIPT-V1|<canonical-json>
 
 The canonical JSON contains exactly `artifact_name`, `commit`, `repo`, `schema`, and `timestamp`; keys are sorted, separators are compact, Unicode is UTF-8, the repository is a credential-free HTTPS URL, and the commit is a full 40- or 64-character hexadecimal object ID. See [Receipt Schema](docs/RECEIPT_SCHEMA.md).
 
-```bash
-PYTHONPATH=src python3 -m flop_agent.cli create-receipt \
-  --repo https://github.com/example/flop-agent \
-  --commit FULL_COMMIT_HASH \
-  --artifact "FLOP Agent Intelligence & Safety Layer" \
-  --output receipts/contribution.json
+Receipt verification remains offline. Receipt creation is fail-closed until a
+separately reviewed local workflow can issue an exact, one-shot signing
+capability; CLI metadata alone cannot authorize key access or signing.
 
+```bash
 PYTHONPATH=src python3 -m flop_agent.cli verify-receipt receipts/contribution.json
 ```
 

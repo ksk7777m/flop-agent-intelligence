@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .identity import load_identity, public_key_from_did
+from .remote_content_policy import ReviewedLocalIntent
+from .sensitive_action_router import invoke_signer
 
 SCHEMA = "flop-contribution-receipt-v1"
 DOMAIN = "FLOP-CONTRIBUTION-RECEIPT-V1|"
@@ -54,17 +56,23 @@ def canonical_payload(payload: Dict[str, str]) -> bytes:
 
 def create_receipt(
     identity_path: Path, repo: str, commit: str, artifact_name: str,
-    timestamp: Optional[str] = None,
+    timestamp: Optional[str] = None, *, intent: ReviewedLocalIntent | None = None,
 ) -> Dict[str, Any]:
-    key, did = load_identity(identity_path)
     payload = {
         "schema": SCHEMA, "repo": _validate_repo(repo), "commit": _validate_commit(commit),
         "artifact_name": artifact_name.strip(),
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
     }
     canonical = canonical_payload(payload)
-    signature = base64.urlsafe_b64encode(key.sign(canonical)).decode("ascii").rstrip("=")
-    return {"schema": SCHEMA, "did": did, "payload": payload, "signature": signature}
+    def sign_after_authorization() -> Dict[str, Any]:
+        key, did = load_identity(identity_path)
+        signature = base64.urlsafe_b64encode(key.sign(canonical)).decode("ascii").rstrip("=")
+        return {"schema": SCHEMA, "did": did, "payload": payload, "signature": signature}
+    return invoke_signer(
+        intent=intent, subject=canonical.decode("utf-8"),
+        target=str(identity_path.resolve()), payload=canonical.decode("utf-8"),
+        context=DOMAIN, revision=payload["commit"], config_version=SCHEMA,
+        adapter=sign_after_authorization)
 
 
 def verify_receipt(receipt: Dict[str, Any]) -> Dict[str, str]:

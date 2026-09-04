@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
+from .remote_content_policy import ReviewedLocalIntent
+from .sensitive_action_router import write_presence
 from .technocore import read_official
 
 ADAPTER_VERSION = "Presence V0.1"
@@ -401,13 +403,41 @@ def _append_audit(path: Path, entry: Mapping[str, Any]) -> None:
 
 def execute_approved_write(config: PresenceConfig, state_path: Path, audit_path: Path, *,
                            preview: Mapping[str, Any], approval: Mapping[str, Any],
+                           intent: ReviewedLocalIntent,
                            writer: Callable[[str, Mapping[str, Any]], Any],
                            reader: Callable[[str], Any], now: datetime | None = None,
                            semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH) -> Dict[str, Any]:
-    """Execute via an explicitly injected writer after every gate passes."""
+    """Production write boundary: consume authority before any state or I/O access."""
+    metadata, request = preview.get("approval_metadata"), preview.get("request")
+    if not isinstance(metadata, Mapping) or not isinstance(request, Mapping):
+        raise LiveWriteDisabled("live presence write lacks an exact preview")
+    canonical_body = json.dumps(request.get("body"), sort_keys=True, separators=(",", ":"))
+    capability_context = json.dumps({
+        "action": "technocore-presence-write",
+        "state_path": str(state_path.resolve()),
+        "audit_path": str(audit_path.resolve()),
+    }, sort_keys=True, separators=(",", ":"))
+    return write_presence(
+        intent=intent, subject=approval_digest(metadata),
+        target=str(request.get("path", "")), payload=canonical_body,
+        context=capability_context, revision=str(metadata.get("application_commit", "")),
+        config_version=ADAPTER_VERSION,
+        adapter=lambda: _execute_approved_write_after_capability(
+            config, state_path, audit_path, preview=preview, approval=approval, writer=writer,
+            reader=reader, now=now, semantic_contract_path=semantic_contract_path))
+
+
+def _execute_approved_write_after_capability(
+    config: PresenceConfig, state_path: Path, audit_path: Path, *,
+    preview: Mapping[str, Any], approval: Mapping[str, Any],
+    writer: Callable[[str, Mapping[str, Any]], Any], reader: Callable[[str], Any],
+    now: datetime | None = None,
+    semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH,
+) -> Dict[str, Any]:
+    """Mechanism-only implementation; callers must use execute_approved_write."""
+    metadata, request = preview.get("approval_metadata"), preview.get("request")
     attempted = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state = _load_state(state_path) or _blank_state(config)
-    metadata, request = preview.get("approval_metadata"), preview.get("request")
     try:
         _, current_contract_digest = load_semantic_contract(
             semantic_contract_path, config.approved_semantic_contract_sha256)

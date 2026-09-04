@@ -200,13 +200,8 @@ def main() -> None:
         signal = prepare_signal(**fixture)
         print(json.dumps(signal.as_dict(), indent=2))
     elif args.command == "create-receipt":
-        receipt = create_receipt(
-            IDENTITY, args.repo, args.commit, args.artifact, timestamp=args.timestamp,
-        )
-        output = Path(args.output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-        print(json.dumps({"created": str(output), **verify_receipt(receipt)}, indent=2))
+        raise SystemExit(
+            "receipt signing requires an internally issued, payload-bound local capability")
     elif args.command == "verify-receipt":
         print(json.dumps(verify_receipt(read_receipt(Path(args.file))), indent=2))
     elif args.command == "publish":
@@ -228,7 +223,9 @@ def main() -> None:
         intent = reviewed_local_intent(
             LocalActionClass.SIGNED_ROOM_POST, subject,
             "human-approved CLI publication", approval=approval_evidence)
-        message = post_signed(IDENTITY, args.room, args.text, intent=intent)
+        message = post_signed(
+            IDENTITY, args.room, args.text, intent=intent, revision=args.commit,
+            config_version="technocore-publisher-v1", context="human-approved CLI publication")
         activity_text = str(message.get("swept_text", message["text"]))
         activity_approval = HumanApprovalEvidence(
             approved.approved_by or "", approved.approved_at or "",

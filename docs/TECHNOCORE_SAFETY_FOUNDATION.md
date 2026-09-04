@@ -44,13 +44,18 @@ approval evidence. The public approval record is descriptive only and cannot
 mint authority.
 
 Future action approval must resolve from an immutable trusted local approval
-store and bind the action, subject, target, payload hash, revision, configuration
-version, purpose, trusted reviewer, and a valid fresh timestamp. The store is
-intentionally empty in this package. External JSON and caller-created objects
-cannot create signing or write authority.
+store and bind the action, subject, target, payload hash, context, revision,
+configuration version, trusted reviewer, issuance time, and expiry. The store
+is intentionally empty in this package. Issued authority is an opaque,
+process-local, action-specific registry identity; it is one-shot for sensitive
+actions and cannot be copied, serialized, reconstructed from its bindings, or
+created by rebinding the descriptive module globals.
 Legacy Technocore reads resolve an internal source ID; local writes, signing,
 record lookup, and Presence-note reads require a typed, hash-bound local intent.
 Serialized remote data cannot be deserialized directly into that capability.
+The production action boundary is connected before subprocess, filesystem,
+secret, signer, Presence, receipt, MCP, wallet, claim, and payment adapters.
+The activity writer accepts only its two fixed repository destinations.
 
 ## Source and contract independence
 
@@ -65,11 +70,14 @@ Contract provenance is independently one of `UNVERIFIED`,
 `OFFICIAL_SOURCE_REFERENCED`, `MULTI_SOURCE_CONFIRMED`, `CONFLICTING`, or
 `VERIFIED_FOR_TESTNET_USE`. Official source trust alone never verifies a
 contract. A community DID signature authenticates a signer, not official FLOP
-authority. Final provenance is derived only from a repository-owned evidence
-bundle containing exact contract, artifact hash, reviewed source identity, and
-observation time. Independence is derived from immutable provenance-root and
-canonical-artifact identities; same-publisher aliases and duplicate artifacts
-deduplicate. Configuration strings and caller labels/counts are ignored.
+authority. Public `ContractEvidenceRecord` objects are proposals and always
+remain unverified. Final provenance is derived only from opaque evidence
+identities issued from the repository-owned reviewed-evidence registry, binding
+the contract candidate, canonical artifact identity and hash, reviewed source,
+observation/review times, reviewer, policy version, and provenance root.
+Independence is derived from immutable provenance-root and canonical-artifact
+identities; same-publisher aliases and duplicate artifacts deduplicate. Caller
+labels, booleans, counts, hashes, and reconstructed records are ignored.
 
 ## Remote MCP no custody
 

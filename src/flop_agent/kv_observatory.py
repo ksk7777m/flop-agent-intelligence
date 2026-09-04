@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,19 +61,34 @@ class NamespaceConfig:
     max_keys: int = 1000
 
 
-_OBSERVED_KEY_AUTHORITY = object()
-
-
 class ObservedRemoteKey(str):
     """A grammar-checked key name observed in an untrusted remote listing."""
 
-    def __new__(cls, key: str, namespace: str, authority: object):
-        if authority is not _OBSERVED_KEY_AUTHORITY:
-            raise PermissionError("observed keys can only come from the listing parser")
-        value = str.__new__(cls, key)
-        value.namespace = namespace
-        value._authority = authority
+    def __new__(cls, *_args: object, **_kwargs: object):
+        raise PermissionError("observed keys can only come from the listing parser")
+
+
+def _new_observed_key_store():
+    registry: dict[int, tuple[weakref.ReferenceType[ObservedRemoteKey], str, str]] = {}
+
+    def issue(key: str, namespace: str) -> ObservedRemoteKey:
+        value = str.__new__(ObservedRemoteKey, key)
+        identity = id(value)
+        registry[identity] = (
+            weakref.ref(value, lambda _ref, item=identity: registry.pop(item, None)),
+            namespace, f"{OFFICIAL_ORIGIN}/kv/{quote(namespace, safe='')}?format=json")
         return value
+
+    def require(value: ObservedRemoteKey, namespace: str, source: str) -> None:
+        record = registry.get(id(value)) if isinstance(value, ObservedRemoteKey) else None
+        if (record is None or record[0]() is not value
+                or record[1] != namespace or record[2] != source):
+            raise PermissionError("KV key lacks matching internal observation authority")
+
+    return issue, require
+
+
+_ISSUE_OBSERVED_KEY, _REQUIRE_OBSERVED_KEY = _new_observed_key_store()
 
 
 def utc_now() -> str:
@@ -130,7 +146,7 @@ def parse_key_list(body: str, namespace: str) -> list[ObservedRemoteKey]:
     observed = []
     for key in keys:
         discovered_remote_value(key, RemoteOrigin.TECHNOCORE_KV_KEY, f"kv:{namespace}")
-        observed.append(ObservedRemoteKey(key, namespace, _OBSERVED_KEY_AUTHORITY))
+        observed.append(_ISSUE_OBSERVED_KEY(key, namespace))
     return sorted(observed)
 
 
@@ -316,46 +332,62 @@ class Store:
 
 
 HttpGet = Callable[[str], tuple[int, str, Mapping[str, str]]]
-_KV_TARGET_AUTHORITY = object()
 
 
 class ReviewedKvTarget(str):
     """String-compatible target that cannot be produced by remote JSON/text."""
-    def __new__(cls, url: str, authority: object):
-        if authority is not _KV_TARGET_AUTHORITY:
-            raise PermissionError("reviewed KV target requires local configuration authority")
-        value = str.__new__(cls, url)
-        value._authority = authority
+    def __new__(cls, *_args: object, **_kwargs: object):
+        raise PermissionError("reviewed KV target requires internal issuance")
+
+
+def _new_kv_target_store():
+    registry: dict[int, tuple[weakref.ReferenceType[ReviewedKvTarget], str]] = {}
+
+    def issue_url(url: str) -> ReviewedKvTarget:
+        value = str.__new__(ReviewedKvTarget, url)
+        identity = id(value)
+        registry[identity] = (
+            weakref.ref(value, lambda _ref, item=identity: registry.pop(item, None)), url)
         return value
+
+    def consume(value: ReviewedKvTarget) -> None:
+        record = registry.pop(id(value), None) if isinstance(value, ReviewedKvTarget) else None
+        if record is None or record[0]() is not value or record[1] != str(value):
+            raise ApiContractError("typed reviewed KV target required")
+
+    def issue_listing(namespace: str | None = None, *, manifest: bool = False) -> ReviewedKvTarget:
+        if manifest:
+            return issue_url(f"{OFFICIAL_ORIGIN}/.well-known/agent.json")
+        if not namespace or not NAME_RE.fullmatch(namespace) or PRIVATE_RE.match(namespace):
+            raise ApiContractError("invalid locally configured KV namespace")
+        return issue_url(f"{OFFICIAL_ORIGIN}/kv/{quote(namespace, safe='')}?format=json")
+
+    def issue_value(config: NamespaceConfig, key: ObservedRemoteKey) -> ReviewedKvTarget:
+        if not isinstance(config, NamespaceConfig) or not isinstance(key, ObservedRemoteKey):
+            raise PermissionError("KV value reads require a key from the matching listing")
+        listing_source = f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}?format=json"
+        _REQUIRE_OBSERVED_KEY(key, config.name, listing_source)
+        if not config.key_prefixes or not key.startswith(config.key_prefixes):
+            raise PermissionError("observed KV key is not covered by local fetch policy")
+        if not NAME_RE.fullmatch(key) or PRIVATE_RE.match(key):
+            raise ApiContractError("invalid reviewed KV key")
+        return issue_url(
+            f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}/{quote(key, safe='')}")
+
+    return issue_listing, issue_value, consume
+
+
+_ISSUE_KV_LISTING, _ISSUE_KV_VALUE, _CONSUME_KV_TARGET = _new_kv_target_store()
 
 
 def _kv_target(namespace: str | None = None, *, manifest: bool = False) -> ReviewedKvTarget:
-    if manifest:
-        return ReviewedKvTarget(f"{OFFICIAL_ORIGIN}/.well-known/agent.json", _KV_TARGET_AUTHORITY)
-    if not namespace or not NAME_RE.fullmatch(namespace) or PRIVATE_RE.match(namespace):
-        raise ApiContractError("invalid locally configured KV namespace")
-    suffix = f"/kv/{quote(namespace, safe='')}?format=json"
-    return ReviewedKvTarget(OFFICIAL_ORIGIN + suffix, _KV_TARGET_AUTHORITY)
+    return _ISSUE_KV_LISTING(namespace, manifest=manifest)
 
 
 def _reviewed_kv_read_target(config: NamespaceConfig,
                              key: ObservedRemoteKey) -> ReviewedKvTarget:
     """Apply an explicit local namespace/prefix policy to an inert observed key."""
-    if (not isinstance(config, NamespaceConfig)
-            or not isinstance(key, ObservedRemoteKey)
-            or getattr(key, "_authority", None) is not _OBSERVED_KEY_AUTHORITY
-            or key.namespace != config.name):
-        raise PermissionError("KV value reads require a key from the matching listing")
-    # An empty prefix list is discovery-only.  Merely appearing in a remote
-    # listing never supplies fetch authority.
-    if not config.key_prefixes or not key.startswith(config.key_prefixes):
-        raise PermissionError("observed KV key is not covered by local fetch policy")
-    if not NAME_RE.fullmatch(key) or PRIVATE_RE.match(key):
-        raise ApiContractError("invalid reviewed KV key")
-    return ReviewedKvTarget(
-        f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}/{quote(key, safe='')}",
-        _KV_TARGET_AUTHORITY,
-    )
+    return _ISSUE_KV_VALUE(config, key)
 
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl): return None
@@ -367,8 +399,7 @@ def sanitize_retry_after(value: str | None) -> str | None:
 
 
 def official_get(url: ReviewedKvTarget) -> tuple[int, str, Mapping[str, str]]:
-    if not isinstance(url, ReviewedKvTarget) or getattr(url, "_authority", None) is not _KV_TARGET_AUTHORITY:
-        raise ApiContractError("typed reviewed KV target required")
+    _CONSUME_KV_TARGET(url)
     parsed = urlparse(url)
     allowed_path = parsed.path.startswith("/kv/") or parsed.path == "/.well-known/agent.json"
     if f"{parsed.scheme}://{parsed.netloc}" != OFFICIAL_ORIGIN or not allowed_path:
