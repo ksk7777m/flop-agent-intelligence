@@ -34,6 +34,20 @@
       "one-hour minimum write-attempt safety floor"
     ]
   },
+  "capability_evidence": {
+    "documented": {
+      "kind": "DOCUMENTED_CAPABILITY",
+      "capabilities": [
+        "ordered room sequence identifiers",
+        "Ed25519 did:key content signatures"
+      ]
+    },
+    "runtime_observed": {
+      "kind": "RUNTIME_OBSERVED_CAPABILITY",
+      "status": "NOT_OBSERVED_OFFLINE",
+      "capabilities": []
+    }
+  },
   "deployment_observations": {
     "status": "UNKNOWN_UNTIL_SEPARATELY_APPROVED_READ_ONLY_CHECK",
     "capacity": null,

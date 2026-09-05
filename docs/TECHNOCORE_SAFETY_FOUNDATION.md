@@ -151,7 +151,8 @@ an MCP.
 ## Compatibility
 
 `data/technocore_compatibility.json` separates reviewed semantic invariants
-from mutable deployment observations. Its status intentionally remains
+from mutable deployment observations and distinguishes documented capabilities
+from runtime-observed capabilities. Its status intentionally remains
 `COMPATIBILITY_REVIEW_REQUIRED`; a local manifest is not proof of current live
 compatibility. Updating deployment observations requires a separately approved
 read-only check of configured official sources.

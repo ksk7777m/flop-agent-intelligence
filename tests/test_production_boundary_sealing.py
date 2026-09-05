@@ -322,7 +322,7 @@ class ProductionBoundarySealingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "identity.json"
             did = identity._create_identity(path)
-            canonical, _ = identity.canonical_message("lobby", 7, "fixture")
+            canonical, _ = identity.canonical_message("lobby", "7", "fixture")
             record = binding(
                 LocalActionClass.IDENTITY_SIGN, canonical, str(path.resolve()),
                 canonical, identity.IDENTITY_SIGN_CONTEXT)
@@ -351,7 +351,7 @@ class ProductionBoundarySealingTests(unittest.TestCase):
                     identity, "_sign_message",
                     side_effect=lambda *_a: attacker_signer_calls.append(1)):
                 result = sign(
-                    "lobby", 7, "fixture", intent=capability,
+                    "lobby", "7", "fixture", intent=capability,
                     revision=REVISION, config_version="fixture-v1")
                 self.assertEqual(get_did(), did)
                 self.assertEqual(verify_status()["verified"], True)
@@ -371,7 +371,7 @@ class ProductionBoundarySealingTests(unittest.TestCase):
                 identity._sign_message, identity.verify_message)
             with self.assertRaises(PermissionError):
                 guarded_sign(
-                    "lobby", 7, "fixture", intent=forged,
+                    "lobby", "7", "fixture", intent=forged,
                     revision=REVISION, config_version="fixture-v1")
             self.assertEqual(guarded_loader_calls, [])
 

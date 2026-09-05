@@ -6,7 +6,8 @@
   "additionalProperties": false,
   "required": [
     "schema", "status", "reviewed_at", "reviewed_technocore_agent_version",
-    "source_evidence", "semantic_invariants", "deployment_observations", "freshness"
+    "source_evidence", "semantic_invariants", "capability_evidence",
+    "deployment_observations", "freshness"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -31,6 +32,32 @@
         "mailbox": {"$ref": "#/$defs/nonEmptyStrings"},
         "did_signature": {"$ref": "#/$defs/nonEmptyStrings"},
         "presence": {"$ref": "#/$defs/nonEmptyStrings"}
+      }
+    },
+    "capability_evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["documented", "runtime_observed"],
+      "properties": {
+        "documented": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "capabilities"],
+          "properties": {
+            "kind": {"const": "DOCUMENTED_CAPABILITY"},
+            "capabilities": {"$ref": "#/$defs/nonEmptyStrings"}
+          }
+        },
+        "runtime_observed": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "status", "capabilities"],
+          "properties": {
+            "kind": {"const": "RUNTIME_OBSERVED_CAPABILITY"},
+            "status": {"const": "NOT_OBSERVED_OFFLINE"},
+            "capabilities": {
+              "type": "array", "maxItems": 0,
+              "items": {"type": "string"}
+            }
+          }
+        }
       }
     },
     "deployment_observations": {

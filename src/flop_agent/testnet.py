@@ -26,6 +26,7 @@ from .remote_content_policy import (
     discovered_remote_value,
     evaluate_contract_provenance,
 )
+from .wire_evidence import wire_safety_readiness
 
 
 SCHEMA = "flop-testnet-config-v0"

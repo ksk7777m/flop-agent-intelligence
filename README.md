@@ -90,6 +90,15 @@ PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness status
 See [Testnet Adapter](docs/TESTNET_ADAPTER.md) for fixtures, source gates,
 wallet-key separation and the future activation checklist.
 
+## Wire Evidence, Signer, and Verifier Hardening V1
+
+The offline hardening layer preserves nonce values as exact decimal strings,
+gates bounded raw frames before decode, reconstructs signing bytes locally,
+and keeps cryptographic, venue, transcript, agreement, rail, and finality
+claims independent. tclk-alpha remains coordination-only; PaperRail never
+proves economic value. No live protocol or wallet action is enabled. See
+[Wire Evidence Hardening](docs/WIRE_EVIDENCE_SIGNER_VERIFIER.md).
+
 ## Technocore Presence Adapter V0.1
 
 Presence V0.1 is **LIVE READY — DISABLED**. Room observation is read-only and

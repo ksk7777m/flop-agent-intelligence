@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict
 
-from .identity import _load_identity, _sign_message
+from .identity import _load_identity, _sign_message, canonical_message
 from .remote_content_policy import (
     DEFAULT_RESPONSE_LIMIT,
     LocalActionClass,
@@ -89,6 +89,7 @@ def _build_technocore_client(
     parse_url, quote_path = urllib.parse.urlparse, urllib.parse.quote
     request_type, now_ns = urllib.request.Request, time.time_ns
     json_dumps, fullmatch = json.dumps, re.fullmatch
+    message_canonicalizer = canonical_message
     safe_error = SafeRemoteError
     read_action = LocalActionClass.PRESENCE_NOTE_READ
     cas_action = LocalActionClass.DID_NOTE_CAS
@@ -141,16 +142,19 @@ def _build_technocore_client(
 
     def post(identity_path: Path, room: str, text: str, *, intent: ReviewedLocalIntent,
              revision: str, config_version: str, context: str,
-             nonce: int | None = None) -> Dict[str, Any]:
+             nonce: str | None = None) -> Dict[str, Any]:
+        selected_nonce = nonce if nonce is not None else str(now_ns() // 1_000_000)
+        _, clean = message_canonicalizer(room, selected_nonce, text)
         subject = room + "\0" + text
         capability_validator(
             intent, post_action, subject, target=room,
             payload=text, context=context, revision=revision,
             config_version=config_version)
         key, did = identity_loader(identity_path)
-        selected_nonce = nonce or int(now_ns() // 1_000_000)
-        signature, clean = message_signer(key, room, selected_nonce, text)
-        payload = {"did": did, "sig": signature, "nonce": str(selected_nonce), "text": clean}
+        signature, signed_clean = message_signer(key, room, selected_nonce, clean)
+        if signed_clean != clean:
+            raise RuntimeError("local signer canonicalization mismatch")
+        payload = {"did": did, "sig": signature, "nonce": selected_nonce, "text": clean}
         transport(f"{base_url}/r/{quote_path(room, safe='')}", payload)
         view = transport(
             f"{base_url}/r/{quote_path(room, safe='')}?limit=200&format=json",
@@ -159,7 +163,7 @@ def _build_technocore_client(
             raise RuntimeError("Technocore JSON verification read returned an unexpected shape")
         matches = [message for message in view.get("messages", [])
                    if message.get("from") == did
-                   and str(message.get("nonce")) == str(selected_nonce)
+                   and message.get("nonce") == selected_nonce
                    and message.get("text") == clean]
         if len(matches) != 1:
             raise RuntimeError(
@@ -229,7 +233,7 @@ def _build_public_technocore_client(identity_path: Path, read: Any,
 
     def post_signed(room: str, text: str, *, intent: ReviewedLocalIntent,
                     revision: str, config_version: str, context: str,
-                    nonce: int | None = None) -> Dict[str, Any]:
+                    nonce: str | None = None) -> Dict[str, Any]:
         return captured_post(
             configured_identity, room, text, intent=intent, revision=revision,
             config_version=config_version, context=context, nonce=nonce)

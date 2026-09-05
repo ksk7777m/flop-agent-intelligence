@@ -18,6 +18,7 @@ from .remote_content_policy import (
     ReviewedLocalIntent,
     require_local_intent,
 )
+from .wire_evidence import build_signing_context
 
 MULTICODEC_ED25519 = b"\xed\x01"
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -106,21 +107,20 @@ def _load_identity(path: Path) -> Tuple[Ed25519PrivateKey, str]:
     return key, did
 
 
-def canonical_message(room: str, nonce: int, text: str) -> Tuple[str, str]:
-    if not (0 < nonce < 10**19):
-        raise ValueError("nonce must be 1-19 digits")
+def canonical_message(room: str, nonce: str, text: str) -> Tuple[str, str]:
     clean = sweep_text(text)
-    return f"{room}|{nonce}|{clean}", clean
+    context = build_signing_context(room, nonce, clean)
+    return context.canonical_bytes.decode("utf-8"), clean
 
 
-def _sign_message(key: Ed25519PrivateKey, room: str, nonce: int, text: str) -> Tuple[str, str]:
+def _sign_message(key: Ed25519PrivateKey, room: str, nonce: str, text: str) -> Tuple[str, str]:
     """Low-level signer retained only for sealed services and offline unit fixtures."""
     canonical, clean = canonical_message(room, nonce, text)
     signature = base64.urlsafe_b64encode(key.sign(canonical.encode("utf-8"))).decode().rstrip("=")
     return signature, clean
 
 
-def verify_message(did: str, signature: str, room: str, nonce: int, text: str) -> None:
+def verify_message(did: str, signature: str, room: str, nonce: str, text: str) -> None:
     canonical, _ = canonical_message(room, nonce, text)
     raw_sig = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
     Ed25519PublicKey.from_public_bytes(public_key_from_did(did)).verify(raw_sig, canonical.encode("utf-8"))
@@ -146,12 +146,12 @@ def _build_local_identity_service(
     def verify_status() -> Dict[str, Any]:
         key, did = identity_loader(configured_path)
         signature, clean = message_signer(
-            key, "local-check", 1, "identity verification")
-        message_verifier(did, signature, "local-check", 1, clean)
+            key, "local-check", "1", "identity verification")
+        message_verifier(did, signature, "local-check", "1", clean)
         return {"did": did, "verified": True, "permission": "0600"}
 
     def sign_authorized(
-        room: str, nonce: int, text: str, *, intent: ReviewedLocalIntent,
+        room: str, nonce: str, text: str, *, intent: ReviewedLocalIntent,
         revision: str, config_version: str,
     ) -> Dict[str, str]:
         canonical, _ = canonicalizer(room, nonce, text)
