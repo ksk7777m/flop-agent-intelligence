@@ -202,11 +202,11 @@ PYTHONPATH=src python3 -m flop_agent.cli verify-receipt contribution.receipt.jso
 PYTHONPATH=src python3 -m flop_agent.cli status
 PYTHONPATH=src python3 -m flop_agent.cli watch
 PYTHONPATH=src python3 -m flop_agent.cli publish "message"            # dry-run
-PYTHONPATH=src python3 -m flop_agent.cli publish --confirm \
-  --approved-signal approved-signal.json "exact approved text"       # live
 ```
 
-Publishing remains dry-run unless the human supplies both `--confirm` and an `APPROVED` signal envelope whose `recommended_text` exactly matches the outgoing message. See [Security Model](docs/SECURITY_MODEL.md) and [Architecture](docs/ARCHITECTURE.md).
+Live publication remains outside this offline package and requires a separately
+reviewed human-operated procedure. See [Security Model](docs/SECURITY_MODEL.md)
+and [Architecture](docs/ARCHITECTURE.md).
 
 ## Development
 

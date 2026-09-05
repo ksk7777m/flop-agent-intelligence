@@ -236,7 +236,7 @@ class RemoteContentPolicyTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 technocore.post_signed(
                     "lobby", "payload", intent=value, revision="a" * 40,
-                    config_version="v1", context="test")
+                    config_version="v1", context="test", nonce="1")
         self.assertEqual(signer_calls, [])
 
     def test_configured_official_fixture_read_works(self):

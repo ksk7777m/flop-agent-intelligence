@@ -322,10 +322,14 @@ class ProductionBoundarySealingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "identity.json"
             did = identity._create_identity(path)
-            canonical, _ = identity.canonical_message("lobby", "7", "fixture")
+            signing_context = identity.build_signing_context("lobby", "7", "fixture")
+            material = identity.signing_capability_material(
+                signing_context, action_class=LocalActionClass.IDENTITY_SIGN.value,
+                target=str(path.resolve()), revision=REVISION,
+                config_version="fixture-v1", purpose=identity.IDENTITY_SIGN_CONTEXT)
             record = binding(
-                LocalActionClass.IDENTITY_SIGN, canonical, str(path.resolve()),
-                canonical, identity.IDENTITY_SIGN_CONTEXT)
+                LocalActionClass.IDENTITY_SIGN, material["subject"], material["target"],
+                material["payload"], material["context"])
             issue, require = policy._new_capability_store(
                 {"identity": record}, frozenset({"fixture-reviewer"}), lambda: NOW)
             trusted_loader = identity._load_identity
@@ -340,9 +344,9 @@ class ProductionBoundarySealingTests(unittest.TestCase):
             get_did, verify_status, sign = identity._build_local_identity_service(
                 path, require, loader, identity._sign_message, identity.verify_message)
             capability = issue(
-                "identity", LocalActionClass.IDENTITY_SIGN, canonical,
-                target=str(path.resolve()), payload=canonical,
-                context=identity.IDENTITY_SIGN_CONTEXT, revision=REVISION,
+                "identity", LocalActionClass.IDENTITY_SIGN, material["subject"],
+                target=material["target"], payload=material["payload"],
+                context=material["context"], revision=REVISION,
                 config_version="fixture-v1")
             with mock.patch.object(
                     identity, "_load_identity",
@@ -357,7 +361,7 @@ class ProductionBoundarySealingTests(unittest.TestCase):
                 self.assertEqual(verify_status()["verified"], True)
 
             self.assertEqual(result["did"], did)
-            self.assertEqual(set(result), {"did", "signature", "text"})
+            self.assertEqual(set(result), {"did", "signature", "text", "nonce"})
             self.assertNotIn("seed", repr(result).lower())
             self.assertNotIn("private", repr(result).lower())
             self.assertEqual(len(loader_calls), 3)

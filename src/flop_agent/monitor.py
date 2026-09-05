@@ -344,15 +344,6 @@ def _safe_fetch(
         return None, _result("UNKNOWN", "Endpoint temporarily unavailable", error=type(error).__name__)
 
 
-def _historical_contribution_nonce(contribution: Mapping[str, Any]) -> Any:
-    nonce = contribution.get("nonce")
-    # This one frozen pre-hardening receipt encoded a JS-safe nonce as a JSON
-    # integer. New wire and publishing paths require exact decimal strings.
-    if contribution.get("seq") == 929750 and nonce == 1787708242457:
-        return "1787708242457"
-    return nonce
-
-
 def _local_evidence(root: Path) -> Dict[str, Any]:
     expected = [
         ("original", "flop-agent-intelligence-e388c6fd.receipt.json", "854b3442645b0dcaeae9d87646e0144fd48f659ef0a72208135eddaa37b279b2"),
@@ -372,7 +363,7 @@ def _local_evidence(root: Path) -> Dict[str, Any]:
         from .identity import verify_message
         records = [json.loads(line) for line in (root / "data/activity.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
         contribution = next(item for item in reversed(records) if item.get("room") == "lobby" and item.get("seq") == 929750)
-        verify_message(contribution["did"], contribution["signature"], "lobby", _historical_contribution_nonce(contribution), contribution["text_after_sweep"])
+        verify_message(contribution["did"], contribution["signature"], "lobby", contribution["nonce"], contribution["text_after_sweep"])
         details["contribution_signature"] = contribution["did"] == DID
     except Exception:
         details["contribution_signature"] = False
@@ -391,7 +382,7 @@ def _public_evidence(root: Path, bodies: Dict[str, bytes]) -> Dict[str, Any]:
         from .identity import verify_message
         records = [json.loads(line) for line in (root / "data/activity.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
         contribution = next(item for item in reversed(records) if item.get("room") == "lobby" and item.get("seq") == 929750)
-        verify_message(contribution["did"], contribution["signature"], "lobby", _historical_contribution_nonce(contribution), contribution["text_after_sweep"])
+        verify_message(contribution["did"], contribution["signature"], "lobby", contribution["nonce"], contribution["text_after_sweep"])
         details["contribution_signature"] = contribution["did"] == DID
     except Exception:
         details["parse_or_signature"] = False

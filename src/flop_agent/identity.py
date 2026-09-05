@@ -18,7 +18,7 @@ from .remote_content_policy import (
     ReviewedLocalIntent,
     require_local_intent,
 )
-from .wire_evidence import build_signing_context
+from .wire_evidence import build_signing_context, signing_capability_material
 
 MULTICODEC_ED25519 = b"\xed\x01"
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -153,15 +153,28 @@ def _build_local_identity_service(
     def sign_authorized(
         room: str, nonce: str, text: str, *, intent: ReviewedLocalIntent,
         revision: str, config_version: str,
+        external_challenge: bytes | None = None,
     ) -> Dict[str, str]:
-        canonical, _ = canonicalizer(room, nonce, text)
+        clean = sweep_text(text)
+        signing_context = build_signing_context(
+            room, nonce, clean, external_challenge=external_challenge)
+        material = signing_capability_material(
+            signing_context, action_class=action.value,
+            target=str(configured_path), revision=revision,
+            config_version=config_version, purpose=context)
         capability_validator(
-            intent, action, canonical, target=str(configured_path), payload=canonical,
-            context=context, revision=revision, config_version=config_version,
+            intent, action, material["subject"], target=material["target"],
+            payload=material["payload"], context=material["context"],
+            revision=revision, config_version=config_version,
             consume=True)
         key, did = identity_loader(configured_path)
-        signature, clean = message_signer(key, room, nonce, text)
-        return {"did": did, "signature": signature, "text": clean}
+        signature, signed_clean = message_signer(key, room, nonce, clean)
+        signed_canonical, _ = canonicalizer(room, nonce, signed_clean)
+        if (signed_clean != clean
+                or signed_canonical.encode("utf-8") != signing_context.canonical_bytes):
+            raise RuntimeError("local signer canonicalization mismatch")
+        return {"did": did, "signature": signature, "text": clean,
+                "nonce": signing_context.nonce.decimal}
 
     return get_public_did, verify_status, sign_authorized
 

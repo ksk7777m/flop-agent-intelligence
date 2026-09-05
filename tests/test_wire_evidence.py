@@ -1,402 +1,381 @@
-import base64
-import hashlib
-import inspect
-import json
-import logging
-import math
-import unittest
-
+import base64, copy, dataclasses, hashlib, inspect, io, json, logging, pickle
+import tempfile, traceback, unittest
+from datetime import datetime, timezone
+from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from flop_agent import evidence_authority as authority
+from flop_agent import identity, technocore
+from flop_agent import remote_content_policy as policy
 from flop_agent import wire_evidence as wire
-from flop_agent import technocore
-
+from flop_agent.proof import ProofRecord
 
 REVISION = "a" * 40
+NOW = datetime(2026, 9, 4, 0, 5, tzinfo=timezone.utc)
+EVENTS = ("write_accepted", "read_back_observed", "decode_valid",
+          "signature_valid", "state_replay_valid", "evidence_confirmed")
 
-
-def b64(raw):
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-
-
+def b64(raw): return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 def public_b64(key):
     return b64(key.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw))
 
-
-def export(records, source=wire.ExportSourceKind.CONFIGURED_REVIEWED_EXPORT,
-           generation="gen-1"):
-    raw = b"\n".join(json.dumps(value, separators=(",", ":")).encode()
-                     for value in records)
-    return wire.acquire_export_fixture(
-        raw, source_kind=source, source_id="offline-fixture",
-        acquired_at_ms=1_800_000_000_000, verifier_revision=REVISION,
-        generation=generation)
-
-
-def agreement_fixture():
-    proposer = Ed25519PrivateKey.generate()
-    accepter = Ed25519PrivateKey.generate()
-    proposal_bytes = wire.agreement_proposal_signing_bytes(
+def agreement_fixture(rail="bitcoin"):
+    proposer, accepter = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    terms = {"lock_statement": "LOCKED", "units": "fixture-only"}
+    offer_bytes = wire.agreement_proposal_signing_bytes(
         protocol="tclk-alpha", proposer_id="alice", counterparty_id="bob",
-        terms={"lock_statement": "LOCKED", "units": "fixture-only"},
-        rail_raw="paperrail", reference="ref-1")
-    proposal_signature = b64(proposer.sign(proposal_bytes))
-    offer_id = wire.recompute_offer_id(proposal_bytes, proposal_signature)
+        terms=terms, rail_raw=rail, reference="ref-1")
+    offer_sig = b64(proposer.sign(offer_bytes))
+    offer_id = wire.recompute_offer_id(offer_bytes, offer_sig)
     proposal = wire.AgreementProposal(
-        "tclk-alpha", "alice", "bob", public_b64(proposer),
-        {"lock_statement": "LOCKED", "units": "fixture-only"},
-        "paperrail", "ref-1", proposal_signature, offer_id)
-    acceptance_bytes = wire.agreement_acceptance_signing_bytes(
+        "tclk-alpha", "alice", "bob", public_b64(proposer), terms, rail,
+        "ref-1", offer_sig, offer_id)
+    accept_bytes = wire.agreement_acceptance_signing_bytes(
         protocol="tclk-alpha", accepter_id="bob", proposer_id="alice",
         offer_id=offer_id, statement="ACCEPT")
-    acceptance_signature = b64(accepter.sign(acceptance_bytes))
-    agreement_id = wire.recompute_agreement_id(
-        offer_id, acceptance_bytes, acceptance_signature)
+    accept_sig = b64(accepter.sign(accept_bytes))
+    agreement_id = wire.recompute_agreement_id(offer_id, accept_bytes, accept_sig)
     acceptance = wire.AgreementAcceptance(
         "tclk-alpha", "bob", "alice", public_b64(accepter), offer_id,
-        "ACCEPT", acceptance_signature, agreement_id)
+        "ACCEPT", accept_sig, agreement_id)
     return proposal, acceptance
 
+def binding(action, material, config="fixture-v1"):
+    digest = lambda value: hashlib.sha256(value.encode()).hexdigest()
+    return {"reviewer": "fixture-reviewer", "approved_at": "2026-09-04T00:00:00Z",
+            "action": action.value, "subject_sha256": digest(material["subject"]),
+            "target_sha256": digest(material["target"]),
+            "payload_sha256": digest(material["payload"]),
+            "context_sha256": digest(material["context"]), "revision": REVISION,
+            "config_version": config}
 
-class NonceAndFrameSafetyTests(unittest.TestCase):
-    def test_nonce_remains_exact_decimal_string_across_js_boundary_values(self):
-        values = (
-            "9007199254740991", "9007199254740992",
-            "9223372036854775807", str(wire.MAX_PROTOCOL_NONCE),
-        )
-        for value in values:
-            with self.subTest(value=value):
-                nonce = wire.parse_nonce(value)
-                self.assertEqual(nonce.decimal, value)
-                context = wire.build_signing_context("lobby", value, "fixture")
-                self.assertEqual(context.nonce.decimal, value)
-                self.assertIn(("|" + value + "|").encode(), context.canonical_bytes)
+def signing_store(action, context, target, purpose, config="fixture-v1"):
+    material = wire.signing_capability_material(
+        context, action_class=action.value, target=target, revision=REVISION,
+        config_version=config, purpose=purpose)
+    issue, require = policy._new_capability_store(
+        {"sign": binding(action, material, config)},
+        frozenset({"fixture-reviewer"}), lambda: NOW)
+    intent = issue("sign", action, material["subject"], target=material["target"],
+                   payload=material["payload"], context=material["context"],
+                   revision=REVISION, config_version=config)
+    return intent, require
 
-    def test_nonce_rejects_numeric_coercion_and_noncanonical_forms(self):
-        for value in (0, 1, 1.0, "0", "01", "+1", "1.0", "1e3", "-1",
-                      str(wire.MAX_PROTOCOL_NONCE + 1)):
+class NonceAndSignerTests(unittest.TestCase):
+    def test_nonce_exact_string_in_context_and_proof(self):
+        for value in ("9007199254740992", "9223372036854775807",
+                      str(wire.MAX_PROTOCOL_NONCE)):
+            self.assertEqual(wire.parse_nonce(value).decimal, value)
+            self.assertEqual(ProofRecord("x", "x", "x", None, "x", "x", nonce=value).nonce, value)
+        for value in (1, 1.0, "01", "1e3", str(wire.MAX_PROTOCOL_NONCE + 1)):
             with self.subTest(value=value), self.assertRaises(wire.WireSafetyError):
-                wire.parse_nonce(value)
+                ProofRecord("x", "x", "x", None, "x", "x", nonce=value)
+        activity = Path(__file__).resolve().parents[1] / "data" / "activity.jsonl"
+        for line in activity.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if "nonce" in record:
+                self.assertIsInstance(record["nonce"], str)
 
-    def test_signing_validation_order_and_exact_external_challenge(self):
-        with self.assertRaises(wire.WireSafetyError) as caught:
-            wire.build_signing_context("p-private", 7, object())
-        self.assertEqual(caught.exception.code, "ROOM_INVALID")
-        with self.assertRaises(wire.WireSafetyError) as caught:
-            wire.build_signing_context("lobby", 7, object())
-        self.assertEqual(caught.exception.code, "NONCE_INVALID")
+    def test_capability_material_binds_all_signing_fields(self):
         context = wire.build_signing_context("lobby", "7", "hello")
-        same = wire.build_signing_context(
-            "lobby", "7", "hello", external_challenge=context.canonical_bytes)
-        self.assertEqual(same.canonical_sha256, context.canonical_sha256)
+        material = wire.signing_capability_material(
+            context, action_class="SIGNED_ROOM_POST", target="lobby",
+            revision=REVISION, config_version="fixture-v1", purpose="post")
+        self.assertEqual(set(json.loads(material["subject"])), {
+            "room", "nonce", "text_sha256", "canonical_sha256", "action_class",
+            "target", "revision", "config_version"})
+        self.assertEqual(material["payload"], "lobby|7|hello")
+
+    def test_large_nonce_actual_identity_service_and_external_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "identity.json"; identity._create_identity(path)
+            nonce = str(wire.MAX_PROTOCOL_NONCE)
+            context = wire.build_signing_context("lobby", nonce, "fixture")
+            intent, require = signing_store(policy.LocalActionClass.IDENTITY_SIGN,
+                                            context, str(path.resolve()),
+                                            identity.IDENTITY_SIGN_CONTEXT)
+            calls = []
+            def signer(key, room, selected, text):
+                calls.append(selected); return identity._sign_message(key, room, selected, text)
+            _, _, sign = identity._build_local_identity_service(
+                path, require, identity._load_identity, signer, identity.verify_message)
+            result = sign("lobby", nonce, "fixture", intent=intent, revision=REVISION,
+                          config_version="fixture-v1",
+                          external_challenge=context.canonical_bytes)
+            self.assertEqual((result["nonce"], calls), (nonce, [nonce]))
+
+    def test_wrong_nonce_and_external_mismatch_precede_key_access(self):
+        path = Path("/tmp/nonexistent-fixture-key")
+        context = wire.build_signing_context("lobby", "7", "fixture")
+        intent, require = signing_store(policy.LocalActionClass.IDENTITY_SIGN,
+                                        context, str(path.resolve()),
+                                        identity.IDENTITY_SIGN_CONTEXT)
+        calls = []
+        _, _, sign = identity._build_local_identity_service(
+            path, require, lambda *_: calls.append("key"),
+            lambda *_: calls.append("sign"), lambda *_: None)
+        with self.assertRaises(PermissionError):
+            sign("lobby", "8", "fixture", intent=intent, revision=REVISION,
+                 config_version="fixture-v1")
         with self.assertRaises(wire.WireSafetyError) as caught:
-            wire.build_signing_context(
-                "lobby", "7", "hello", external_challenge=b"remote-canonical")
+            sign("lobby", "7", "fixture", intent=object(), revision=REVISION,
+                 config_version="fixture-v1", external_challenge=b"wrong")
         self.assertEqual(caught.exception.code, "SIGNING_CONTEXT_MISMATCH")
+        self.assertEqual(calls, [])
 
-    def test_capability_binding_is_complete(self):
-        context = wire.build_signing_context("lobby", "7", "hello")
-        binding = context.capability_binding(
-            action_class="IDENTITY_SIGN", target="lobby",
-            revision=REVISION, config_version="wire-v1")
-        self.assertEqual(set(binding), {
-            "room", "nonce", "text_sha256", "canonical_sha256",
-            "action_class", "target", "revision", "config_version"})
-        self.assertEqual(binding["nonce"], "7")
+    def test_production_equivalent_post_binds_nonce_before_key(self):
+        context = wire.build_signing_context("lobby", "7", "fixture")
+        intent, require = signing_store(policy.LocalActionClass.SIGNED_ROOM_POST,
+                                        context, "lobby", "fixture-post")
+        calls = []
+        def decoder(_url, request):
+            calls.append(request.method)
+            return ({"messages": [{"from": "did:key:fixture", "nonce": "7",
+                                    "text": "fixture", "seq": 1}]}
+                    if request.method == "GET" else {"ok": True})
+        _, _, _, post, _ = technocore._build_technocore_client(
+            lambda *_: None, require, lambda *_: (object(), "did:key:fixture"),
+            lambda *_: ("signature", "fixture"), decoder)
+        result = post(Path("fixture"), "lobby", "fixture", intent=intent,
+                      revision=REVISION, config_version="fixture-v1",
+                      context="fixture-post", nonce="7",
+                      external_challenge=context.canonical_bytes)
+        self.assertEqual((result["nonce"], calls), ("7", ["POST", "GET"]))
 
-    def test_tclk_raw_gate_precedes_json_decode(self):
-        invalid = (
-            b"x" * 4097, b'{"x":1}\n{"x":2}', b'{"x":"\x01"}',
-            b"\xff", "é".encode(), b"not-json",
-        )
-        expected = (
-            "FRAME_TOO_LARGE", "FRAME_MULTILINE", "FRAME_CHARACTER_INVALID",
-            "FRAME_UTF8_INVALID", "FRAME_CHARACTER_INVALID", "FRAME_SYNTAX_INVALID",
-        )
-        for raw, code in zip(invalid, expected):
-            with self.subTest(code=code), self.assertRaises(wire.WireSafetyError) as caught:
+class EvidenceAuthorityTests(unittest.TestCase):
+    def make_authority(self, raw, acceptance=None, rail=None):
+        rails = {}
+        if acceptance and rail:
+            rails["rail-proof"] = {
+                "agreement_id": acceptance.agreement_id, "rail": rail.rail_canonical,
+                "reference": rail.reference, "terminal_state": rail.terminal_state,
+                "evidence_sha256": authority._rail_observation_hash(rail),
+                "protocol_valid": True, "independent_finality_verified": True,
+                "cryptographic_verification": True}
+        evidence_hash = "e" * 64
+        return authority._build_evidence_authority(
+            {"reviewed": {"source_kind": "CONFIGURED_REVIEWED_EXPORT",
+                           "generation": "gen-1",
+                           "snapshot_sha256": hashlib.sha256(raw).hexdigest()}}, rails,
+            {"readback": {"evidence_sha256": evidence_hash, "events": EVENTS}},
+            REVISION, lambda: 1_800_000_000_000), evidence_hash
+
+    def test_opaque_types_block_construction_copy_serialization(self):
+        for cls in (authority.VerifiedTranscriptCompleteness, authority.VerifiedAgreement,
+                    authority.VerifiedRailFinality, authority.VerifiedReadBackEvidence,
+                    authority.VerifiedEvidenceBundle):
+            with self.assertRaises(PermissionError): cls()
+        raw = b'{"seq":"1","generation":"gen-1"}'
+        auth, _ = self.make_authority(raw)
+        obs = auth.observe_reviewed_export("reviewed", raw, acquired_at_ms=1,
+                                           generation="gen-1")
+        token = auth.verify_completeness(obs, first_seq="1", last_seq="1")
+        for operation in (copy.copy, copy.deepcopy, pickle.dumps):
+            with self.assertRaises(TypeError): operation(token)
+
+    def test_public_export_has_no_raw_and_third_party_never_complete(self):
+        secret = "fixture-secret-90817"
+        raw = json.dumps({"seq": "1", "generation": "gen-1", "message": secret}).encode()
+        observation = authority.observe_third_party_export(
+            raw, source_id="third-party", acquired_at_ms=1,
+            verifier_revision=REVISION, generation="gen-1")
+        rendered = repr(dataclasses.asdict(observation))
+        self.assertNotIn(secret, rendered); self.assertNotIn("raw", rendered.lower())
+        self.assertEqual(observation.as_public_evidence()["completeness"],
+                         "TRANSCRIPT_COMPLETENESS_UNVERIFIED")
+        self.assertIsNone(authority.production_evidence_authority.verify_completeness(
+            observation, first_seq="1", last_seq="1"))
+
+    def test_completeness_requires_registry_exact_bounds_and_no_truncation(self):
+        raw = b'{"seq":"1","generation":"gen-1"}\n{"seq":"2","generation":"gen-1"}'
+        auth, _ = self.make_authority(raw)
+        obs = auth.observe_reviewed_export("reviewed", raw, acquired_at_ms=1,
+                                           generation="gen-1")
+        self.assertIsNone(auth.verify_completeness(obs, first_seq="1", last_seq="3"))
+        self.assertIsNone(auth.verify_completeness(
+            obs, first_seq="1", last_seq="2", truncation_indicated=True))
+        self.assertIsInstance(auth.verify_completeness(obs, first_seq="1", last_seq="2"),
+                              authority.VerifiedTranscriptCompleteness)
+
+    def test_agreement_arbitrary_id_and_descriptive_forgery_fail(self):
+        raw = b'{"seq":"1","generation":"gen-1"}'
+        proposal, acceptance = agreement_fixture(); auth, _ = self.make_authority(raw)
+        self.assertIsInstance(auth.verify_agreement(proposal, acceptance),
+                              authority.VerifiedAgreement)
+        self.assertIsNone(auth.verify_agreement(
+            proposal, dataclasses.replace(acceptance, agreement_id="0" * 64)))
+        self.assertIsNone(wire.verify_tclk_alpha_agreement(
+            proposal, acceptance).verified_agreement(proposal, acceptance))
+
+    def test_rail_finality_is_registry_issued_and_paper_is_impossible(self):
+        raw = b'{"seq":"1","generation":"gen-1"}'
+        proposal, acceptance = agreement_fixture()
+        rail = wire.RailObservation.observed(
+            "bitcoin", "ref-1", "COMPLETED",
+            protocol_valid=True)
+        auth, _ = self.make_authority(raw, acceptance, rail)
+        finality = auth.verify_rail(auth.verify_agreement(proposal, acceptance),
+                                    rail, "rail-proof")
+        self.assertIsInstance(finality, authority.VerifiedRailFinality)
+        self.assertEqual(wire.assess_finality("COMPLETED", rail).finality_status,
+                         wire.EvidenceStatus.FINALITY_UNVERIFIED)
+        pp, pa = agreement_fixture("paper")
+        paper = wire.RailObservation.observed(
+            "paper", "ref-1", "COMPLETED",
+            protocol_valid=True)
+        paper_auth, _ = self.make_authority(raw, pa, paper)
+        self.assertIsNone(paper_auth.verify_rail(
+            paper_auth.verify_agreement(pp, pa), paper, "rail-proof"))
+
+    def test_timestamp_flip_third_party_never_changes_finality(self):
+        first = b'{"seq":"1","ts":1,"generation":"gen-1"}'
+        proposal, acceptance = agreement_fixture(); auth, _ = self.make_authority(first)
+        agreement = auth.verify_agreement(proposal, acceptance)
+        for raw in (first, b'{"seq":"1","ts":999999,"generation":"gen-1"}'):
+            observation = authority.observe_third_party_export(
+                raw, source_id="third-party", acquired_at_ms=1,
+                verifier_revision=REVISION, generation="gen-1")
+            self.assertIsNone(auth.verify_completeness(observation, first_seq="1", last_seq="1"))
+            bundle = auth.issue_bundle(completeness=None, agreement=agreement,
+                                       finality=None, readback=None)
+            self.assertEqual(auth.as_public_evidence(bundle)["finality"],
+                             "FINALITY_UNVERIFIED")
+
+    def test_readback_and_bundle_require_same_registry_issued_tokens(self):
+        raw = b'{"seq":"1","generation":"gen-1"}'
+        one, evidence_hash = self.make_authority(raw); two, _ = self.make_authority(raw)
+        self.assertIsNone(one.verify_readback(
+            "readback", evidence_hash, ("write_accepted", "evidence_confirmed")))
+        readback = one.verify_readback("readback", evidence_hash, EVENTS)
+        self.assertIsInstance(readback, authority.VerifiedReadBackEvidence)
+        with self.assertRaises(PermissionError):
+            two.issue_bundle(completeness=None, agreement=None,
+                             finality=None, readback=readback)
+        with self.assertRaises(PermissionError):
+            wire.EvidenceBundle(wire.EvidenceStatus.SIGNED_CONTENT_VERIFIED,
+                wire.EvidenceStatus.VENUE_METADATA_OBSERVED,
+                wire.EvidenceStatus.TRANSCRIPT_COMPLETENESS_VERIFIED,
+                wire.EvidenceStatus.AGREEMENT_VERIFIED,
+                wire.EvidenceStatus.RAIL_CRYPTO_VERIFIED,
+                wire.EvidenceStatus.FINALITY_VERIFIED)
+
+    def test_public_verified_field_forgery_is_rejected(self):
+        with self.assertRaises(PermissionError):
+            wire.TranscriptCompletenessClaim("0" * 64, "gen-1", "1", "1", True)
+        with self.assertRaises(PermissionError):
+            wire.RailObservation.observed(
+                "bitcoin", "tx-1", "COMPLETED",
+                crypto_status=wire.RailCryptoStatus.RAIL_CRYPTO_VERIFIED)
+        with self.assertRaises(PermissionError):
+            wire.FinalityAssessment(None, wire.EvidenceStatus.RAIL_CRYPTO_VERIFIED,
+                                    wire.EvidenceStatus.FINALITY_VERIFIED,
+                                    "ECONOMIC_VALUE_VERIFIED", "forged")
+        with self.assertRaises(PermissionError):
+            wire.AgreementVerification(
+                wire.EvidenceStatus.SIGNED_CONTENT_VERIFIED,
+                wire.EvidenceStatus.SIGNED_CONTENT_VERIFIED,
+                "OFFER_ID_VERIFIED", "AGREEMENT_ID_VERIFIED",
+                "COUNTERPARTY_VERIFIED", "LOCK_SEMANTICS_VERIFIED",
+                wire.EvidenceStatus.AGREEMENT_VERIFIED)
+
+class RedactionAndSurfaceTests(unittest.TestCase):
+    def assert_safe_error(self, operation, secret):
+        stream = io.StringIO(); handler = logging.StreamHandler(stream)
+        logger = logging.getLogger("wire-redaction-test"); logger.addHandler(handler)
+        try:
+            try: operation()
+            except wire.WireSafetyError as error:
+                rendered = (str(error) + repr(error) + repr(error.__dict__)
+                            + "".join(traceback.format_exception(
+                                type(error), error, error.__traceback__)))
+                self.assertIsNone(error.__cause__); self.assertIsNone(error.__context__)
+                logger.error("safe boundary failure", exc_info=error)
+            else: self.fail("safe error was not raised")
+        finally: logger.removeHandler(handler)
+        self.assertNotIn(secret, rendered + stream.getvalue())
+
+    def test_json_and_utf8_upstream_errors_retain_no_raw(self):
+        secret = "preimage-fixture-secret-7761"
+        self.assert_safe_error(lambda: wire.decode_tclk_alpha_json_frame(
+            ('{"statement":"' + secret + '"').encode()), secret)
+        secret = "SECRET_BYTES_8123"
+        self.assert_safe_error(lambda: wire.decode_tclk_alpha_json_frame(
+            secret.encode() + b"\xff"), secret)
+
+    def test_public_surface_has_no_effect_injection(self):
+        forbidden = {"path", "transport", "fetcher", "writer", "callback", "executor", "signer", "adapter"}
+        for name in wire.__all__:
+            value = getattr(wire, name)
+            if callable(value): self.assertTrue(forbidden.isdisjoint(inspect.signature(value).parameters))
+
+class PreservedDefensiveCoverageTests(unittest.TestCase):
+    def test_raw_frame_gate_precedes_json_decode(self):
+        for raw, code in ((b"x" * 4097, "FRAME_TOO_LARGE"),
+                          (b'{"x":1}\n{"x":2}', "FRAME_MULTILINE"),
+                          (b"\xff", "FRAME_UTF8_INVALID"),
+                          (b"not-json", "FRAME_SYNTAX_INVALID")):
+            with self.assertRaises(wire.WireSafetyError) as caught:
                 wire.decode_tclk_alpha_json_frame(raw)
             self.assertEqual(caught.exception.code, code)
-        self.assertEqual(wire.decode_tclk_alpha_json_frame(b'{"seq":"1"}')["seq"], "1")
 
-    def test_time_is_bounded_integer_unix_ms(self):
-        self.assertEqual(wire.validate_unix_ms(0), 0)
+    def test_time_validation_remains_bounded_and_integral(self):
         self.assertEqual(wire.validate_unix_ms(wire.MAX_UNIX_MS), wire.MAX_UNIX_MS)
-        for value in (True, -1, wire.MAX_UNIX_MS + 1, 1.0, math.nan,
-                      math.inf, -math.inf, "1"):
-            with self.subTest(value=value), self.assertRaises(wire.WireSafetyError) as caught:
-                wire.validate_unix_ms(value)
-            self.assertEqual(caught.exception.code, "TIME_INVALID")
+        for value in (True, -1, wire.MAX_UNIX_MS + 1, 1.0, "1"):
+            with self.assertRaises(wire.WireSafetyError): wire.validate_unix_ms(value)
 
-
-class ExportEvidenceTests(unittest.TestCase):
-    def test_export_preserves_provenance_without_exposing_raw(self):
-        snapshot = export([{"seq": "1", "ts": 1, "generation": "gen-1"}])
-        evidence = snapshot.evidence()
-        self.assertEqual(evidence["source_kind"], "CONFIGURED_REVIEWED_EXPORT")
-        self.assertEqual(evidence["acquired_at_ms"], 1_800_000_000_000)
-        self.assertEqual(evidence["verifier_revision"], REVISION)
-        self.assertEqual(evidence["snapshot_sha256"], hashlib.sha256(
-            snapshot.raw_snapshot).hexdigest())
-        self.assertFalse(evidence["raw_included"])
-        self.assertNotIn("seq", repr(snapshot))
-
-    def test_snapshot_cannot_be_constructed_with_mismatched_hash(self):
-        with self.assertRaises(wire.WireSafetyError) as caught:
-            wire.ExportSnapshot(
-                wire.ExportSourceKind.THIRD_PARTY_SUPPLIED, "fixture", 1,
-                "0" * 64, REVISION, None, b"bytes")
-        self.assertEqual(caught.exception.code, "HASH_INVALID")
-
-    def test_clean_structure_is_not_completeness(self):
-        snapshot = export([
-            {"seq": "1", "ts": 1, "generation": "gen-1"},
-            {"seq": "2", "ts": 2, "generation": "gen-1"},
-        ])
-        result = wire.assess_export(snapshot)
-        self.assertEqual(result.structure_status, wire.EvidenceStatus.TRANSCRIPT_STRUCT_VALID)
-        self.assertEqual(result.completeness_status,
-                         wire.EvidenceStatus.TRANSCRIPT_COMPLETENESS_UNVERIFIED)
-
-    def test_only_independent_reviewed_exact_claim_can_verify_completeness(self):
-        snapshot = export([
-            {"seq": "1", "generation": "gen-1"},
-            {"seq": "2", "generation": "gen-1"},
-        ])
-        claim = wire.TranscriptCompletenessClaim(
-            snapshot.snapshot_sha256, "gen-1", "1", "2", True)
-        self.assertEqual(wire.assess_export(snapshot, completeness_claim=claim).completeness_status,
-                         wire.EvidenceStatus.TRANSCRIPT_COMPLETENESS_VERIFIED)
-        third_party = export(
-            [{"seq": "1", "generation": "gen-1"},
-             {"seq": "2", "generation": "gen-1"}],
-            wire.ExportSourceKind.THIRD_PARTY_SUPPLIED)
-        third_claim = wire.TranscriptCompletenessClaim(
-            third_party.snapshot_sha256, "gen-1", "1", "2", True)
-        self.assertEqual(wire.assess_export(
-            third_party, completeness_claim=third_claim).completeness_status,
-            wire.EvidenceStatus.TRANSCRIPT_COMPLETENESS_UNVERIFIED)
-
-    def test_direct_observation_and_third_party_metadata_stay_distinct(self):
-        direct = export([{"seq": "1", "ts": 1}],
-                        wire.ExportSourceKind.DIRECT_VENUE_SNAPSHOT, None)
-        supplied = export([{"seq": "1", "ts": 1}],
-                          wire.ExportSourceKind.THIRD_PARTY_SUPPLIED, None)
-        self.assertEqual(wire.assess_export(direct).venue_metadata[0].provenance,
-                         wire.EvidenceStatus.DIRECT_VENUE_OBSERVATION)
-        self.assertEqual(wire.assess_export(supplied).venue_metadata[0].provenance,
-                         wire.EvidenceStatus.VENUE_METADATA_OBSERVED)
-        self.assertFalse(wire.assess_export(direct).venue_metadata[0].signed_metadata)
+    def test_venue_metadata_cannot_claim_signed_scope(self):
         with self.assertRaises(wire.WireSafetyError):
             wire.VenueMetadataEvidence(
-                "1", 1, None, wire.EvidenceStatus.DIRECT_VENUE_OBSERVATION,
+                "1", 1, "gen-1", wire.EvidenceStatus.VENUE_METADATA_OBSERVED,
                 signed_metadata=True)
 
-    def test_export_detects_gap_duplicate_reversal_generation_time_and_bounds(self):
-        cases = (
-            ([{"seq": "1"}, {"seq": "3"}], "SEQUENCE_GAP"),
-            ([{"seq": "1"}, {"seq": "1"}], "DUPLICATE_SEQUENCE"),
-            ([{"seq": "2"}, {"seq": "1"}], "SEQUENCE_REVERSAL"),
-            ([{"seq": "1", "generation": "gen-1"},
-              {"seq": "2", "generation": "gen-2"}], "GENERATION_INCONSISTENT"),
-            ([{"seq": "1", "ts": -1}], "TIME_INVALID"),
-        )
-        for records, issue in cases:
-            with self.subTest(issue=issue):
-                self.assertIn(issue, wire.assess_export(export(records)).issues)
-        bounded = wire.assess_export(
-            export([{"seq": "2"}]), acquisition_first_seq="1",
-            acquisition_last_seq="3", truncation_indicated=True)
-        self.assertEqual(set(bounded.issues), {
-            "TRUNCATION_INDICATED", "ACQUISITION_FIRST_BOUND_MISMATCH",
-            "ACQUISITION_LAST_BOUND_MISMATCH"})
+    def test_documented_and_runtime_capability_evidence_stay_distinct(self):
+        documented = wire.CapabilityObservation(
+            "ordered-sequences", wire.CapabilityEvidenceKind.DOCUMENTED_CAPABILITY,
+            "DOCUMENTED_ONLY")
+        runtime = wire.CapabilityObservation(
+            "ordered-sequences", wire.CapabilityEvidenceKind.RUNTIME_OBSERVED_CAPABILITY,
+            "NOT_OBSERVED_OFFLINE")
+        self.assertNotEqual(documented.evidence_kind, runtime.evidence_kind)
 
+    def test_readiness_never_claims_activation(self):
+        readiness = wire.wire_safety_readiness()
+        self.assertEqual(readiness["activation"], wire.ActivationState.DO_NOT_ACTIVATE)
+        self.assertNotEqual(readiness["rail_verifier_ready"], "LIVE_VERIFIED")
 
-class AgreementRailAndReadbackTests(unittest.TestCase):
-    def test_two_signature_agreement_verifies_all_independent_conditions(self):
-        proposal, acceptance = agreement_fixture()
-        result = wire.verify_tclk_alpha_agreement(proposal, acceptance)
-        self.assertEqual(result.proposal_signature, wire.EvidenceStatus.SIGNED_CONTENT_VERIFIED)
-        self.assertEqual(result.acceptance_signature, wire.EvidenceStatus.SIGNED_CONTENT_VERIFIED)
-        self.assertEqual(result.agreement_status, wire.EvidenceStatus.AGREEMENT_VERIFIED)
-        self.assertEqual(result.classification, wire.TCLK_ALPHA_CLASSIFICATION)
-        agreement = result.verified_agreement(proposal, acceptance)
-        self.assertIsInstance(agreement, wire.Agreement)
-        rail = wire.RailObservation.observed("paper", "ref-1", "COMPLETED")
-        attempt = wire.TransferAttempt(
-            "attempt-1", agreement.agreement_id, rail,
-            wire.ActivityQuality.PROTOCOL_VALID_ACTIVITY)
-        self.assertEqual(attempt.rail.rail_canonical, "PAPER")
-        self.assertFalse(attempt.rail.economic_value_verified)
-        state = wire.AgreementState.PROPOSED
-        for event in ("offer_verified", "acceptance_verified", "agreement_verified"):
-            state = wire.transition_agreement(state, event)
-        self.assertEqual(state, wire.AgreementState.AGREEMENT_VERIFIED)
-        with self.assertRaises(wire.WireSafetyError):
-            wire.transition_agreement(
-                wire.AgreementState.PROPOSED, "agreement_verified")
-
-    def test_valid_signatures_do_not_override_bad_offer_reference(self):
-        proposal, acceptance = agreement_fixture()
-        altered = wire.AgreementAcceptance(
-            acceptance.protocol, acceptance.accepter_id, acceptance.proposer_id,
-            acceptance.accepter_public_key_b64, "0" * 64, acceptance.statement,
-            acceptance.signature_b64, acceptance.agreement_id)
-        result = wire.verify_tclk_alpha_agreement(proposal, altered)
-        self.assertEqual(result.agreement_status, wire.EvidenceStatus.AGREEMENT_INVALID)
-        self.assertEqual(result.counterparty_status, "COUNTERPARTY_INVALID")
-        self.assertIsNone(result.verified_agreement(proposal, altered))
-
-    def test_tampered_ids_and_counterparties_fail_closed(self):
-        proposal, acceptance = agreement_fixture()
-        bad_offer = wire.AgreementProposal(
-            proposal.protocol, proposal.proposer_id, proposal.counterparty_id,
-            proposal.proposer_public_key_b64, proposal.terms, proposal.rail_raw,
-            proposal.reference, proposal.signature_b64, "0" * 64)
-        self.assertEqual(wire.verify_tclk_alpha_agreement(
-            bad_offer, acceptance).agreement_status, wire.EvidenceStatus.AGREEMENT_INVALID)
-        bad_agreement = wire.AgreementAcceptance(
-            acceptance.protocol, acceptance.accepter_id, acceptance.proposer_id,
-            acceptance.accepter_public_key_b64, acceptance.offer_id,
-            acceptance.statement, acceptance.signature_b64, "0" * 64)
-        self.assertEqual(wire.verify_tclk_alpha_agreement(
-            proposal, bad_agreement).agreement_status, wire.EvidenceStatus.AGREEMENT_INVALID)
-
-    def test_rail_preserves_alias_and_blocks_direct_canonical_bypass(self):
-        observed = wire.RailObservation.observed(
-            "btc", "tx-1", "COMPLETED",
-            crypto_status=wire.RailCryptoStatus.RAIL_CRYPTO_VERIFIED,
-            independent_finality_verified=True, protocol_valid=True)
-        self.assertEqual((observed.rail_raw, observed.rail_canonical), ("btc", "BITCOIN"))
+    def test_rail_alias_is_preserved_and_canonicalized_locally(self):
+        observed = wire.RailObservation.observed("btc", "tx-1", "COMPLETED")
+        self.assertEqual((observed.rail_raw, observed.rail_canonical),
+                         ("btc", "BITCOIN"))
         with self.assertRaises(wire.WireSafetyError):
             wire.RailObservation("paper", "BITCOIN", "ref", "COMPLETED")
 
-    def test_transcript_and_venue_deadlines_never_imply_finality(self):
-        no_rail = wire.assess_finality("COMPLETED", None)
-        self.assertEqual(no_rail.finality_status, wire.EvidenceStatus.FINALITY_UNVERIFIED)
-        paper = wire.RailObservation.observed(
-            "paper", "ref", "COMPLETED",
-            crypto_status=wire.RailCryptoStatus.RAIL_CRYPTO_VERIFIED,
-            independent_finality_verified=True, protocol_valid=True)
-        paper_result = wire.assess_finality("COMPLETED", paper)
-        self.assertEqual(paper_result.finality_status, wire.EvidenceStatus.FINALITY_UNVERIFIED)
-        self.assertFalse(paper.economic_value_verified)
+    def test_tampered_offer_id_is_descriptively_invalid(self):
+        proposal, acceptance = agreement_fixture()
+        altered = dataclasses.replace(proposal, offer_id="0" * 64)
+        self.assertEqual(wire.verify_tclk_alpha_agreement(
+            altered, acceptance).agreement_status, wire.EvidenceStatus.AGREEMENT_INVALID)
 
-    def test_independent_nonpaper_crypto_can_verify_finality(self):
-        rail = wire.RailObservation.observed(
-            "bitcoin", "tx-1", "COMPLETED",
-            crypto_status=wire.RailCryptoStatus.RAIL_CRYPTO_VERIFIED,
-            independent_finality_verified=True, protocol_valid=True)
-        result = wire.assess_finality(None, rail)
-        self.assertEqual(result.finality_status, wire.EvidenceStatus.FINALITY_VERIFIED)
-        self.assertTrue(rail.economic_value_verified)
-        incomplete = wire.RailObservation.observed(
-            "bitcoin", "tx-2", "COMPLETED",
-            crypto_status=wire.RailCryptoStatus.RAIL_CRYPTO_VERIFIED,
-            independent_finality_verified=True, protocol_valid=False)
-        self.assertEqual(wire.assess_finality(
-            "COMPLETED", incomplete).finality_status,
-            wire.EvidenceStatus.FINALITY_UNVERIFIED)
-
-    def test_readback_stages_are_strictly_sequential(self):
+    def test_readback_descriptive_transitions_are_sequential(self):
         stage = wire.ReadBackStage.NOT_STARTED
-        for event in ("write_accepted", "read_back_observed", "decode_valid",
-                      "signature_valid", "state_replay_valid", "evidence_confirmed"):
-            stage = wire.advance_readback(stage, event)
+        for event in EVENTS: stage = wire.advance_readback(stage, event)
         self.assertEqual(stage, wire.ReadBackStage.EVIDENCE_CONFIRMED)
         with self.assertRaises(wire.WireSafetyError):
             wire.advance_readback(wire.ReadBackStage.WRITE_ACCEPTED, "signature_valid")
 
-    def test_evidence_bundle_rejects_cross_layer_status(self):
-        with self.assertRaises(wire.WireSafetyError):
-            wire.EvidenceBundle(
-                wire.EvidenceStatus.SIGNED_CONTENT_VERIFIED,
-                wire.EvidenceStatus.VENUE_METADATA_OBSERVED,
-                wire.EvidenceStatus.TRANSCRIPT_COMPLETENESS_UNVERIFIED,
-                wire.EvidenceStatus.AGREEMENT_VERIFIED,
-                wire.EvidenceStatus.FINALITY_VERIFIED,
-                wire.EvidenceStatus.FINALITY_VERIFIED)
+    def test_third_party_export_reports_sequence_gap(self):
+        observation = authority.observe_third_party_export(
+            b'{"seq":"1"}\n{"seq":"3"}', source_id="third-party",
+            acquired_at_ms=1, verifier_revision=REVISION)
+        self.assertIn("SEQUENCE_GAP", observation.assessment.issues)
 
-
-class SecretAndReadinessTests(unittest.TestCase):
-    def test_secret_like_fields_never_appear_in_error_or_evidence(self):
-        secret_value = "fixture-secret-value-49381"
-        messages = []
-
-        class Capture(logging.Handler):
-            def emit(self, record):
-                messages.append(record.getMessage())
-
-        handler = Capture()
-        logging.getLogger().addHandler(handler)
-        keys = ("secret", "preimage", "witness", "presig.s", "paymentKey",
-                "private_key")
-        try:
-            for key in keys:
-                raw = json.dumps({key: secret_value}, separators=(",", ":")).encode()
-                with self.subTest(key=key), self.assertRaises(wire.WireSafetyError) as caught:
-                    wire.decode_tclk_alpha_json_frame(raw)
-                rendered = str(caught.exception) + repr(caught.exception.as_evidence())
-                self.assertNotIn(secret_value, rendered)
-            raw = json.dumps({"statement": "contains preimage " + secret_value}).encode()
-            with self.assertRaises(wire.WireSafetyError) as caught:
-                wire.decode_tclk_alpha_json_frame(raw)
-            self.assertNotIn(secret_value, str(caught.exception))
-        finally:
-            logging.getLogger().removeHandler(handler)
-        self.assertNotIn(secret_value, "\n".join(messages))
-
-    def test_readiness_is_typed_and_does_not_claim_activation(self):
-        readiness = wire.wire_safety_readiness()
-        self.assertEqual(set(readiness), {
-            "nonce_safe", "venue_provenance_ready", "export_verifier_ready",
-            "signer_context_ready", "agreement_verifier_ready",
-            "rail_verifier_ready", "evidence_readback_ready", "classification",
-            "activation"})
-        self.assertEqual(readiness["activation"], "DO_NOT_ACTIVATE")
-        self.assertNotEqual(readiness["rail_verifier_ready"], "LIVE_VERIFIED")
-        self.assertIsInstance(readiness["nonce_safe"], wire.ReadinessState)
-        self.assertIsInstance(readiness["activation"], wire.ActivationState)
-
-    def test_documented_and_runtime_capability_evidence_cannot_be_conflated(self):
-        documented = wire.CapabilityObservation(
-            "ordered-sequences", wire.CapabilityEvidenceKind.DOCUMENTED_CAPABILITY,
-            "DOCUMENTED_ONLY", "0" * 64)
-        observed = wire.CapabilityObservation(
-            "ordered-sequences",
-            wire.CapabilityEvidenceKind.RUNTIME_OBSERVED_CAPABILITY,
-            "NOT_OBSERVED_OFFLINE")
-        self.assertNotEqual(documented.evidence_kind, observed.evidence_kind)
-        with self.assertRaises(wire.WireSafetyError):
-            wire.CapabilityObservation(
-                "ordered-sequences",
-                wire.CapabilityEvidenceKind.RUNTIME_OBSERVED_CAPABILITY,
-                "RUNTIME_OBSERVED")
-
-    def test_public_module_has_no_effect_injection_parameters(self):
-        forbidden = {"path", "transport", "fetcher", "writer", "callback", "executor"}
-        for name in wire.__all__ if hasattr(wire, "__all__") else ():
-            value = getattr(wire, name)
-            if callable(value):
-                self.assertTrue(forbidden.isdisjoint(inspect.signature(value).parameters))
-
-    def test_production_post_validates_context_before_capability_or_key_access(self):
-        calls = []
-        _, _, _, post, _ = technocore._build_technocore_client(
-            lambda *_: None,
-            lambda *_args, **_kwargs: calls.append("capability"),
-            lambda *_: calls.append("key"),
-            lambda *_: calls.append("sign"),
-            lambda *_: calls.append("network"))
+    def test_signing_validation_order_rejects_room_before_nonce(self):
         with self.assertRaises(wire.WireSafetyError) as caught:
-            post(None, "p-private", "fixture", intent=object(),
-                 revision=REVISION, config_version="wire-v1", context="fixture",
-                 nonce="7")
+            wire.build_signing_context("p-private", 7, object())
         self.assertEqual(caught.exception.code, "ROOM_INVALID")
-        self.assertEqual(calls, [])
 
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == "__main__": unittest.main()

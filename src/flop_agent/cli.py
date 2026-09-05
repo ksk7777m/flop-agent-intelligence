@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import time
 from pathlib import Path
 
 from .activity import append_activity
@@ -188,7 +189,16 @@ def main() -> None:
         approved = signal_from_dict(json.loads(Path(args.approved_signal).read_text(encoding="utf-8")))
         validate_publish_approval(approved, args.text)
         from .remote_content_policy import HumanApprovalEvidence, LocalActionClass, reviewed_local_intent
-        subject = args.room + "\0" + args.text
+        from .identity import sweep_text
+        from .wire_evidence import build_signing_context, signing_capability_material
+        nonce = str(time.time_ns() // 1_000_000)
+        signing_context = build_signing_context(args.room, nonce, sweep_text(args.text))
+        material = signing_capability_material(
+            signing_context, action_class=LocalActionClass.SIGNED_ROOM_POST.value,
+            target=args.room, revision=args.commit,
+            config_version="technocore-publisher-v1",
+            purpose="human-approved CLI publication")
+        subject = material["subject"]
         approval_evidence = HumanApprovalEvidence(
             approved.approved_by or "", approved.approved_at or "",
             "human-approved CLI publication",
@@ -198,7 +208,8 @@ def main() -> None:
             "human-approved CLI publication", approval=approval_evidence)
         message = post_signed(
             args.room, args.text, intent=intent, revision=args.commit,
-            config_version="technocore-publisher-v1", context="human-approved CLI publication")
+            config_version="technocore-publisher-v1",
+            context="human-approved CLI publication", nonce=nonce)
         activity_text = str(message.get("swept_text", message["text"]))
         activity_approval = HumanApprovalEvidence(
             approved.approved_by or "", approved.approved_at or "",

@@ -15,6 +15,7 @@ from .remote_content_policy import (
     discovered_remote_value,
     require_local_intent,
 )
+from .wire_evidence import parse_nonce
 
 _ROOT = Path(__file__).resolve().parents[2]
 _PUBLIC_ACTIVITY_JSONL = (_ROOT / "data/activity.jsonl").resolve()
@@ -47,6 +48,9 @@ def _render_activity(
                         or len(raw_input) > MAX_LOCAL_RAW_EVIDENCE_CHARS):
         raise ValueError("approved outbound evidence text exceeds the local bound")
     local_evidence = evidence if local_origin else {}
+    nonce = None
+    if local_origin:
+        nonce = parse_nonce(message.get("nonce")).decimal
     note = local_evidence.get("note_value")
     remote_summary: Dict[str, Any] = {}
     if not raw_allowed:
@@ -65,7 +69,7 @@ def _render_activity(
         "seq": message["seq"] if isinstance(message.get("seq"), int) else None,
         "timestamp": message["ts"] if local_origin else datetime.now(timezone.utc).isoformat(),
         "source_timestamp_sha256": hashlib.sha256(str(message.get("ts", "")).encode()).hexdigest(),
-        "nonce": message.get("nonce") if local_origin else None,
+        "nonce": nonce,
         "content_origin": message_origin,
         "content_length": len(raw_text.encode("utf-8")),
         "content_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),

@@ -5,14 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict
 
-from .identity import _load_identity, _sign_message, canonical_message
+from .identity import _load_identity, _sign_message, canonical_message, sweep_text
 from .remote_content_policy import (
     DEFAULT_RESPONSE_LIMIT,
     LocalActionClass,
@@ -23,6 +22,7 @@ from .remote_content_policy import (
     require_local_intent,
     resolve_reviewed_source,
 )
+from .wire_evidence import build_signing_context, signing_capability_material
 
 BASE_URL = "https://technocore.chat"
 OFFICIAL_READ_SOURCES = frozenset({
@@ -87,7 +87,7 @@ def _build_technocore_client(
     reviewed_reads = frozenset(OFFICIAL_READ_SOURCES)
     base_url, did_note_path = BASE_URL, DID_NOTE_PATH
     parse_url, quote_path = urllib.parse.urlparse, urllib.parse.quote
-    request_type, now_ns = urllib.request.Request, time.time_ns
+    request_type = urllib.request.Request
     json_dumps, fullmatch = json.dumps, re.fullmatch
     message_canonicalizer = canonical_message
     safe_error = SafeRemoteError
@@ -142,19 +142,25 @@ def _build_technocore_client(
 
     def post(identity_path: Path, room: str, text: str, *, intent: ReviewedLocalIntent,
              revision: str, config_version: str, context: str,
-             nonce: str | None = None) -> Dict[str, Any]:
-        selected_nonce = nonce if nonce is not None else str(now_ns() // 1_000_000)
-        _, clean = message_canonicalizer(room, selected_nonce, text)
-        subject = room + "\0" + text
+             nonce: str, external_challenge: bytes | None = None) -> Dict[str, Any]:
+        clean = sweep_text(text)
+        signing_context = build_signing_context(
+            room, nonce, clean, external_challenge=external_challenge)
+        material = signing_capability_material(
+            signing_context, action_class=post_action.value, target=room,
+            revision=revision, config_version=config_version, purpose=context)
         capability_validator(
-            intent, post_action, subject, target=room,
-            payload=text, context=context, revision=revision,
+            intent, post_action, material["subject"], target=material["target"],
+            payload=material["payload"], context=material["context"], revision=revision,
             config_version=config_version)
         key, did = identity_loader(identity_path)
-        signature, signed_clean = message_signer(key, room, selected_nonce, clean)
-        if signed_clean != clean:
+        signature, signed_clean = message_signer(key, room, nonce, clean)
+        signed_canonical, _ = message_canonicalizer(room, nonce, signed_clean)
+        if (signed_clean != clean
+                or signed_canonical.encode("utf-8") != signing_context.canonical_bytes):
             raise RuntimeError("local signer canonicalization mismatch")
-        payload = {"did": did, "sig": signature, "nonce": selected_nonce, "text": clean}
+        payload = {"did": did, "sig": signature,
+                   "nonce": signing_context.nonce.decimal, "text": clean}
         transport(f"{base_url}/r/{quote_path(room, safe='')}", payload)
         view = transport(
             f"{base_url}/r/{quote_path(room, safe='')}?limit=200&format=json",
@@ -163,7 +169,7 @@ def _build_technocore_client(
             raise RuntimeError("Technocore JSON verification read returned an unexpected shape")
         matches = [message for message in view.get("messages", [])
                    if message.get("from") == did
-                   and message.get("nonce") == selected_nonce
+                   and message.get("nonce") == signing_context.nonce.decimal
                    and message.get("text") == clean]
         if len(matches) != 1:
             raise RuntimeError(
@@ -233,10 +239,12 @@ def _build_public_technocore_client(identity_path: Path, read: Any,
 
     def post_signed(room: str, text: str, *, intent: ReviewedLocalIntent,
                     revision: str, config_version: str, context: str,
-                    nonce: str | None = None) -> Dict[str, Any]:
+                    nonce: str,
+                    external_challenge: bytes | None = None) -> Dict[str, Any]:
         return captured_post(
             configured_identity, room, text, intent=intent, revision=revision,
-            config_version=config_version, context=context, nonce=nonce)
+            config_version=config_version, context=context, nonce=nonce,
+            external_challenge=external_challenge)
 
     def find_signed(room: str, text: str, *, intent: ReviewedLocalIntent,
                     revision: str, config_version: str,

@@ -38,19 +38,20 @@ __all__ = (
     "ActivityQuality", "Agreement", "AgreementAcceptance", "AgreementProposal",
     "AgreementState", "AgreementVerification",
     "CapabilityEvidenceKind", "CapabilityObservation", "EvidenceBundle",
-    "EvidenceLayer", "EvidenceStatus", "ExportSnapshot", "ExportSourceKind",
+    "EvidenceLayer", "EvidenceStatus", "ExportSourceKind",
     "FinalityAssessment", "MAX_PROTOCOL_NONCE", "MAX_UNIX_MS", "NonceLexeme",
     "ActivationState", "RailCryptoStatus", "RailObservation", "RawFramePolicy",
     "ReadBackStage", "ReadinessState",
     "SigningContext", "TCLK_ALPHA_CLASSIFICATION", "TranscriptAssessment",
     "TranscriptCompletenessClaim", "TransferAttempt", "VenueMetadataEvidence",
     "WireSafetyError",
-    "acquire_export_fixture", "advance_readback", "agreement_acceptance_signing_bytes",
+    "advance_readback", "agreement_acceptance_signing_bytes",
     "agreement_proposal_signing_bytes", "assess_export", "assess_finality",
     "build_signing_context", "canonicalize_rail", "decode_tclk_alpha_json_frame",
     "gate_tclk_alpha_frame", "parse_nonce", "recompute_agreement_id",
     "recompute_offer_id", "validate_room", "validate_unix_ms",
-    "transition_agreement", "verify_tclk_alpha_agreement", "wire_safety_readiness",
+    "signing_capability_material", "transition_agreement",
+    "verify_tclk_alpha_agreement", "wire_safety_readiness",
 )
 
 
@@ -180,13 +181,16 @@ def _sha256(value: bytes) -> str:
 
 def _canonical_json(value: Any) -> bytes:
     try:
-        return json.dumps(
+        encoded = json.dumps(
             value, sort_keys=True, separators=(",", ":"),
             ensure_ascii=False).encode("utf-8")
-    except (TypeError, ValueError, UnicodeEncodeError) as error:
+    except (TypeError, ValueError, UnicodeEncodeError):
+        encoded = None
+    if encoded is None:
         raise WireSafetyError(
             "CANONICALIZATION_INVALID", "payload", value,
-            "canonical JSON construction failed") from error
+            "canonical JSON construction failed") from None
+    return encoded
 
 
 def _ensure_secret_safe(value: Any, field: str = "payload") -> None:
@@ -279,9 +283,11 @@ def _gate_raw_frame(raw: bytes, policy: RawFramePolicy) -> str:
             "FRAME_TOO_LARGE", "frame", raw, "byte limit exceeded")
     try:
         text = raw.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as error:
+    except UnicodeDecodeError:
+        text = None
+    if text is None:
         raise WireSafetyError(
-            "FRAME_UTF8_INVALID", "frame", raw, "strict UTF-8 required") from error
+            "FRAME_UTF8_INVALID", "frame", raw, "strict UTF-8 required") from None
     if policy.single_line and ("\n" in text or "\r" in text):
         raise WireSafetyError(
             "FRAME_MULTILINE", "frame", raw, "exactly one line required")
@@ -306,10 +312,12 @@ def decode_tclk_alpha_json_frame(raw: bytes) -> Mapping[str, Any]:
     text = gate_tclk_alpha_frame(raw)
     try:
         value = json.loads(text)
-    except json.JSONDecodeError as error:
+    except json.JSONDecodeError:
+        value = None
+    if value is None:
         raise WireSafetyError(
             "FRAME_SYNTAX_INVALID", "frame", raw,
-            "structured decode failed") from error
+            "structured decode failed") from None
     if not isinstance(value, dict):
         raise WireSafetyError(
             "FRAME_SYNTAX_INVALID", "frame", raw, "object frame required")
@@ -336,7 +344,7 @@ class SigningContext:
 
     def capability_binding(self, *, action_class: str, target: str,
                            revision: str, config_version: str) -> Mapping[str, str]:
-        if action_class not in {"IDENTITY_SIGN", "RECEIPT_SIGN"}:
+        if action_class not in {"IDENTITY_SIGN", "RECEIPT_SIGN", "SIGNED_ROOM_POST"}:
             raise WireSafetyError(
                 "ACTION_INVALID", "action_class", action_class,
                 "signing action is not reviewed")
@@ -358,6 +366,26 @@ class SigningContext:
             "revision": revision,
             "config_version": config_version,
         })
+
+
+def signing_capability_material(
+    context: SigningContext, *, action_class: str, target: str,
+    revision: str, config_version: str, purpose: str,
+) -> Mapping[str, str]:
+    """Build the sole exact capability material for a signing operation."""
+    binding = context.capability_binding(
+        action_class=action_class, target=target, revision=revision,
+        config_version=config_version)
+    if not isinstance(purpose, str) or not purpose:
+        raise WireSafetyError("BINDING_INVALID", "purpose")
+    subject = json.dumps(
+        dict(binding), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return MappingProxyType({
+        "subject": subject,
+        "target": target,
+        "payload": context.canonical_bytes.decode("utf-8"),
+        "context": purpose,
+    })
 
 
 def build_signing_context(room: Any, nonce: Any, text: Any, *,
@@ -418,7 +446,7 @@ class CapabilityObservation:
 
 
 @dataclass(frozen=True)
-class ExportSnapshot:
+class _LocalExportSnapshot:
     source_kind: ExportSourceKind
     source_id: str
     acquired_at_ms: int
@@ -476,27 +504,10 @@ class ExportSnapshot:
 def acquire_export_fixture(raw: bytes, *, source_kind: ExportSourceKind,
                            source_id: str, acquired_at_ms: int,
                            verifier_revision: str,
-                           generation: str | None = None) -> ExportSnapshot:
-    if not isinstance(raw, bytes) or len(raw) > MAX_EXPORT_BYTES:
-        raise WireSafetyError(
-            "EXPORT_SIZE_INVALID", "snapshot", raw,
-            "bounded raw export bytes required")
-    if not isinstance(source_kind, ExportSourceKind):
-        raise WireSafetyError(
-            "EXPORT_SOURCE_INVALID", "source_kind", source_kind,
-            "typed acquisition source required")
-    if not SAFE_ID_RE.fullmatch(source_id):
-        raise WireSafetyError(
-            "EXPORT_SOURCE_INVALID", "source_id", source_id,
-            "safe configured source identifier required")
-    checked_time = validate_unix_ms(acquired_at_ms, field="acquired_at_ms")
-    if not REVISION_RE.fullmatch(verifier_revision):
-        raise WireSafetyError(
-            "REVISION_INVALID", "verifier_revision", verifier_revision,
-            "exact lowercase Git revision required")
-    return ExportSnapshot(
-        source_kind, source_id, checked_time, _sha256(raw),
-        verifier_revision, generation, raw)
+                           generation: str | None = None) -> _LocalExportSnapshot:
+    del raw, source_kind, source_id, acquired_at_ms, verifier_revision, generation
+    raise PermissionError(
+        "raw export fixtures are sealed; use evidence_authority observation services")
 
 
 @dataclass(frozen=True)
@@ -522,6 +533,9 @@ class TranscriptCompletenessClaim:
             raise WireSafetyError(
                 "COMPLETENESS_CLAIM_INVALID", "independently_verified",
                 self.independently_verified, "explicit boolean required")
+        if self.independently_verified:
+            raise PermissionError(
+                "public completeness claims are descriptive only")
 
 
 @dataclass(frozen=True)
@@ -570,18 +584,25 @@ class TranscriptAssessment:
     issues: tuple[str, ...]
     venue_metadata: tuple[VenueMetadataEvidence, ...]
 
+    def __post_init__(self) -> None:
+        if self.completeness_status is EvidenceStatus.TRANSCRIPT_COMPLETENESS_VERIFIED:
+            raise PermissionError(
+                "verified completeness requires opaque verifier evidence")
 
-def assess_export(snapshot: ExportSnapshot, *,
+
+def assess_export(snapshot: _LocalExportSnapshot, *,
                   completeness_claim: TranscriptCompletenessClaim | None = None,
                   acquisition_first_seq: str | None = None,
                   acquisition_last_seq: str | None = None,
                   truncation_indicated: bool = False) -> TranscriptAssessment:
     try:
         text = snapshot.raw_snapshot.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as error:
+    except UnicodeDecodeError:
+        text = None
+    if text is None:
         raise WireSafetyError(
             "EXPORT_UTF8_INVALID", "snapshot", snapshot.raw_snapshot,
-            "strict UTF-8 required") from error
+            "strict UTF-8 required") from None
     lines = text.splitlines()
     if len(lines) > MAX_EXPORT_RECORDS:
         raise WireSafetyError(
@@ -661,16 +682,10 @@ def assess_export(snapshot: ExportSnapshot, *,
     structure = (EvidenceStatus.TRANSCRIPT_INVALID
                  if structural_issues.intersection(issues)
                  else EvidenceStatus.TRANSCRIPT_STRUCT_VALID)
+    # Caller claims are descriptive only.  Completeness authority is issued by
+    # evidence_authority after registry-backed reviewed acquisition.
+    del completeness_claim
     complete = False
-    if completeness_claim is not None:
-        complete = (
-            completeness_claim.independently_verified
-            and snapshot.source_kind is ExportSourceKind.CONFIGURED_REVIEWED_EXPORT
-            and completeness_claim.snapshot_sha256 == snapshot.snapshot_sha256
-            and completeness_claim.generation == snapshot.generation
-            and completeness_claim.first_seq == first
-            and completeness_claim.last_seq == last
-            and not issues)
     return TranscriptAssessment(
         EvidenceStatus.EXPORT_ACQUIRED, structure,
         EvidenceStatus.TRANSCRIPT_COMPLETENESS_VERIFIED if complete
@@ -735,6 +750,10 @@ class RailObservation:
             raise WireSafetyError(
                 "RAIL_EVIDENCE_INVALID", "rail_evidence", None,
                 "explicit boolean observations required")
+        if (self.crypto_status is RailCryptoStatus.RAIL_CRYPTO_VERIFIED
+                or self.independent_finality_verified):
+            raise PermissionError(
+                "public rail observations cannot carry verified authority")
 
     @classmethod
     def observed(cls, rail: str, reference: str, terminal_state: str, *,
@@ -755,11 +774,7 @@ class RailObservation:
 
     @property
     def economic_value_verified(self) -> bool:
-        return (
-            self.rail_canonical != "PAPER"
-            and self.protocol_valid
-            and self.crypto_status is RailCryptoStatus.RAIL_CRYPTO_VERIFIED
-            and self.independent_finality_verified)
+        return False
 
 
 @dataclass(frozen=True)
@@ -796,6 +811,11 @@ class FinalityAssessment:
     economic_value_status: str
     reason: str
 
+    def __post_init__(self) -> None:
+        if self.finality_status is EvidenceStatus.FINALITY_VERIFIED:
+            raise PermissionError(
+                "verified finality requires opaque rail-verifier evidence")
+
 
 def assess_finality(transcript_state: str | None,
                     rail: RailObservation | None) -> FinalityAssessment:
@@ -807,11 +827,9 @@ def assess_finality(transcript_state: str | None,
     rail_status = (EvidenceStatus.RAIL_CRYPTO_VERIFIED
                    if rail.crypto_status is RailCryptoStatus.RAIL_CRYPTO_VERIFIED
                    else EvidenceStatus.RAIL_OBSERVATION_PRESENT)
-    final = (
-        rail.crypto_status is RailCryptoStatus.RAIL_CRYPTO_VERIFIED
-        and rail.independent_finality_verified
-        and rail.protocol_valid
-        and rail.rail_canonical != "PAPER")
+    # Public RailObservation fields are descriptive and never establish
+    # authoritative economic finality.
+    final = False
     return FinalityAssessment(
         transcript_state, rail_status,
         EvidenceStatus.FINALITY_VERIFIED if final
@@ -827,9 +845,11 @@ def _decode_b64(value: str, field: str, expected_length: int) -> bytes:
             "CRYPTO_FIELD_INVALID", field, value, "base64url string required")
     try:
         raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    except (ValueError, binascii.Error) as error:
+    except (ValueError, binascii.Error):
+        raw = None
+    if raw is None:
         raise WireSafetyError(
-            "CRYPTO_FIELD_INVALID", field, value, "invalid base64url") from error
+            "CRYPTO_FIELD_INVALID", field, value, "invalid base64url") from None
     if len(raw) != expected_length:
         raise WireSafetyError(
             "CRYPTO_FIELD_INVALID", field, value, "invalid encoded length")
@@ -1010,6 +1030,9 @@ class Agreement:
             raise WireSafetyError(
                 "AGREEMENT_STATUS_INVALID", "status", self.status,
                 "agreement evidence status required")
+        if self.status is EvidenceStatus.AGREEMENT_VERIFIED:
+            raise PermissionError(
+                "verified agreements require opaque verifier evidence")
 
 
 def recompute_agreement_id(offer_id: str, acceptance_bytes: bytes,
@@ -1031,16 +1054,17 @@ class AgreementVerification:
     agreement_status: EvidenceStatus
     classification: str = TCLK_ALPHA_CLASSIFICATION
 
+    def __post_init__(self) -> None:
+        if self.agreement_status is EvidenceStatus.AGREEMENT_VERIFIED:
+            raise PermissionError(
+                "public agreement reports are descriptive only")
+
     def verified_agreement(
         self, proposal: AgreementProposal,
         acceptance: AgreementAcceptance,
     ) -> Agreement | None:
-        if self.agreement_status is not EvidenceStatus.AGREEMENT_VERIFIED:
-            return None
-        return Agreement(
-            proposal.protocol, proposal.offer_id, acceptance.agreement_id,
-            proposal.proposer_id, proposal.counterparty_id,
-            EvidenceStatus.AGREEMENT_VERIFIED)
+        del proposal, acceptance
+        return None
 
 
 def verify_tclk_alpha_agreement(
@@ -1094,8 +1118,9 @@ def verify_tclk_alpha_agreement(
         "AGREEMENT_ID_VERIFIED" if agreement_matches else "AGREEMENT_ID_INVALID",
         "COUNTERPARTY_VERIFIED" if counterparties else "COUNTERPARTY_INVALID",
         "LOCK_SEMANTICS_VERIFIED" if semantics else "LOCK_SEMANTICS_INVALID",
-        EvidenceStatus.AGREEMENT_VERIFIED if valid
-        else EvidenceStatus.AGREEMENT_INVALID)
+        # This report is descriptive.  Only evidence_authority may issue an
+        # opaque VerifiedAgreement for a valid result.
+        EvidenceStatus.AGREEMENT_INVALID)
 
 
 _READBACK_TRANSITIONS: Mapping[tuple[ReadBackStage, str], ReadBackStage] = MappingProxyType({
@@ -1127,6 +1152,17 @@ class EvidenceBundle:
     finality: EvidenceStatus
 
     def __post_init__(self) -> None:
+        authoritative_only = {
+            EvidenceStatus.TRANSCRIPT_COMPLETENESS_VERIFIED,
+            EvidenceStatus.AGREEMENT_VERIFIED,
+            EvidenceStatus.RAIL_CRYPTO_VERIFIED,
+            EvidenceStatus.FINALITY_VERIFIED,
+        }
+        if any(getattr(self, name) in authoritative_only for name in (
+                "cryptographic", "venue", "transcript", "agreement",
+                "settlement", "finality")):
+            raise PermissionError(
+                "verified claims require an opaque VerifiedEvidenceBundle")
         allowed = {
             "cryptographic": {
                 EvidenceStatus.SIGNED_CONTENT_VERIFIED,
@@ -1163,13 +1199,15 @@ class EvidenceBundle:
                     "status belongs to a different evidence layer")
 
     def as_public_evidence(self) -> Mapping[str, str]:
+        # Public bundles are descriptive only; this projection can never emit
+        # an authoritative verified finality claim.
         return MappingProxyType({
             "cryptographic": self.cryptographic.value,
             "venue": self.venue.value,
             "transcript": self.transcript.value,
             "agreement": self.agreement.value,
             "settlement": self.settlement.value,
-            "finality": self.finality.value,
+            "finality": EvidenceStatus.FINALITY_UNVERIFIED.value,
         })
 
 

@@ -38,19 +38,21 @@ frame, locally reconstructed canonical bytes, optional exact challenge
 comparison, then existing capability validation and signing. A remote peer's
 canonical string is never authoritative.
 
-The descriptive capability binding includes the exact room, nonce lexeme,
+The consumed signing capability binds the exact room, nonce lexeme,
 text hash, canonical-byte hash, action class, target, Git revision, and config
-version. It does not issue capability or broaden the P1 production authority
-boundary.
+version. Those fields are recomputed before identity loading. A wrong room,
+nonce, text, canonical challenge, revision, or policy version is rejected before
+key access or signing.
 
 ## Exports and provenance
 
-Captured export fixtures retain a source kind, configured source identifier,
-acquisition time, snapshot SHA-256, verifier revision, generation, and bounded
-raw bytes. Public evidence excludes raw bytes. Third-party exports always
-remain untrusted inputs. A structurally clean sequence is not complete: only
-an independently verified, exact claim for a configured reviewed export may
-produce `TRANSCRIPT_COMPLETENESS_VERIFIED`.
+Raw export bytes remain inside a sealed verifier service. Public
+`ExportObservation` values contain only source identity, acquisition time,
+length, snapshot SHA-256, verifier revision, generation, and a minimized
+structural assessment. Third-party exports always remain descriptive inputs.
+A structurally clean sequence is not complete: only registry-backed acquisition
+with exact generation, bounds, sequence continuity, and truncation checks can
+issue an opaque `VerifiedTranscriptCompleteness` object.
 
 The verifier detects malformed records, invalid time, duplicate or reversed
 sequence values, gaps, inconsistent generations, truncation indicators, and
@@ -72,14 +74,33 @@ WRITE_ACCEPTED → READ_BACK_OBSERVED → DECODE_VALID → SIGNATURE_VALID
 → STATE_REPLAY_VALID → EVIDENCE_CONFIRMED
 ```
 
-Skipping a stage fails closed.
+Skipping a stage fails closed. `ReadBackStage.EVIDENCE_CONFIRMED` remains a
+descriptive enum value; only the configured sequential verifier can issue
+`VerifiedReadBackEvidence`.
+
+## Verified authority
+
+Completeness, agreement, rail finality, read-back, and combined bundle claims
+are process-local opaque objects. Their public constructors reject, and they
+cannot be copied or serialized. Each is meaningful only in the private
+registry of the verifier that issued it. Exact cryptographic inputs, IDs,
+provenance, verifier revision, policy version, and verification time are bound
+in private records. Reconstructing visible fields, booleans, enum values, JSON,
+or a token from another authority does not grant authority.
+
+Public `EvidenceBundle` values are descriptive and cannot accept verified
+completeness, agreement, rail, or finality statuses. Only the issuing service
+can project `FINALITY_VERIFIED`, and only from its own registered
+`VerifiedRailFinality`. PaperRail can never produce that token.
 
 ## Secret-safe failures and compatibility
 
 Secret-bearing fields such as secrets, preimages, witnesses, `presig.s`,
 payment keys, private keys, seeds, and mnemonics are rejected. Errors retain
-only field class, type, length, and a fixed reason; rejected values are not
-included in errors or public evidence.
+only field class, type, length, and a fixed reason. Decoder exceptions are
+replaced outside the upstream handler without cause/context chaining, so raw
+JSON text and invalid UTF-8 bytes are not retained in exception objects,
+tracebacks, or normal `exc_info` logging.
 
 The compatibility manifest distinguishes `DOCUMENTED_CAPABILITY` from
 `RUNTIME_OBSERVED_CAPABILITY`. Runtime capabilities remain
