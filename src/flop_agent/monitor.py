@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Dict, Iterable, List
 
 from .classifier import classify
@@ -199,10 +200,6 @@ def classify_source_failure(consecutive_failures: int) -> Dict[str, Any]:
     return _result("UNKNOWN", "Official source temporarily unavailable")
 
 
-def fetch_bytes(source_id: ReviewedSourceId) -> bytes:
-    return read_configured_endpoint(source_id)
-
-
 def _result(status: str, detail: str, **extra: Any) -> Dict[str, Any]:
     return {"status": status, "detail": detail, **extra}
 
@@ -336,9 +333,12 @@ def assess_freshness(checked_at: str, now: datetime | None = None) -> str:
     return "FRESH" if hours < 24 else "AGING" if hours <= 48 else "STALE"
 
 
-def _safe_fetch(name: str, fetcher: Callable[[str], bytes]) -> tuple[bytes | None, Dict[str, Any]]:
+def _safe_fetch(
+    name: str, fetcher: Callable[[ReviewedSourceId], bytes],
+    endpoints: Dict[str, ReviewedSourceId],
+) -> tuple[bytes | None, Dict[str, Any]]:
     try:
-        body = fetcher(ENDPOINTS[name])
+        body = fetcher(endpoints[name])
         return body, _result("READY", "Endpoint reachable", bytes=len(body))
     except Exception as error:
         return None, _result("UNKNOWN", "Endpoint temporarily unavailable", error=type(error).__name__)
@@ -393,12 +393,15 @@ def _public_evidence(root: Path, bodies: Dict[str, bytes]) -> Dict[str, Any]:
     )
 
 
-def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes, evidence_mode: str = "local") -> Dict[str, Any]:
+def _run_monitor(
+    root: Path, fetcher: Callable[[ReviewedSourceId], bytes], evidence_mode: str,
+    endpoints: Dict[str, ReviewedSourceId], official_specs: Dict[str, ReviewedSourceId],
+) -> Dict[str, Any]:
     checked_at = datetime.now(timezone.utc).isoformat()
     checks: Dict[str, Dict[str, Any]] = {}
     bodies: Dict[str, bytes] = {}
-    for name in ENDPOINTS:
-        body, checks[name] = _safe_fetch(name, fetcher)
+    for name in endpoints:
+        body, checks[name] = _safe_fetch(name, fetcher, endpoints)
         if body is not None:
             bodies[name] = body
     if "did_note" in bodies:
@@ -459,7 +462,7 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes, evide
     else:
         checks["teaser"] = classify_source_failure(1)
     spec_results = {}
-    for name, url in OFFICIAL_SPECS.items():
+    for name, url in official_specs.items():
         try:
             actual = hashlib.sha256(fetcher(url)).hexdigest()
             expected = baselines["official_specs"][name]
@@ -507,6 +510,26 @@ def run_monitor(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes, evide
         "warnings": [k for k, v in checks.items() if v["status"] in {"CHANGED", "REVIEW_REQUIRED"}],
         "evidence_mode": evidence_mode, "external_writes_performed": 0,
     }
+
+
+def _build_monitor_service(
+    reviewed_reader: Callable[[ReviewedSourceId], bytes],
+) -> tuple[Callable[[ReviewedSourceId], bytes], Callable[..., Dict[str, Any]]]:
+    """Capture reviewed HTTP policy and source sets before public invocation."""
+    endpoints = MappingProxyType(dict(ENDPOINTS))
+    official_specs = MappingProxyType(dict(OFFICIAL_SPECS))
+    run_impl = _run_monitor
+
+    def fetch(source_id: ReviewedSourceId) -> bytes:
+        return reviewed_reader(source_id)
+
+    def run(root: Path, evidence_mode: str = "local") -> Dict[str, Any]:
+        return run_impl(root, fetch, evidence_mode, endpoints, official_specs)
+
+    return fetch, run
+
+
+fetch_bytes, run_monitor = _build_monitor_service(read_configured_endpoint)
 
 
 def save_run(root: Path, record: Dict[str, Any]) -> None:

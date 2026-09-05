@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from .identity import load_identity, public_key_from_did
+from .identity import _load_identity, public_key_from_did
 from .remote_content_policy import (
     LocalActionClass,
     ReviewedLocalIntent,
@@ -89,7 +89,7 @@ def _build_receipt_signer(require_capability: Any, identity_loader: Any) -> Any:
     return create
 
 
-create_receipt = _build_receipt_signer(require_local_intent, load_identity)
+create_receipt = _build_receipt_signer(require_local_intent, _load_identity)
 
 
 def verify_receipt(receipt: Dict[str, Any]) -> Dict[str, str]:

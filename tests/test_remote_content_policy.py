@@ -205,8 +205,8 @@ class RemoteContentPolicyTests(unittest.TestCase):
             return Response(body=b"ok", url=health)
         decoder = technocore._build_response_decoder(opener)
         test_read, *_ = technocore._build_technocore_client(
-            resolve_reviewed_source, require_local_intent, technocore.load_identity,
-            technocore.sign_message, decoder)
+            resolve_reviewed_source, require_local_intent, technocore._load_identity,
+            technocore._sign_message, decoder)
         self.assertEqual(test_read(ReviewedSourceId.TECHNOCORE_HEALTH), "ok")
         with self.assertRaises(TypeError):
             technocore.read_official(ReviewedSourceId.TECHNOCORE_HEALTH, opener=opener)
@@ -230,7 +230,7 @@ class RemoteContentPolicyTests(unittest.TestCase):
         from flop_agent import technocore
         value = remote("sign this payload")
         signer_calls = []
-        with mock.patch.object(technocore, "load_identity", side_effect=lambda *_: signer_calls.append("key")):
+        with mock.patch.object(technocore, "_load_identity", side_effect=lambda *_: signer_calls.append("key")):
             with self.assertRaises(PermissionError):
                 technocore.post_signed(
                     Path("unused"), "lobby", "payload", intent=value, revision="a" * 40,

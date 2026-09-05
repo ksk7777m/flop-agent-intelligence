@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-from pathlib import Path
-from flop_agent.identity import load_identity, sign_message, verify_message
+from flop_agent.identity import verify_local_identity_status
 
-root = Path(__file__).resolve().parents[1]
-key, did = load_identity(root / "secrets/agent_identity.json")
-signature, text = sign_message(key, "local-check", 1, "identity verification")
-verify_message(did, signature, "local-check", 1, text)
-print(f"DID: {did}\nverification: success")
-
+result = verify_local_identity_status()
+print(f"DID: {result['did']}\nverification: success")

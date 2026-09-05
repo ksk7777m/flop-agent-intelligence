@@ -6,6 +6,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Dict
 from urllib.parse import urlparse
 
@@ -37,10 +38,6 @@ SCHEMAS = {
     "testnet_adapter.json": "flop-testnet-adapter-status-v0",
     "technocore_compatibility.json": "technocore-compatibility-manifest-v1",
 }
-
-
-def fetch_bytes(source_id: ReviewedSourceId) -> bytes:
-    return read_configured_endpoint(source_id)
 
 
 def validate_dashboard_data(data_dir: Path) -> None:
@@ -75,38 +72,58 @@ def _walk_json(value: Any):
         yield value
 
 
-def compare_spec_hashes(
-    expected: Dict[str, str], fetcher: Callable[[str], bytes] = fetch_bytes,
-) -> Dict[str, Dict[str, str]]:
-    results: Dict[str, Dict[str, str]] = {}
-    for name, source_id in OFFICIAL_SPECS.items():
-        actual = hashlib.sha256(fetcher(source_id)).hexdigest()
-        baseline = expected.get(name)
-        results[name] = {
-            "sha256": actual,
-            "status": "UNCHANGED" if baseline == actual else "OFFICIAL_SPEC_CHANGED",
-            "review": "NONE" if baseline == actual else "REVIEW_REQUIRED",
+def _build_readiness_service(
+    reviewed_reader: Callable[[ReviewedSourceId], bytes],
+) -> tuple[Callable[[ReviewedSourceId], bytes], Callable[..., Dict[str, Dict[str, str]]],
+           Callable[[Path], Dict[str, Any]]]:
+    """Capture the only HTTP reader and reviewed source sets for readiness."""
+    specs_by_name = MappingProxyType(dict(OFFICIAL_SPECS))
+    endpoints_by_name = MappingProxyType(dict(READINESS_ENDPOINTS))
+    digest = hashlib.sha256
+    json_loads = json.loads
+    validate_data = validate_dashboard_data
+    now = lambda _datetime=datetime, _utc=timezone.utc: _datetime.now(_utc).isoformat()
+
+    def fetch(source_id: ReviewedSourceId) -> bytes:
+        return reviewed_reader(source_id)
+
+    def compare(expected: Dict[str, str]) -> Dict[str, Dict[str, str]]:
+        results: Dict[str, Dict[str, str]] = {}
+        for name, source_id in specs_by_name.items():
+            actual = digest(fetch(source_id)).hexdigest()
+            baseline = expected.get(name)
+            results[name] = {
+                "sha256": actual,
+                "status": "UNCHANGED" if baseline == actual else "OFFICIAL_SPEC_CHANGED",
+                "review": "NONE" if baseline == actual else "REVIEW_REQUIRED",
+            }
+        return results
+
+    def run(root: Path) -> Dict[str, Any]:
+        validate_data(root / "data")
+        expected = json_loads(
+            (root / "data" / "spec_hashes.json").read_text(encoding="utf-8"))["hashes"]
+        checks: Dict[str, Dict[str, Any]] = {}
+        for name, source_id in endpoints_by_name.items():
+            try:
+                body = fetch(source_id)
+                checks[name] = {"status": "READY", "bytes": len(body)}
+            except Exception as error:
+                checks[name] = {"status": "ERROR", "error": type(error).__name__}
+        checks["mailbox"] = {"status": "MIGRATION_PENDING", "read_only": True}
+        checked_specs = compare(expected)
+        return {
+            "schema": "flop-readiness-check-v1",
+            "read_only": True,
+            "checked_at": now(),
+            "checks": checks,
+            "official_specs": checked_specs,
+            "status": "REVIEW_REQUIRED" if any(
+                item["review"] == "REVIEW_REQUIRED" for item in checked_specs.values()) else "READY",
         }
-    return results
+
+    return fetch, compare, run
 
 
-def run_readiness_check(root: Path, fetcher: Callable[[str], bytes] = fetch_bytes) -> Dict[str, Any]:
-    validate_dashboard_data(root / "data")
-    expected = json.loads((root / "data" / "spec_hashes.json").read_text(encoding="utf-8"))["hashes"]
-    checks: Dict[str, Dict[str, Any]] = {}
-    for name, source_id in READINESS_ENDPOINTS.items():
-        try:
-            body = fetcher(source_id)
-            checks[name] = {"status": "READY", "bytes": len(body)}
-        except Exception as error:
-            checks[name] = {"status": "ERROR", "error": type(error).__name__}
-    checks["mailbox"] = {"status": "MIGRATION_PENDING", "read_only": True}
-    specs = compare_spec_hashes(expected, fetcher)
-    return {
-        "schema": "flop-readiness-check-v1",
-        "read_only": True,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
-        "checks": checks,
-        "official_specs": specs,
-        "status": "REVIEW_REQUIRED" if any(x["review"] == "REVIEW_REQUIRED" for x in specs.values()) else "READY",
-    }
+fetch_bytes, compare_spec_hashes, run_readiness_check = _build_readiness_service(
+    read_configured_endpoint)

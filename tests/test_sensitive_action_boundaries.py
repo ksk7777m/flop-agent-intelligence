@@ -135,7 +135,7 @@ class SensitiveActionBoundaryTests(unittest.TestCase):
                     object(), root / "state", root / "audit", preview=preview, approval={},
                     intent=forged, writer=lambda *_: calls.append("presence"),
                     reader=lambda *_: calls.append("read"))
-            with mock.patch("flop_agent.receipt.load_identity",
+            with mock.patch("flop_agent.receipt._load_identity",
                             side_effect=lambda *_: calls.append("signer")):
                 with self.assertRaises(PermissionError):
                     create_receipt(

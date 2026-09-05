@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from flop_agent.identity import create_identity, load_identity
+from flop_agent.identity import create_identity, _load_identity
 from flop_agent.receipt import (
     SCHEMA, canonical_payload, create_receipt, verify_receipt,
 )
@@ -13,7 +13,7 @@ from flop_agent.receipt import (
 def fixture_receipt(identity, repo, commit, artifact, timestamp):
     payload = {"schema": SCHEMA, "repo": repo, "commit": commit,
                "artifact_name": artifact, "timestamp": timestamp}
-    key, did = load_identity(identity)
+    key, did = _load_identity(identity)
     signature = base64.urlsafe_b64encode(key.sign(canonical_payload(payload))).decode().rstrip("=")
     return {"schema": SCHEMA, "did": did, "payload": payload, "signature": signature}
 

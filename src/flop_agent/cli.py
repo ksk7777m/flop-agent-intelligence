@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .activity import append_activity
-from .identity import create_identity, load_identity, sign_message, verify_message
+from .identity import create_identity, get_public_did, verify_local_identity_status
 from .registry import contribution_note_plan, did_profile_plan
 from .receipt import create_receipt, read_receipt, verify_receipt
 from .technocore import healthcheck, post_signed
@@ -79,15 +79,11 @@ def main() -> None:
     if args.command == "create-identity":
         print(create_identity(IDENTITY))
     elif args.command == "check-identity":
-        key, did = load_identity(IDENTITY)
-        sig, clean = sign_message(key, "local-check", 1, "identity verification")
-        verify_message(did, sig, "local-check", 1, clean)
-        print(json.dumps({"did": did, "verified": True, "permission": "0600"}))
+        print(json.dumps(verify_local_identity_status()))
     elif args.command == "watch":
         print(json.dumps({"dry_run": True, "results": dry_run()}, indent=2))
     elif args.command == "status":
-        key, did = load_identity(IDENTITY)
-        del key
+        did = get_public_did()
         print(json.dumps({"did": did, "identity": "valid", "publish_default": "dry-run"}, indent=2))
     elif args.command == "readiness-check":
         from .readiness import run_readiness_check
@@ -182,7 +178,7 @@ def main() -> None:
     elif args.command == "draft-contribution":
         print("Built an official-signal monitor for FLOP/Technocore that classifies actionable updates, blocks untrusted wallet/claim instructions, and keeps signed activity logs. Designed to extend into testnet workflows when official APIs are published.")
     elif args.command == "gap-audit":
-        _, did = load_identity(IDENTITY)
+        did = get_public_did()
         print(json.dumps({
             "live_write": False,
             "did_profile": did_profile_plan(did),

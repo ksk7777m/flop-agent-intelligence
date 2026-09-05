@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from flop_agent.readiness import OFFICIAL_SPECS, compare_spec_hashes, validate_dashboard_data
+from flop_agent.readiness import OFFICIAL_SPECS, _build_readiness_service, validate_dashboard_data
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,12 +17,14 @@ class ReadinessTests(unittest.TestCase):
         bodies = {url: name.encode() for name, url in OFFICIAL_SPECS.items()}
         import hashlib
         expected = {name: hashlib.sha256(name.encode()).hexdigest() for name in OFFICIAL_SPECS}
-        result = compare_spec_hashes(expected, lambda url: bodies[url])
+        _, compare_spec_hashes, _ = _build_readiness_service(lambda url: bodies[url])
+        result = compare_spec_hashes(expected)
         self.assertTrue(all(item["status"] == "UNCHANGED" for item in result.values()))
 
     def test_spec_hash_change_requires_review(self):
         expected = {name: "0" * 64 for name in OFFICIAL_SPECS}
-        result = compare_spec_hashes(expected, lambda _: b"changed")
+        _, compare_spec_hashes, _ = _build_readiness_service(lambda _: b"changed")
+        result = compare_spec_hashes(expected)
         self.assertTrue(all(item["status"] == "OFFICIAL_SPEC_CHANGED" for item in result.values()))
         self.assertTrue(all(item["review"] == "REVIEW_REQUIRED" for item in result.values()))
 

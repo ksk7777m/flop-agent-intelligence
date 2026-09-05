@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict
 
-from .identity import load_identity, sign_message
+from .identity import _load_identity, _sign_message
 from .remote_content_policy import (
     DEFAULT_RESPONSE_LIMIT,
     LocalActionClass,
@@ -188,12 +188,20 @@ def _build_technocore_client(
     return read, read_presence, update, post, find
 
 
-def healthcheck() -> Dict[str, Any]:
-    return {
-        "healthz": read_official(ReviewedSourceId.TECHNOCORE_HEALTH),
-        "rooms": read_official(ReviewedSourceId.TECHNOCORE_ROOMS),
-        "lobby": read_official(ReviewedSourceId.TECHNOCORE_LOBBY_JSON),
-    }
+def _build_technocore_health_service(reviewed_reader: Any) -> Any:
+    """Build healthcheck with a reader captured before public invocation."""
+    health = ReviewedSourceId.TECHNOCORE_HEALTH
+    rooms = ReviewedSourceId.TECHNOCORE_ROOMS
+    lobby = ReviewedSourceId.TECHNOCORE_LOBBY_JSON
+
+    def check() -> Dict[str, Any]:
+        return {
+            "healthz": reviewed_reader(health),
+            "rooms": reviewed_reader(rooms),
+            "lobby": reviewed_reader(lobby),
+        }
+
+    return check
 
 
 def requires_signed_write(room: str) -> bool:
@@ -209,8 +217,9 @@ def conditional_note_payload(current: str, value: str) -> Dict[str, str]:
 _PRODUCTION_RESPONSE_DECODER = _build_response_decoder()
 read_official, read_presence_note, update_did_note_cas, post_signed, find_signed = (
     _build_technocore_client(
-        resolve_reviewed_source, require_local_intent, load_identity,
-        sign_message, _PRODUCTION_RESPONSE_DECODER))
+        resolve_reviewed_source, require_local_intent, _load_identity,
+        _sign_message, _PRODUCTION_RESPONSE_DECODER))
+healthcheck = _build_technocore_health_service(read_official)
 
 
 def _sealed_response_decoder(*_args: Any, **_kwargs: Any) -> Any:

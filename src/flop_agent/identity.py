@@ -13,6 +13,12 @@ from typing import Any, Dict, Tuple
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from .remote_content_policy import (
+    LocalActionClass,
+    ReviewedLocalIntent,
+    require_local_intent,
+)
+
 MULTICODEC_ED25519 = b"\xed\x01"
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 INVISIBLE_CATEGORIES = {"Cc", "Cf", "Cs", "Co", "Zl", "Zp"}
@@ -83,7 +89,8 @@ def create_identity(path: Path) -> str:
     return did
 
 
-def load_identity(path: Path) -> Tuple[Ed25519PrivateKey, str]:
+def _load_identity(path: Path) -> Tuple[Ed25519PrivateKey, str]:
+    """Low-level local primitive; production callers use the sealed service below."""
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode & 0o077:
         raise PermissionError(f"identity permissions must be 0600, got {mode:04o}")
@@ -106,7 +113,8 @@ def canonical_message(room: str, nonce: int, text: str) -> Tuple[str, str]:
     return f"{room}|{nonce}|{clean}", clean
 
 
-def sign_message(key: Ed25519PrivateKey, room: str, nonce: int, text: str) -> Tuple[str, str]:
+def _sign_message(key: Ed25519PrivateKey, room: str, nonce: int, text: str) -> Tuple[str, str]:
+    """Low-level signer retained only for sealed services and offline unit fixtures."""
     canonical, clean = canonical_message(room, nonce, text)
     signature = base64.urlsafe_b64encode(key.sign(canonical.encode("utf-8"))).decode().rstrip("=")
     return signature, clean
@@ -117,3 +125,50 @@ def verify_message(did: str, signature: str, room: str, nonce: int, text: str) -
     raw_sig = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
     Ed25519PublicKey.from_public_bytes(public_key_from_did(did)).verify(raw_sig, canonical.encode("utf-8"))
 
+
+IDENTITY_SIGN_CONTEXT = "FLOP-LOCAL-IDENTITY-SIGN-V1"
+
+
+def _build_local_identity_service(
+    identity_path: Path, capability_validator: Any, identity_loader: Any,
+    message_signer: Any, message_verifier: Any,
+) -> tuple[Any, Any, Any]:
+    """Capture local key access; raw key-bearing objects never leave this service."""
+    configured_path = identity_path.resolve()
+    action = LocalActionClass.IDENTITY_SIGN
+    context = IDENTITY_SIGN_CONTEXT
+    canonicalizer = canonical_message
+
+    def get_public_did() -> str:
+        _, did = identity_loader(configured_path)
+        return did
+
+    def verify_status() -> Dict[str, Any]:
+        key, did = identity_loader(configured_path)
+        signature, clean = message_signer(
+            key, "local-check", 1, "identity verification")
+        message_verifier(did, signature, "local-check", 1, clean)
+        return {"did": did, "verified": True, "permission": "0600"}
+
+    def sign_authorized(
+        room: str, nonce: int, text: str, *, intent: ReviewedLocalIntent,
+        revision: str, config_version: str,
+    ) -> Dict[str, str]:
+        canonical, _ = canonicalizer(room, nonce, text)
+        capability_validator(
+            intent, action, canonical, target=str(configured_path), payload=canonical,
+            context=context, revision=revision, config_version=config_version,
+            consume=True)
+        key, did = identity_loader(configured_path)
+        signature, clean = message_signer(key, room, nonce, text)
+        return {"did": did, "signature": signature, "text": clean}
+
+    return get_public_did, verify_status, sign_authorized
+
+
+_PRODUCTION_IDENTITY_PATH = (
+    Path(__file__).resolve().parents[2] / "secrets" / "agent_identity.json")
+get_public_did, verify_local_identity_status, sign_with_authorized_identity = (
+    _build_local_identity_service(
+        _PRODUCTION_IDENTITY_PATH, require_local_intent, _load_identity,
+        _sign_message, verify_message))
