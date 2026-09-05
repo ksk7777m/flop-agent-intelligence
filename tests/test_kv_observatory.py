@@ -7,7 +7,8 @@ from pathlib import Path
 
 from flop_agent.kv_observatory import (
     ApiContractError, ConfigError, NamespaceConfig, ObservedRemoteKey, Observer, ReviewedKvTarget, Store,
-    _NoRedirect, _reviewed_kv_read_target, current_read_interval, load_config, note_value, official_get,
+    _NoRedirect, _build_kv_observer_factory, _reviewed_kv_read_target,
+    current_read_interval, load_config, note_value, official_get,
     parse_key_list, recover_snapshot_output, sanitize_retry_after, trust_class, write_snapshots,
 )
 
@@ -66,27 +67,35 @@ class KVObservatoryTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 ReviewedKvTarget(*args)
         forged = str.__new__(ReviewedKvTarget, "https://technocore.chat/kv/lobby/hb-caller")
-        with self.assertRaises(ApiContractError):
+        with self.assertRaises(PermissionError):
             official_get(forged)
 
         class Response:
             status, headers = 200, {}
-            def __init__(self, url): self.url = url
+            def __init__(self, url):
+                self.url = url
+                self.body = (b'{"ns":"lobby","keys":["hb-caller"]}'
+                             if "?format=json" in url else BANNER.encode() + b"value")
             def __enter__(self): return self
             def __exit__(self, *_): return None
             def geturl(self): return self.url
-            def read(self, _limit): return b"{}"
+            def read(self, _limit): return self.body
 
         class Opener:
             def open(self, request, timeout):
                 calls.append(request.full_url)
                 return Response(request.full_url)
 
-        key = parse_key_list('{"ns":"lobby","keys":["hb-caller"]}', "lobby")[0]
-        target = _reviewed_kv_read_target(self.configs[0], key)
-        with mock.patch("flop_agent.kv_observatory.build_opener", return_value=Opener()):
-            self.assertEqual(official_get(target)[0], 200)
-        self.assertEqual(calls, ["https://technocore.chat/kv/lobby/hb-caller"])
+        config_path = self.root / "sealed-config.json"
+        config_path.write_text(
+            '{"namespaces":[{"name":"lobby","key_prefixes":["hb-"]}]}')
+        build, _, _ = _build_kv_observer_factory(
+            config_path, lambda *_args: Opener())
+        self.assertEqual(build(self.store).poll("2026-01-01T00:00:00Z")["successful"], 1)
+        self.assertEqual(calls, [
+            "https://technocore.chat/kv/lobby?format=json",
+            "https://technocore.chat/kv/lobby/hb-caller",
+        ])
 
     def test_remote_key_is_inert_until_explicit_local_prefix_policy_authorizes_it(self):
         calls = []
@@ -202,7 +211,7 @@ class KVObservatoryTests(unittest.TestCase):
     def test_redirect_and_exact_origin_fail_closed(self):
         self.assertIsNone(_NoRedirect().redirect_request(None, None, 302, "", {}, "https://technocore.chat/kv/lobby"))
         for url in ("http://technocore.chat/kv/lobby", "https://evil.invalid/kv/lobby", "https://technocore.chat.evil.invalid/kv/lobby"):
-            with self.assertRaises(ApiContractError): official_get(url)
+            with self.assertRaises(PermissionError): official_get(url)
 
     def test_retry_after_is_bounded_and_no_automatic_retry(self):
         self.assertEqual(sanitize_retry_after("86400"), "86400")

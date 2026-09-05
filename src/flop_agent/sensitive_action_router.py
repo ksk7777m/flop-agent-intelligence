@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from .remote_content_policy import (
@@ -45,6 +46,7 @@ _ACTION_SINK: Mapping[RemoteAction, SinkClass] = {
     RemoteAction.PAYMENT: SinkClass.PAYMENT,
     RemoteAction.NAVIGATE: SinkClass.PUBLIC_NAVIGATION,
 }
+_SEALED_ACTION_SINK = MappingProxyType(dict(_ACTION_SINK))
 
 
 @dataclass(frozen=True)
@@ -53,74 +55,63 @@ class SensitiveActionRouter:
 
     sinks: Mapping[RemoteAction, Callable[[Any], Any]]
 
-    def dispatch(self, value: UntrustedRemoteValue, action: RemoteAction) -> Any:
-        if not isinstance(action, RemoteAction) or action not in self.sinks:
+    def dispatch(self, value: UntrustedRemoteValue, action: RemoteAction,
+                 _guard: Callable[..., Any] = invoke_remote_sink,
+                 _action_sinks: Mapping[RemoteAction, SinkClass] = _SEALED_ACTION_SINK,
+                 _action_type: type[RemoteAction] = RemoteAction) -> Any:
+        if not isinstance(action, _action_type) or action not in self.sinks:
             raise PermissionError("unregistered remote action")
-        return invoke_remote_sink(
-            value, _ACTION_SINK[action],
+        return _guard(
+            value, _action_sinks[action],
             lambda: self.sinks[action](value.value_for_classification_only),
         )
 
 
-def _new_local_action_boundary(validator: Callable[..., None]) -> Callable[..., Any]:
-    def invoke(
-        intent: ReviewedLocalIntent, action: LocalActionClass, *, subject: str, target: str,
-        payload: str, context: str, revision: str, config_version: str,
-        adapter: Callable[[], Any],
-    ) -> Any:
+def _build_sensitive_action_service(
+    validator: Callable[..., None],
+    adapters: Mapping[LocalActionClass, Callable[[], Any]],
+) -> Callable[..., Any]:
+    """Capture validation and final adapters in one non-replaceable call graph."""
+    configured_adapters = MappingProxyType(dict(adapters))
+
+    def invoke(intent: ReviewedLocalIntent, action: LocalActionClass, *, subject: str,
+               target: str, payload: str, context: str, revision: str,
+               config_version: str) -> Any:
+        if action not in configured_adapters:
+            raise PermissionError("sensitive action has no sealed production adapter")
         validator(
             intent, action, subject, target=target, payload=payload, context=context,
             revision=revision, config_version=config_version, consume=True)
-        return adapter()
+        return configured_adapters[action]()
 
     return invoke
 
 
-_PRODUCTION_LOCAL_BOUNDARY = _new_local_action_boundary(require_local_intent)
+def _disabled_adapter() -> Any:
+    raise PermissionError("sensitive action is disabled until separately integrated")
 
 
-def invoke_local_sensitive_action(
-    intent: ReviewedLocalIntent, action: LocalActionClass, *, subject: str, target: str,
-    payload: str, context: str, revision: str, config_version: str,
-    adapter: Callable[[], Any],
-) -> Any:
-    """The mandatory production boundary shared by all privileged adapters."""
-    return _PRODUCTION_LOCAL_BOUNDARY(
-        intent, action, subject=subject, target=target, payload=payload, context=context,
-        revision=revision, config_version=config_version, adapter=adapter)
+_PRODUCTION_ACTION_SERVICE = _build_sensitive_action_service(
+    require_local_intent, {action: _disabled_adapter for action in LocalActionClass
+                           if action is not LocalActionClass.PRESENCE_NOTE_READ})
 
 
-def run_subprocess(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.SUBPROCESS, **kwargs)
+def _bind_production_action(action: LocalActionClass,
+                            service: Callable[..., Any]) -> Callable[..., Any]:
+    def invoke(*, intent: ReviewedLocalIntent, subject: str, target: str, payload: str,
+               context: str, revision: str, config_version: str) -> Any:
+        return service(
+            intent, action, subject=subject, target=target, payload=payload,
+            context=context, revision=revision, config_version=config_version)
+    return invoke
 
 
-def write_filesystem(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.FILESYSTEM_WRITE, **kwargs)
-
-
-def access_secret(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.SECRET_ACCESS, **kwargs)
-
-
-def invoke_signer(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.RECEIPT_SIGN, **kwargs)
-
-
-def write_presence(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.PRESENCE_WRITE, **kwargs)
-
-
-def invoke_mcp(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.MCP_INVOKE, **kwargs)
-
-
-def use_wallet(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.WALLET, **kwargs)
-
-
-def claim_asset(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.CLAIM, **kwargs)
-
-
-def make_payment(**kwargs: Any) -> Any:
-    return invoke_local_sensitive_action(action=LocalActionClass.PAYMENT, **kwargs)
+run_subprocess = _bind_production_action(LocalActionClass.SUBPROCESS, _PRODUCTION_ACTION_SERVICE)
+write_filesystem = _bind_production_action(LocalActionClass.FILESYSTEM_WRITE, _PRODUCTION_ACTION_SERVICE)
+access_secret = _bind_production_action(LocalActionClass.SECRET_ACCESS, _PRODUCTION_ACTION_SERVICE)
+invoke_signer = _bind_production_action(LocalActionClass.RECEIPT_SIGN, _PRODUCTION_ACTION_SERVICE)
+write_presence = _bind_production_action(LocalActionClass.PRESENCE_WRITE, _PRODUCTION_ACTION_SERVICE)
+invoke_mcp = _bind_production_action(LocalActionClass.MCP_INVOKE, _PRODUCTION_ACTION_SERVICE)
+use_wallet = _bind_production_action(LocalActionClass.WALLET, _PRODUCTION_ACTION_SERVICE)
+claim_asset = _bind_production_action(LocalActionClass.CLAIM, _PRODUCTION_ACTION_SERVICE)
+make_payment = _bind_production_action(LocalActionClass.PAYMENT, _PRODUCTION_ACTION_SERVICE)

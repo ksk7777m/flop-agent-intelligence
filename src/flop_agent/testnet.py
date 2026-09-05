@@ -106,49 +106,76 @@ def classify_source(source_id: ReviewedSourceId | None) -> str:
     return "UNVERIFIED"
 
 
-def validate_config(config: Mapping[str, Any]) -> Dict[str, Any]:
-    source_class = classify_source(_CONFIG_SOURCE_EVIDENCE_BUNDLES.get(
-        str(config.get("source_evidence_bundle_id") or "")))
-    required_provenance = all(config.get(key) for key in ("source_url", "source_tier", "verified_at"))
-    populated = any(config.get(key) is not None for key in ("network_name", "chain_id", "rpc_url", "faucet_url", "inference_api_url", "token_contract"))
-    if config.get("token_contract") and not re.fullmatch(r"0x[a-fA-F0-9]{40}", str(config["token_contract"])):
-        return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONTRACT", "activation": "DO_NOT_ACTIVATE"}
-    derived_provenance = evaluate_contract_provenance(
-        config.get("contract_evidence_bundle_id"), str(config.get("token_contract") or ""))
-    if config.get("token_contract") and derived_provenance is not ContractProvenance.VERIFIED_FOR_TESTNET_USE:
-        return {"status": "REVIEW_REQUIRED", "reason": "CONTRACT_PROVENANCE_REQUIRED",
-                "contract_provenance": derived_provenance.value, "activation": "DO_NOT_ACTIVATE"}
-    if populated and (source_class != "TIER_1_OFFICIAL" or not required_provenance):
-        return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONFIGURATION_SOURCE", "activation": "DO_NOT_ACTIVATE"}
-    if populated and compatibility_status() != "COMPATIBILITY_CURRENT":
-        return {"status": "REVIEW_REQUIRED", "reason": "COMPATIBILITY_REVIEW_REQUIRED",
-                "activation": "DO_NOT_ACTIVATE"}
-    return {
-        "status": "READY" if populated else "OFFICIAL_DRAFT",
-        "reason": "CONFIG_CANDIDATE_REQUIRES_HUMAN_REVIEW" if populated else "NO_OPERATIONAL_ENDPOINTS",
-        "activation": "DO_NOT_ACTIVATE",
-    }
+def _build_readiness_service(
+    manifest_path: Path,
+    contract_evaluator: Any,
+    source_bundles: Mapping[str, ReviewedSourceId],
+) -> tuple[Any, Any, Any]:
+    """Capture compatibility and provenance inputs for production readiness."""
+    trusted_manifest = manifest_path.resolve()
+    configured_sources = MappingProxyType(dict(source_bundles))
+    json_loads = json.loads
+    fullmatch = re.fullmatch
+    verified_contract = ContractProvenance.VERIFIED_FOR_TESTNET_USE
+    source_id_type = ReviewedSourceId
+    reviewed_actions = frozenset({"faucet_claim", "inference", "contract", "wallet", "signing"})
+
+    def compatibility() -> str:
+        try:
+            manifest = json_loads(trusted_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return "COMPATIBILITY_REVIEW_REQUIRED"
+        return "COMPATIBILITY_CURRENT" if (
+            manifest.get("status") == "COMPATIBILITY_CURRENT"
+            and manifest.get("freshness", {}).get("status") == "CURRENT"
+        ) else "COMPATIBILITY_REVIEW_REQUIRED"
+
+    def validate(config: Mapping[str, Any]) -> Dict[str, Any]:
+        source_class = ("TIER_1_OFFICIAL" if isinstance(configured_sources.get(
+            str(config.get("source_evidence_bundle_id") or "")), source_id_type)
+            else "UNVERIFIED")
+        required_provenance = all(
+            config.get(key) for key in ("source_url", "source_tier", "verified_at"))
+        populated = any(config.get(key) is not None for key in (
+            "network_name", "chain_id", "rpc_url", "faucet_url",
+            "inference_api_url", "token_contract"))
+        if config.get("token_contract") and not fullmatch(
+                r"0x[a-fA-F0-9]{40}", str(config["token_contract"])):
+            return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONTRACT",
+                    "activation": "DO_NOT_ACTIVATE"}
+        derived = contract_evaluator(
+            config.get("contract_evidence_bundle_id"),
+            str(config.get("token_contract") or ""))
+        if (config.get("token_contract")
+                and derived is not verified_contract):
+            return {"status": "REVIEW_REQUIRED", "reason": "CONTRACT_PROVENANCE_REQUIRED",
+                    "contract_provenance": derived.value, "activation": "DO_NOT_ACTIVATE"}
+        if populated and (source_class != "TIER_1_OFFICIAL" or not required_provenance):
+            return {"status": "REVIEW_REQUIRED", "reason": "UNVERIFIED_CONFIGURATION_SOURCE",
+                    "activation": "DO_NOT_ACTIVATE"}
+        if populated and compatibility() != "COMPATIBILITY_CURRENT":
+            return {"status": "REVIEW_REQUIRED", "reason": "COMPATIBILITY_REVIEW_REQUIRED",
+                    "activation": "DO_NOT_ACTIVATE"}
+        return {
+            "status": "READY" if populated else "OFFICIAL_DRAFT",
+            "reason": "CONFIG_CANDIDATE_REQUIRES_HUMAN_REVIEW" if populated else "NO_OPERATIONAL_ENDPOINTS",
+            "activation": "DO_NOT_ACTIVATE",
+        }
+
+    def sensitive(action: str) -> Dict[str, Any]:
+        if action not in reviewed_actions:
+            return {"action": action, "allowed": False,
+                    "status": "UNREVIEWED_SENSITIVE_ACTION"}
+        allowed = compatibility() == "COMPATIBILITY_CURRENT"
+        return {"action": action, "allowed": allowed,
+                "status": "READY" if allowed else "COMPATIBILITY_REVIEW_REQUIRED"}
+
+    return validate, compatibility, sensitive
 
 
-def compatibility_status() -> str:
-    """Resolve compatibility only from the repository-controlled manifest."""
-    try:
-        manifest = json.loads(COMPATIBILITY_MANIFEST.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return "COMPATIBILITY_REVIEW_REQUIRED"
-    return "COMPATIBILITY_CURRENT" if (
-        manifest.get("status") == "COMPATIBILITY_CURRENT"
-        and manifest.get("freshness", {}).get("status") == "CURRENT"
-    ) else "COMPATIBILITY_REVIEW_REQUIRED"
-
-
-def sensitive_readiness(action: str) -> Dict[str, Any]:
-    reviewed_actions = {"faucet_claim", "inference", "contract", "wallet", "signing"}
-    if action not in reviewed_actions:
-        return {"action": action, "allowed": False, "status": "UNREVIEWED_SENSITIVE_ACTION"}
-    allowed = compatibility_status() == "COMPATIBILITY_CURRENT"
-    return {"action": action, "allowed": allowed,
-            "status": "READY" if allowed else "COMPATIBILITY_REVIEW_REQUIRED"}
+validate_config, compatibility_status, sensitive_readiness = _build_readiness_service(
+    COMPATIBILITY_MANIFEST, evaluate_contract_provenance,
+    _CONFIG_SOURCE_EVIDENCE_BUNDLES)
 
 
 def configuration_candidate(signal: Mapping[str, Any]) -> Dict[str, Any]:

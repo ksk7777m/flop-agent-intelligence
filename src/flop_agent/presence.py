@@ -13,11 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
-from .remote_content_policy import ReviewedLocalIntent
-from .sensitive_action_router import write_presence
+from .remote_content_policy import LocalActionClass, ReviewedLocalIntent, require_local_intent
 from .technocore import read_official
 
 ADAPTER_VERSION = "Presence V0.1"
+CAPABILITY_CONFIG_VERSION = "presence-v0.1"
 CONFIG_SCHEMA = "technocore-presence-config-v0.1"
 STATE_SCHEMA = "technocore-presence-state-v0.1"
 ROOMS_PATH = "/rooms?format=json"
@@ -407,24 +407,10 @@ def execute_approved_write(config: PresenceConfig, state_path: Path, audit_path:
                            writer: Callable[[str, Mapping[str, Any]], Any],
                            reader: Callable[[str], Any], now: datetime | None = None,
                            semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH) -> Dict[str, Any]:
-    """Production write boundary: consume authority before any state or I/O access."""
-    metadata, request = preview.get("approval_metadata"), preview.get("request")
-    if not isinstance(metadata, Mapping) or not isinstance(request, Mapping):
-        raise LiveWriteDisabled("live presence write lacks an exact preview")
-    canonical_body = json.dumps(request.get("body"), sort_keys=True, separators=(",", ":"))
-    capability_context = json.dumps({
-        "action": "technocore-presence-write",
-        "state_path": str(state_path.resolve()),
-        "audit_path": str(audit_path.resolve()),
-    }, sort_keys=True, separators=(",", ":"))
-    return write_presence(
-        intent=intent, subject=approval_digest(metadata),
-        target=str(request.get("path", "")), payload=canonical_body,
-        context=capability_context, revision=str(metadata.get("application_commit", "")),
-        config_version=ADAPTER_VERSION,
-        adapter=lambda: _execute_approved_write_after_capability(
-            config, state_path, audit_path, preview=preview, approval=approval, writer=writer,
-            reader=reader, now=now, semantic_contract_path=semantic_contract_path))
+    """Deprecated caller-injected writer surface; production Presence stays disabled."""
+    del config, state_path, audit_path, preview, approval, intent, writer, reader, now
+    del semantic_contract_path
+    raise LiveWriteDisabled("Presence writer requires a sealed preconfigured service")
 
 
 def _execute_approved_write_after_capability(
@@ -433,13 +419,18 @@ def _execute_approved_write_after_capability(
     writer: Callable[[str, Mapping[str, Any]], Any], reader: Callable[[str], Any],
     now: datetime | None = None,
     semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH,
+    _load: Any = _load_state, _save: Any = _save_state,
+    _contract: Any = load_semantic_contract, _validate: Any = validate_approval,
+    _classify: Any = classify_note, _audit: Any = _append_audit,
+    _blank: Any = _blank_state, _parse: Any = _parse_time,
+    _sha_fn: Any = _sha, _iso_fn: Any = _iso,
 ) -> Dict[str, Any]:
     """Mechanism-only implementation; callers must use execute_approved_write."""
     metadata, request = preview.get("approval_metadata"), preview.get("request")
     attempted = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    state = _load_state(state_path) or _blank_state(config)
+    state = _load(state_path) or _blank(config)
     try:
-        _, current_contract_digest = load_semantic_contract(
+        _, current_contract_digest = _contract(
             semantic_contract_path, config.approved_semantic_contract_sha256)
     except PresenceError:
         current_contract_digest = None
@@ -450,24 +441,24 @@ def _execute_approved_write_after_capability(
              "frequency_guard_healthy": True, "note_reconciled": preview.get("note_state") in {"ABSENT", "EXPECTED"},
              "no_conflict": state.get("state") not in {"CONFLICT", "READBACK_MISMATCH", "REAPPROVAL_REQUIRED", "SPEC_CHANGED"},
              "no_sequence_regression": state.get("last_observed_seq") == (metadata or {}).get("observed_seq"),
-             "explicit_human_approval": isinstance(metadata, Mapping) and validate_approval(metadata, approval)}
-    last_attempt = _parse_time(state.get("last_attempted_write_at"))
+             "explicit_human_approval": isinstance(metadata, Mapping) and _validate(metadata, approval)}
+    last_attempt = _parse(state.get("last_attempted_write_at"))
     if last_attempt and (attempted - last_attempt).total_seconds() < MINIMUM_LIVE_WRITE_SECONDS:
         gates["frequency_guard_healthy"] = False
     if not all(gates.values()) or not isinstance(request, Mapping) or not isinstance(metadata, Mapping):
         if not gates["frequency_guard_healthy"]:
             state.update({"state": "DISABLED", "live_write_ready": False,
                           "frequency_guard_status": "FREQUENCY_GUARD_TRIPPED"})
-            _save_state(state_path, state)
+            _save(state_path, state)
         raise LiveWriteDisabled("live presence write gates are not all satisfied")
     current = reader(str(request["path"]))
-    actual_note_state = classify_note(current, state.get("last_successfully_published_seq"))
+    actual_note_state = _classify(current, state.get("last_successfully_published_seq"))
     if actual_note_state != metadata["expected_note_state"]:
-        state.update({"state": "CONFLICT", "unexpected_value_sha256": _sha(str(current)),
+        state.update({"state": "CONFLICT", "unexpected_value_sha256": _sha_fn(str(current)),
                       "live_write_ready": False})
-        _save_state(state_path, state)
+        _save(state_path, state)
         return {"status": "CONFLICT", "write_performed": False, "state": state}
-    state["last_attempted_write_at"] = _iso(attempted); _save_state(state_path, state)
+    state["last_attempted_write_at"] = _iso_fn(attempted); _save(state_path, state)
     response_status, response_body, result = None, "", "ERROR"
     try:
         response = writer(str(request["path"]), request["body"])
@@ -482,23 +473,73 @@ def _execute_approved_write_after_capability(
             state.update({"state": "READBACK_MISMATCH", "live_write_ready": False}); result = "READBACK_MISMATCH"
         else:
             state.update({"state": "LIVE", "last_successfully_published_seq": metadata["observed_seq"],
-                          "last_successful_write_at": _iso(attempted), "known_note_present": True,
+                          "last_successful_write_at": _iso_fn(attempted), "known_note_present": True,
                           "writes": int(state.get("writes", 0)) + 1, "live_write_ready": False}); result = "SUCCESS"
     except ConflictError as error:
         response_status, response_body, result = 409, error.current_value, "CONFLICT"
-        state.update({"state": "CONFLICT", "unexpected_value_sha256": _sha(error.current_value), "live_write_ready": False})
+        state.update({"state": "CONFLICT", "unexpected_value_sha256": _sha_fn(error.current_value), "live_write_ready": False})
     finally:
-        _save_state(state_path, state)
-        _append_audit(audit_path, {"attempted_at": _iso(attempted), "observed_at": metadata["observed_at"],
+        _save(state_path, state)
+        _audit(audit_path, {"attempted_at": _iso_fn(attempted), "observed_at": metadata["observed_at"],
             "room": config.room, "observed_seq": metadata["observed_seq"],
             "previous_successful_seq": request["body"].get("if"), "expected_note_state": metadata["expected_note_state"],
             "payload_sha256": metadata["payload_sha256"], "http_status": response_status,
-            "response_body_sha256": _sha(response_body), "adapter_version": ADAPTER_VERSION,
+            "response_body_sha256": _sha_fn(response_body), "adapter_version": ADAPTER_VERSION,
             "semantic_spec_anchor": config.semantic_spec_anchor,
             "semantic_contract_sha256": metadata["semantic_contract_sha256"],
             "application_commit": metadata["application_commit"],
             "decision": "ATTEMPTED", "result": result})
     return {"status": result, "write_performed": result == "SUCCESS", "state": state}
+
+
+def _build_presence_write_service(
+    config: PresenceConfig, state_path: Path, audit_path: Path, *,
+    writer: Callable[[str, Mapping[str, Any]], Any], reader: Callable[[str], Any],
+    semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH,
+    capability_validator: Any = require_local_intent,
+    _mechanism: Any = _execute_approved_write_after_capability,
+) -> Any:
+    """Capture all Presence state, I/O, and authority dependencies at construction."""
+    captured_config = config
+    captured_state = state_path.resolve()
+    captured_audit = audit_path.resolve()
+    captured_contract = semantic_contract_path.resolve()
+    captured_writer, captured_reader = writer, reader
+    captured_version = CAPABILITY_CONFIG_VERSION
+    digest_approval = approval_digest
+    mapping_type, disabled_error = Mapping, LiveWriteDisabled
+    json_dumps = json.dumps
+    action = LocalActionClass.PRESENCE_WRITE
+
+    def execute(*, preview: Mapping[str, Any], approval: Mapping[str, Any],
+                intent: ReviewedLocalIntent | None, now: datetime | None = None) -> Dict[str, Any]:
+        metadata, request = preview.get("approval_metadata"), preview.get("request")
+        if not isinstance(metadata, mapping_type) or not isinstance(request, mapping_type):
+            raise disabled_error("live presence write lacks an exact preview")
+        canonical_body = json_dumps(
+            request.get("body"), sort_keys=True, separators=(",", ":"))
+        context = json_dumps({
+            "action": "technocore-presence-write",
+            "state_path": str(captured_state), "audit_path": str(captured_audit),
+        }, sort_keys=True, separators=(",", ":"))
+        capability_validator(
+            intent, action, digest_approval(metadata),
+            target=str(request.get("path", "")), payload=canonical_body,
+            context=context, revision=str(metadata.get("application_commit", "")),
+            config_version=captured_version, consume=True)
+        return _mechanism(
+            captured_config, captured_state, captured_audit, preview=preview,
+            approval=approval, writer=captured_writer, reader=captured_reader,
+            now=now, semantic_contract_path=captured_contract)
+
+    return execute
+
+
+def _sealed_presence_mechanism(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+    raise LiveWriteDisabled("direct Presence write mechanism is sealed")
+
+
+_execute_approved_write_after_capability = _sealed_presence_mechanism
 
 
 def apply_payload(*_: Any, **__: Any) -> None:

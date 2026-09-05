@@ -13,8 +13,11 @@ from urllib.parse import urlparse
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .identity import load_identity, public_key_from_did
-from .remote_content_policy import ReviewedLocalIntent
-from .sensitive_action_router import invoke_signer
+from .remote_content_policy import (
+    LocalActionClass,
+    ReviewedLocalIntent,
+    require_local_intent,
+)
 
 SCHEMA = "flop-contribution-receipt-v1"
 DOMAIN = "FLOP-CONTRIBUTION-RECEIPT-V1|"
@@ -54,25 +57,39 @@ def canonical_payload(payload: Dict[str, str]) -> bytes:
     return (DOMAIN + json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False)).encode("utf-8")
 
 
-def create_receipt(
-    identity_path: Path, repo: str, commit: str, artifact_name: str,
-    timestamp: Optional[str] = None, *, intent: ReviewedLocalIntent | None = None,
-) -> Dict[str, Any]:
-    payload = {
-        "schema": SCHEMA, "repo": _validate_repo(repo), "commit": _validate_commit(commit),
-        "artifact_name": artifact_name.strip(),
-        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
-    }
-    canonical = canonical_payload(payload)
-    def sign_after_authorization() -> Dict[str, Any]:
-        key, did = load_identity(identity_path)
-        signature = base64.urlsafe_b64encode(key.sign(canonical)).decode("ascii").rstrip("=")
-        return {"schema": SCHEMA, "did": did, "payload": payload, "signature": signature}
-    return invoke_signer(
-        intent=intent, subject=canonical.decode("utf-8"),
-        target=str(identity_path.resolve()), payload=canonical.decode("utf-8"),
-        context=DOMAIN, revision=payload["commit"], config_version=SCHEMA,
-        adapter=sign_after_authorization)
+def _build_receipt_signer(require_capability: Any, identity_loader: Any) -> Any:
+    """Capture the capability validator and key loader before public calls exist."""
+    action = LocalActionClass.RECEIPT_SIGN
+    schema, domain = SCHEMA, DOMAIN
+    validate_repo, validate_commit = _validate_repo, _validate_commit
+    canonicalizer = canonical_payload
+    encode_signature = base64.urlsafe_b64encode
+    now = lambda: datetime.now(timezone.utc).isoformat()
+
+    def create(
+        identity_path: Path, repo: str, commit: str, artifact_name: str,
+        timestamp: Optional[str] = None, *, intent: ReviewedLocalIntent | None = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "schema": schema, "repo": validate_repo(repo),
+            "commit": validate_commit(commit), "artifact_name": artifact_name.strip(),
+            "timestamp": timestamp or now(),
+        }
+        canonical = canonicalizer(payload)
+        canonical_text = canonical.decode("utf-8")
+        require_capability(
+            intent, action, canonical_text,
+            target=str(identity_path.resolve()), payload=canonical_text,
+            context=domain, revision=payload["commit"], config_version=schema,
+            consume=True)
+        key, did = identity_loader(identity_path)
+        signature = encode_signature(key.sign(canonical)).decode("ascii").rstrip("=")
+        return {"schema": schema, "did": did, "payload": payload, "signature": signature}
+
+    return create
+
+
+create_receipt = _build_receipt_signer(require_local_intent, load_identity)
 
 
 def verify_receipt(receipt: Dict[str, Any]) -> Dict[str, str]:

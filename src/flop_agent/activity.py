@@ -21,39 +21,21 @@ _PUBLIC_ACTIVITY_JSONL = (_ROOT / "data/activity.jsonl").resolve()
 _PUBLIC_ACTIVITY_MARKDOWN = (_ROOT / "docs/ACTIVITY_LOG.md").resolve()
 
 
-def append_activity(
-    jsonl_path: Path, markdown_path: Path, room: str, message: Dict[str, Any],
-    evidence: Dict[str, Any] | None = None,
-    *, local_provenance: ReviewedLocalIntent | None = None,
-    revision: str | None = None,
-    config_version: str | None = None,
-    context: str = "local-activity-record",
-    output_scope: str = "PUBLIC",
-) -> None:
-    """Write only to the two repository-configured activity destinations."""
-    if (jsonl_path.resolve() != _PUBLIC_ACTIVITY_JSONL
-            or markdown_path.resolve() != _PUBLIC_ACTIVITY_MARKDOWN):
-        raise PermissionError("activity output paths are fixed local configuration")
-    _append_activity_at_configured_paths(
-        jsonl_path, markdown_path, room, message, evidence,
-        local_provenance=local_provenance, revision=revision,
-        config_version=config_version, context=context, output_scope=output_scope)
-
-
-def _append_activity_at_configured_paths(
+def _render_activity(
     jsonl_path: Path, markdown_path: Path, room: str, message: Dict[str, Any],
     evidence: Dict[str, Any] | None = None, *,
+    capability_validator: Any,
     local_provenance: ReviewedLocalIntent | None = None,
     revision: str | None = None, config_version: str | None = None,
     context: str = "local-activity-record", output_scope: str = "PUBLIC",
-) -> None:
-    """Mechanism used by the fixed-path production wrapper and isolated tests."""
+) -> tuple[Dict[str, Any], str]:
+    """Purely prepare bounded record/output text after optional authority validation."""
     evidence = evidence or {}
     raw_text = str(message.get("swept_text", message["text"]))
     raw_input = str(message.get("input_text", message["text"]))
     local_origin = False
     if local_provenance is not None:
-        require_local_intent(
+        capability_validator(
             local_provenance, LocalActionClass.LOCAL_ACTIVITY_RAW, raw_text,
             target=str(jsonl_path.resolve()), payload=raw_text, context=context,
             revision=revision, config_version=config_version)
@@ -109,12 +91,66 @@ def _append_activity_at_configured_paths(
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
     record = {key: value for key, value in record.items() if value is not None}
-    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-    with jsonl_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    with markdown_path.open("a", encoding="utf-8") as handle:
-        display = raw_text if raw_allowed else f"remote or unknown content SHA-256 {record['content_sha256']}"
-        room_display = room if local_origin else f"room SHA-256 {record['room_sha256']}"
-        link = f" — [permalink]({record['permalink']})" if record.get("permalink") else ""
-        did_display = record.get("did") or f"DID SHA-256 {record['did_sha256']}"
-        handle.write(f"\n- {record['timestamp']} — `{room_display}` seq {record.get('seq', 'unknown')} — {display}{link} — `{did_display}`\n")
+    display = raw_text if raw_allowed else f"remote or unknown content SHA-256 {record['content_sha256']}"
+    room_display = room if local_origin else f"room SHA-256 {record['room_sha256']}"
+    link = f" — [permalink]({record['permalink']})" if record.get("permalink") else ""
+    did_display = record.get("did") or f"DID SHA-256 {record['did_sha256']}"
+    line = (f"\n- {record['timestamp']} — `{room_display}` seq "
+            f"{record.get('seq', 'unknown')} — {display}{link} — `{did_display}`\n")
+    return record, line
+
+
+def _build_activity_service(jsonl_path: Path, markdown_path: Path,
+                            capability_validator: Any = require_local_intent) -> Any:
+    """Capture exact output destinations and authority before accepting records."""
+    approved_jsonl, approved_markdown = jsonl_path.resolve(), markdown_path.resolve()
+    renderer = _render_activity
+    serializer = json.dumps
+
+    def append(room: str, message: Dict[str, Any], evidence: Dict[str, Any] | None = None,
+               *, local_provenance: ReviewedLocalIntent | None = None,
+               revision: str | None = None, config_version: str | None = None,
+               context: str = "local-activity-record", output_scope: str = "PUBLIC") -> None:
+        record, line = renderer(
+            approved_jsonl, approved_markdown, room, message, evidence,
+            capability_validator=capability_validator,
+            local_provenance=local_provenance, revision=revision,
+            config_version=config_version, context=context, output_scope=output_scope)
+        approved_jsonl.parent.mkdir(parents=True, exist_ok=True)
+        with approved_jsonl.open("a", encoding="utf-8") as handle:
+            handle.write(serializer(record, ensure_ascii=False) + "\n")
+        with approved_markdown.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+
+    return append
+
+
+_PRODUCTION_APPEND = _build_activity_service(
+    _PUBLIC_ACTIVITY_JSONL, _PUBLIC_ACTIVITY_MARKDOWN, require_local_intent)
+
+
+def _build_public_activity_api(production_append: Any) -> Any:
+    fixed_jsonl, fixed_markdown = _PUBLIC_ACTIVITY_JSONL, _PUBLIC_ACTIVITY_MARKDOWN
+
+    def append_activity(
+        jsonl_path: Path, markdown_path: Path, room: str, message: Dict[str, Any],
+        evidence: Dict[str, Any] | None = None, *,
+        local_provenance: ReviewedLocalIntent | None = None,
+        revision: str | None = None, config_version: str | None = None,
+        context: str = "local-activity-record", output_scope: str = "PUBLIC",
+    ) -> None:
+        if (jsonl_path.resolve() != fixed_jsonl or markdown_path.resolve() != fixed_markdown):
+            raise PermissionError("activity output paths are fixed local configuration")
+        production_append(
+            room, message, evidence, local_provenance=local_provenance,
+            revision=revision, config_version=config_version, context=context,
+            output_scope=output_scope)
+    return append_activity
+
+
+append_activity = _build_public_activity_api(_PRODUCTION_APPEND)
+
+
+def _append_activity_at_configured_paths(*_args: Any, **_kwargs: Any) -> None:
+    """Deprecated unsafe mechanism API; use a path-capturing service."""
+    raise PermissionError("direct activity filesystem mechanism is sealed")

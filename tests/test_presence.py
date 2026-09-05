@@ -10,7 +10,7 @@ from flop_agent.presence import (
     approval_digest, apply_payload, canonical_sha256, classify_note,
     execute_approved_write, observe, presence_path, preview_first_write,
     load_semantic_contract, runtime_context, scalar_value, validate_approval,
-    _execute_approved_write_after_capability as execute_write_mechanism,
+    _build_presence_write_service,
 )
 
 NOW = datetime(2026, 8, 29, 0, 0, tzinfo=timezone.utc)
@@ -32,6 +32,15 @@ DISCOVERY = {"name": "technocore-chat", "version": "0.10.0",
              "conventions": {"name_pattern": "^[a-z0-9][a-z0-9_-]{0,47}$"}}
 DEPLOYMENT = {"version": "2026.08", "limits": {"reads": 120, "writes": 60,
               "rooms": 20480, "notes": 4096}, "retention": {"idle_seconds": 86400}}
+
+
+def execute_write_mechanism(config, state, audit, *, preview, approval, writer, reader,
+                            now=None, semantic_contract_path=SEMANTIC_CONTRACT_PATH):
+    service = _build_presence_write_service(
+        config, state, audit, writer=writer, reader=reader,
+        semantic_contract_path=semantic_contract_path,
+        capability_validator=lambda *_args, **_kwargs: None)
+    return service(preview=preview, approval=approval, intent=None, now=now)
 
 
 class PresenceAdapterTests(unittest.TestCase):

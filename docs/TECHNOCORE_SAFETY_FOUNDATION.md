@@ -20,11 +20,16 @@ evidence defaults to metadata and hashes rather than raw content.
 A reviewed endpoint is resolved from the repository-owned `ReviewedSourceId`
 registry. Callers cannot supply a URL, trust tier, or allowlist to create that
 authority. A registry endpoint and an identical URL discovered in remote
-content are different capabilities:
+content are both descriptive values, not capabilities:
 
-- `CONFIGURED_OFFICIAL_ENDPOINT` can be considered for an exact allowlisted,
-  GET-only request.
+- `CONFIGURED_OFFICIAL_ENDPOINT` records which local registry entry was
+  described, but cannot itself authorize a request.
 - `REMOTE_DISCOVERED_URL` is always inert.
+
+The sealed reviewed-source service accepts a `ReviewedSourceId` directly and
+performs only the exact captured GET. Navigation resolves from the same
+captured registry by source ID. No reusable authority token is stored in a
+dataclass.
 
 Trust does not propagate through links. Redirects are rejected, a response's
 final URL must match the requested URL, response bodies are bounded, and error
@@ -53,9 +58,41 @@ created by rebinding the descriptive module globals.
 Legacy Technocore reads resolve an internal source ID; local writes, signing,
 record lookup, and Presence-note reads require a typed, hash-bound local intent.
 Serialized remote data cannot be deserialized directly into that capability.
-The production action boundary is connected before subprocess, filesystem,
-secret, signer, Presence, receipt, MCP, wallet, claim, and payment adapters.
-The activity writer accepts only its two fixed repository destinations.
+Production action services capture their capability validator and final adapter
+at construction. Generic subprocess, filesystem, secret, signer, Presence,
+MCP, wallet, claim, and payment entry points remain disabled until a separately
+reviewed adapter is wired. The activity service captures its two exact
+repository destinations; its former caller-selected mechanism entry point
+fails closed.
+
+## Production authority threat model
+
+The boundary protects against untrusted Technocore content, caller-controlled
+data, normal public API misuse, reconstruction/copy/serialization of authority,
+and rebinding module globals after production services have been constructed.
+Sensitive dependencies live in factory closures: reviewed registries,
+validators, HTTP and signing adapters, output destinations, evidence derivation,
+and compatibility paths.
+
+It does not claim isolation from arbitrary code execution with full
+process-memory access, a hostile debugger, or malicious Python deliberately
+introspecting and altering closure cells. Those conditions already control the
+process itself.
+
+Production API classification:
+
+- reviewed-source GET and source-ID navigation: `SEALED_SERVICE`
+- KV production observer: `SEALED_SERVICE`
+- activity append to fixed repository outputs: `SEALED_SERVICE`
+- Presence write, subprocess, generic filesystem, secret, MCP, wallet, claim,
+  and payment entry points: `SAFE_STATIC` (disabled)
+- receipt and Technocore signing paths: `SEALED_SERVICE` requiring internal
+  capability
+- remote classification, minimized evidence, receipt verification, and
+  dashboard text rendering: `SAFE_STATIC`
+- `_authorized_local_request`, `official_get`, `_reviewed_kv_read_target`,
+  `_append_activity_at_configured_paths`, and the former Presence mechanism:
+  `DEPRECATED_INTERNAL` and fail-closed
 
 ## Source and contract independence
 
@@ -71,8 +108,9 @@ Contract provenance is independently one of `UNVERIFIED`,
 `VERIFIED_FOR_TESTNET_USE`. Official source trust alone never verifies a
 contract. A community DID signature authenticates a signer, not official FLOP
 authority. Public `ContractEvidenceRecord` objects are proposals and always
-remain unverified. Final provenance is derived only from opaque evidence
-identities issued from the repository-owned reviewed-evidence registry, binding
+remain unverified. Final provenance is derived only by a sealed verifier from
+opaque evidence identities issued from its captured repository-owned
+reviewed-evidence registry, binding
 the contract candidate, canonical artifact identity and hash, reviewed source,
 observation/review times, reviewer, policy version, and provenance root.
 Independence is derived from immutable provenance-root and canonical-artifact
@@ -99,6 +137,9 @@ read-only check of configured official sources.
 `COMPATIBILITY_REVIEW_REQUIRED` blocks future faucet, inference, contract,
 wallet, and protocol-dependent signing readiness. It does not block the
 independent Engagement observational GET contract.
+The production readiness service captures the canonical manifest path and
+contract verifier at construction; later rebinding of the public path constant
+does not change readiness.
 
 ## Evidence and navigation
 

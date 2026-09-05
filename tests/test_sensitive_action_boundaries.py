@@ -14,7 +14,7 @@ from flop_agent.remote_content_policy import (
     LocalActionClass, ReviewedLocalIntent, _new_capability_store,
 )
 from flop_agent.sensitive_action_router import (
-    _new_local_action_boundary, access_secret, claim_asset, invoke_mcp, invoke_signer,
+    _build_sensitive_action_service, access_secret, claim_asset, invoke_mcp, invoke_signer,
     make_payment, run_subprocess, use_wallet, write_filesystem, write_presence,
 )
 
@@ -48,20 +48,22 @@ class SensitiveActionBoundaryTests(unittest.TestCase):
                 wrapper(
                     intent=forged, subject="plain text", target="fixture-target",
                     payload="fixture-payload", context="fixture-context", revision=REVISION,
-                    config_version="fixture-v1", adapter=lambda: calls.append(wrapper.__name__))
+                    config_version="fixture-v1")
         self.assertEqual(calls, [])
 
     def test_global_rebinding_copy_and_serialization_do_not_create_authority(self):
         from flop_agent import remote_content_policy as policy
         forged = object.__new__(ReviewedLocalIntent)
         calls = []
-        with mock.patch.object(policy, "_PRODUCTION_REQUIRE", lambda *_args, **_kwargs: None), \
-             mock.patch.object(policy, "_LOCAL_APPROVAL_RECORDS", {"caller": {}}):
+        from flop_agent import sensitive_action_router as router
+        with mock.patch.object(policy, "require_local_intent", lambda *_args, **_kwargs: None), \
+             mock.patch.object(policy, "_LOCAL_APPROVAL_RECORDS", {"caller": {}}), \
+             mock.patch.object(router, "_PRODUCTION_ACTION_SERVICE",
+                               lambda *_args, **_kwargs: calls.append("subprocess")):
             with self.assertRaises(PermissionError):
                 run_subprocess(
                     intent=forged, subject="subject", target="target", payload="payload",
-                    context="context", revision=REVISION, config_version="fixture-v1",
-                    adapter=lambda: calls.append("subprocess"))
+                    context="context", revision=REVISION, config_version="fixture-v1")
         with self.assertRaises(TypeError):
             copy.copy(forged)
         with self.assertRaises(TypeError):
@@ -84,8 +86,9 @@ class SensitiveActionBoundaryTests(unittest.TestCase):
             for action in actions}
         issue, require = _new_capability_store(
             records, frozenset({"fixture-reviewer"}), lambda: NOW)
-        boundary = _new_local_action_boundary(require)
         calls = []
+        boundary = _build_sensitive_action_service(
+            require, {action: (lambda item=action: calls.append(item)) for action in actions})
         for action in actions:
             capability = issue(
                 action.value, action, "fixture-subject", target="fixture-target",
@@ -94,7 +97,7 @@ class SensitiveActionBoundaryTests(unittest.TestCase):
             boundary(
                 capability, action, subject="fixture-subject", target="fixture-target",
                 payload="fixture-payload", context="fixture-context", revision=REVISION,
-                config_version="fixture-v1", adapter=lambda item=action: calls.append(item))
+                config_version="fixture-v1")
         self.assertEqual(calls, list(actions))
 
     def test_expired_wrong_payload_and_replayed_capabilities_fail(self):

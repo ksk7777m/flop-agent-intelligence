@@ -10,11 +10,10 @@ import shutil
 import sqlite3
 import time
 import uuid
-import weakref
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping
 from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -62,33 +61,7 @@ class NamespaceConfig:
 
 
 class ObservedRemoteKey(str):
-    """A grammar-checked key name observed in an untrusted remote listing."""
-
-    def __new__(cls, *_args: object, **_kwargs: object):
-        raise PermissionError("observed keys can only come from the listing parser")
-
-
-def _new_observed_key_store():
-    registry: dict[int, tuple[weakref.ReferenceType[ObservedRemoteKey], str, str]] = {}
-
-    def issue(key: str, namespace: str) -> ObservedRemoteKey:
-        value = str.__new__(ObservedRemoteKey, key)
-        identity = id(value)
-        registry[identity] = (
-            weakref.ref(value, lambda _ref, item=identity: registry.pop(item, None)),
-            namespace, f"{OFFICIAL_ORIGIN}/kv/{quote(namespace, safe='')}?format=json")
-        return value
-
-    def require(value: ObservedRemoteKey, namespace: str, source: str) -> None:
-        record = registry.get(id(value)) if isinstance(value, ObservedRemoteKey) else None
-        if (record is None or record[0]() is not value
-                or record[1] != namespace or record[2] != source):
-            raise PermissionError("KV key lacks matching internal observation authority")
-
-    return issue, require
-
-
-_ISSUE_OBSERVED_KEY, _REQUIRE_OBSERVED_KEY = _new_observed_key_store()
+    """Descriptive grammar-checked remote key; it carries no fetch authority."""
 
 
 def utc_now() -> str:
@@ -143,11 +116,9 @@ def parse_key_list(body: str, namespace: str) -> list[ObservedRemoteKey]:
         raise ApiContractError("listing contained malformed or private key")
     if len(keys) != len(set(keys)):
         raise ApiContractError("listing contained duplicate keys")
-    observed = []
     for key in keys:
         discovered_remote_value(key, RemoteOrigin.TECHNOCORE_KV_KEY, f"kv:{namespace}")
-        observed.append(_ISSUE_OBSERVED_KEY(key, namespace))
-    return sorted(observed)
+    return sorted(str.__new__(ObservedRemoteKey, key) for key in keys)
 
 
 def note_value(body: str) -> str:
@@ -335,59 +306,20 @@ HttpGet = Callable[[str], tuple[int, str, Mapping[str, str]]]
 
 
 class ReviewedKvTarget(str):
-    """String-compatible target that cannot be produced by remote JSON/text."""
+    """Retained only to reject legacy authority-bearing target construction."""
     def __new__(cls, *_args: object, **_kwargs: object):
-        raise PermissionError("reviewed KV target requires internal issuance")
-
-
-def _new_kv_target_store():
-    registry: dict[int, tuple[weakref.ReferenceType[ReviewedKvTarget], str]] = {}
-
-    def issue_url(url: str) -> ReviewedKvTarget:
-        value = str.__new__(ReviewedKvTarget, url)
-        identity = id(value)
-        registry[identity] = (
-            weakref.ref(value, lambda _ref, item=identity: registry.pop(item, None)), url)
-        return value
-
-    def consume(value: ReviewedKvTarget) -> None:
-        record = registry.pop(id(value), None) if isinstance(value, ReviewedKvTarget) else None
-        if record is None or record[0]() is not value or record[1] != str(value):
-            raise ApiContractError("typed reviewed KV target required")
-
-    def issue_listing(namespace: str | None = None, *, manifest: bool = False) -> ReviewedKvTarget:
-        if manifest:
-            return issue_url(f"{OFFICIAL_ORIGIN}/.well-known/agent.json")
-        if not namespace or not NAME_RE.fullmatch(namespace) or PRIVATE_RE.match(namespace):
-            raise ApiContractError("invalid locally configured KV namespace")
-        return issue_url(f"{OFFICIAL_ORIGIN}/kv/{quote(namespace, safe='')}?format=json")
-
-    def issue_value(config: NamespaceConfig, key: ObservedRemoteKey) -> ReviewedKvTarget:
-        if not isinstance(config, NamespaceConfig) or not isinstance(key, ObservedRemoteKey):
-            raise PermissionError("KV value reads require a key from the matching listing")
-        listing_source = f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}?format=json"
-        _REQUIRE_OBSERVED_KEY(key, config.name, listing_source)
-        if not config.key_prefixes or not key.startswith(config.key_prefixes):
-            raise PermissionError("observed KV key is not covered by local fetch policy")
-        if not NAME_RE.fullmatch(key) or PRIVATE_RE.match(key):
-            raise ApiContractError("invalid reviewed KV key")
-        return issue_url(
-            f"{OFFICIAL_ORIGIN}/kv/{quote(config.name, safe='')}/{quote(key, safe='')}")
-
-    return issue_listing, issue_value, consume
-
-
-_ISSUE_KV_LISTING, _ISSUE_KV_VALUE, _CONSUME_KV_TARGET = _new_kv_target_store()
+        raise PermissionError("reviewed KV targets are no longer public values")
 
 
 def _kv_target(namespace: str | None = None, *, manifest: bool = False) -> ReviewedKvTarget:
-    return _ISSUE_KV_LISTING(namespace, manifest=manifest)
+    del namespace, manifest
+    raise PermissionError("direct KV target creation is sealed")
 
 
 def _reviewed_kv_read_target(config: NamespaceConfig,
                              key: ObservedRemoteKey) -> ReviewedKvTarget:
-    """Apply an explicit local namespace/prefix policy to an inert observed key."""
-    return _ISSUE_KV_VALUE(config, key)
+    del config, key
+    raise PermissionError("caller-supplied KV promotion is disabled")
 
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl): return None
@@ -399,27 +331,13 @@ def sanitize_retry_after(value: str | None) -> str | None:
 
 
 def official_get(url: ReviewedKvTarget) -> tuple[int, str, Mapping[str, str]]:
-    _CONSUME_KV_TARGET(url)
-    parsed = urlparse(url)
-    allowed_path = parsed.path.startswith("/kv/") or parsed.path == "/.well-known/agent.json"
-    if f"{parsed.scheme}://{parsed.netloc}" != OFFICIAL_ORIGIN or not allowed_path:
-        raise ApiContractError("refusing non-official or non-KV URL")
-    request = Request(url, method="GET", headers={"Accept": "application/json", "User-Agent": OBSERVER_VERSION})
-    try:
-        with build_opener(_NoRedirect()).open(request, timeout=20) as response:  # nosec: exact origin; redirects disabled
-            if response.geturl() != url:
-                raise ApiContractError("official KV final origin changed")
-            body = response.read(DEFAULT_RESPONSE_LIMIT + 1)
-            if len(body) > DEFAULT_RESPONSE_LIMIT:
-                raise ApiContractError("official KV response exceeded the resource bound")
-            return response.status, body.decode("utf-8"), dict(response.headers)
-    except HTTPError as exc:
-        return exc.code, "", dict(exc.headers)
+    del url
+    raise PermissionError("direct KV HTTP transport is sealed")
 
 
-def current_read_interval(get: HttpGet = official_get) -> float:
+def current_read_interval(get: HttpGet) -> float:
     """Derive conservative request spacing from the deployment's live manifest."""
-    status, body, _ = get(_kv_target(manifest=True))
+    status, body, _ = get(f"{OFFICIAL_ORIGIN}/.well-known/agent.json")
     if status != 200:
         raise ApiContractError("cannot establish current read limit")
     try:
@@ -433,10 +351,33 @@ def current_read_interval(get: HttpGet = official_get) -> float:
 
 
 class Observer:
-    def __init__(self, configs: list[NamespaceConfig], store: Store, get: HttpGet = official_get,
-                 read_interval: float = 0.0, sleep: Callable[[float], None] = time.sleep):
+    __slots__ = (
+        "configs", "store", "get", "read_interval", "sleep", "_parse_keys",
+        "_note_value", "_remote_value", "_retry_after", "_quote", "_name_re",
+        "_private_re", "_origin", "_sealed",
+    )
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError("Observer production dependencies are sealed")
+        object.__setattr__(self, name, value)
+
+    def __init__(self, configs: list[NamespaceConfig], store: Store, get: HttpGet | None = None,
+                 read_interval: float = 0.0, sleep: Callable[[float], None] = time.sleep,
+                 *, _parse_keys: Any = parse_key_list, _note_value: Any = note_value,
+                 _remote_value: Any = discovered_remote_value,
+                 _retry_after: Any = sanitize_retry_after,
+                 _quote: Any = quote, _name_re: Any = NAME_RE,
+                 _private_re: Any = PRIVATE_RE, _origin: str = OFFICIAL_ORIGIN):
+        if get is None:
+            raise PermissionError("Observer requires a sealed or explicitly mocked read service")
         self.configs, self.store, self.get = configs, store, get
         self.read_interval, self.sleep = max(0.0, read_interval), sleep
+        self._parse_keys, self._note_value = _parse_keys, _note_value
+        self._remote_value, self._retry_after = _remote_value, _retry_after
+        self._quote, self._name_re, self._private_re, self._origin = (
+            _quote, _name_re, _private_re, _origin)
+        self._sealed = True
 
     def _get(self, url: str) -> tuple[int, str, Mapping[str, str]]:
         response = self.get(url)
@@ -449,10 +390,10 @@ class Observer:
         cycle_id = self.store.begin_cycle(observed_at)
         result = {"successful": 0, "failed": 0, "rate_limited": 0, "writes": 0}
         for config in self.configs:
-            listing_url = _kv_target(config.name)
+            listing_url = f"{self._origin}/kv/{self._quote(config.name, safe='')}?format=json"
             status, body, headers = self._get(listing_url)
             if status == 429:
-                self.store.failed_poll(config.name, observed_at, "RATE_LIMITED", status, sanitize_retry_after(headers.get("Retry-After")), "HTTP_RATE_LIMIT", "NAMESPACE_LIST", cycle_id)
+                self.store.failed_poll(config.name, observed_at, "RATE_LIMITED", status, self._retry_after(headers.get("Retry-After")), "HTTP_RATE_LIMIT", "NAMESPACE_LIST", cycle_id)
                 result["rate_limited"] += 1
                 continue
             if status != 200:
@@ -460,22 +401,23 @@ class Observer:
                 result["failed"] += 1
                 continue
             try:
-                observed_keys = parse_key_list(body, config.name)
+                observed_keys = self._parse_keys(body, config.name)
                 if len(observed_keys) > config.max_keys:
                     raise ApiContractError("configured local key budget exceeded")
                 hashes = {}
                 for key in observed_keys:
-                    try:
-                        target = _reviewed_kv_read_target(config, key)
-                    except PermissionError:
+                    if (not config.key_prefixes or not key.startswith(config.key_prefixes)
+                            or not self._name_re.fullmatch(key) or self._private_re.match(key)):
                         continue
+                    target = (f"{self._origin}/kv/{self._quote(config.name, safe='')}/"
+                              f"{self._quote(key, safe='')}")
                     code, value_body, value_headers = self._get(target)
                     if code == 429:
-                        raise RateLimited(sanitize_retry_after(value_headers.get("Retry-After")))
+                        raise RateLimited(self._retry_after(value_headers.get("Retry-After")))
                     if code != 200:
                         raise ApiContractError(f"key listed but read returned HTTP {code}")
-                    raw = note_value(value_body)
-                    remote = discovered_remote_value(
+                    raw = self._note_value(value_body)
+                    remote = self._remote_value(
                         raw, RemoteOrigin.TECHNOCORE_KV_VALUE, f"kv:{config.name}/{key}")
                     hashes[key] = remote.content_sha256
                     del raw
@@ -489,6 +431,70 @@ class Observer:
                 result["failed"] += 1
         self.store.complete_cycle(cycle_id, observed_at)
         return result
+
+
+def _build_kv_observer_factory(config_path: Path, opener_builder: Callable[..., object]) -> tuple[Any, Any, Any]:
+    """Capture repository policy and the only real KV transport in one service."""
+    configured = tuple(load_config(config_path.resolve()))
+    by_namespace = {item.name: item for item in configured}
+    origin, observer_version = OFFICIAL_ORIGIN, OBSERVER_VERSION
+    parse_url, quote_path, request_type = urlparse, quote, Request
+    redirect_handler, http_error_type = _NoRedirect, HTTPError
+    name_re, private_re = NAME_RE, PRIVATE_RE
+    contract_error = ApiContractError
+    response_limit = DEFAULT_RESPONSE_LIMIT
+    observer_type, interval_reader = Observer, current_read_interval
+    listing_urls = {
+        f"{origin}/kv/{quote_path(item.name, safe='')}?format=json": item
+        for item in configured
+    }
+    manifest_url = f"{origin}/.well-known/agent.json"
+
+    def get(url: str) -> tuple[int, str, Mapping[str, str]]:
+        parsed = parse_url(url)
+        allowed = url == manifest_url or url in listing_urls
+        if not allowed and parsed.query == "" and parsed.fragment == "":
+            parts = parsed.path.split("/")
+            if len(parts) == 4 and parts[:2] == ["", "kv"]:
+                config = by_namespace.get(parts[2])
+                key = parts[3]
+                allowed = bool(
+                    config and config.key_prefixes and key.startswith(config.key_prefixes)
+                    and name_re.fullmatch(key) and not private_re.match(key))
+        if (not allowed or parsed.scheme != "https" or parsed.netloc != "technocore.chat"
+                or parsed.username or parsed.password):
+            raise PermissionError("KV URL is outside captured production policy")
+        request = request_type(
+            url, method="GET",
+            headers={"Accept": "application/json", "User-Agent": observer_version})
+        try:
+            with opener_builder(redirect_handler()).open(request, timeout=20) as response:
+                if response.geturl() != url:
+                    raise contract_error("official KV final origin changed")
+                body = response.read(response_limit + 1)
+                if len(body) > response_limit:
+                    raise contract_error("official KV response exceeded the resource bound")
+                return response.status, body.decode("utf-8"), dict(response.headers)
+        except http_error_type as error:
+            return error.code, "", dict(error.headers)
+
+    def build(store: Store, *, read_interval: float = 0.0,
+              sleep: Callable[[float], None] = time.sleep) -> Observer:
+        return observer_type(
+            list(configured), store, get, read_interval=read_interval, sleep=sleep)
+
+    def interval() -> float:
+        return interval_reader(get)
+
+    def configs() -> list[NamespaceConfig]:
+        return list(configured)
+
+    return build, interval, configs
+
+
+_PRODUCTION_KV_CONFIG = Path(__file__).resolve().parents[2] / "examples" / "kv-observer.example.json"
+build_production_observer, production_read_interval, production_configs = (
+    _build_kv_observer_factory(_PRODUCTION_KV_CONFIG, build_opener))
 
 
 SNAPSHOT_FILES = ("status.json", "namespaces.json", "changes.json", "presence.json")

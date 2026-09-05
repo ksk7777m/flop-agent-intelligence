@@ -5,7 +5,13 @@ import argparse
 import json
 from pathlib import Path
 
-from flop_agent.kv_observatory import Observer, Store, current_read_interval, load_config, write_snapshots
+from flop_agent.kv_observatory import (
+    Store,
+    build_production_observer,
+    production_configs,
+    production_read_interval,
+    write_snapshots,
+)
 
 
 def main() -> None:
@@ -14,9 +20,13 @@ def main() -> None:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    configs = load_config(args.config)
+    expected_config = (Path(__file__).resolve().parents[1] / "examples" / "kv-observer.example.json").resolve()
+    if args.config.resolve() != expected_config:
+        raise SystemExit("production KV observer requires the repository-reviewed config")
+    configs = production_configs()
     store = Store(args.state)
-    result = Observer(configs, store, read_interval=current_read_interval()).poll()
+    result = build_production_observer(
+        store, read_interval=production_read_interval()).poll()
     write_snapshots(store, configs, args.output_dir)
     print(json.dumps(result, indent=2))
     if result["failed"] or result["rate_limited"]:
