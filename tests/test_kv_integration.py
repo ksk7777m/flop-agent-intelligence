@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class KVIntegrationTests(unittest.TestCase):
     def test_presence_contract_unchanged(self):
         self.assertEqual(
-            load_semantic_contract(ROOT / "data/presence_semantic_contract.json")[1],
+            load_semantic_contract()[1],
             "1d89199c57008083bef24cc2f62a4275a8b77ab470c0a163f0e037c14e872778",
         )
         adapter = json.loads((ROOT / "data/presence_adapter.json").read_text())

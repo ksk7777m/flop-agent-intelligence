@@ -8,13 +8,12 @@ complete KV coverage. Its only network primitive is `GET` to the exact official
 ## Run one poll
 
 ```bash
-PYTHONPATH=src python3 scripts/observe_kv.py \
-  --config examples/kv-observer.example.json \
-  --state runtime/kv-observer.sqlite3 \
-  --output-dir runtime/kv-api
+PYTHONPATH=src python3 scripts/observe_kv.py
 ```
 
-Review generated JSON before copying it to `api/kv/`. The example allowlist discovers
+The production command captures the reviewed config, `runtime/kv-observer.sqlite3`
+state database, and `runtime/kv-api` snapshot root; callers cannot redirect those
+outputs. Review generated JSON before copying it to `api/kv/`. The example allowlist discovers
 key names in the three official room-control namespaces without fetching their values;
 an empty `key_prefixes` list is deliberately discovery-only. Only public `hb-` keys in
 `lobby` have an explicit local value-fetch policy. Change that policy only by explicit

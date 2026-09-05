@@ -377,8 +377,47 @@ def activation_checklist(config: Mapping[str, Any]) -> Dict[str, Any]:
     return {"status": "DO_NOT_ACTIVATE" if missing else "REVIEW_REQUIRED", "missing": missing, "auto_activate": False}
 
 
-def load_fixture(path: Path) -> Dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+class ReviewedFixtureId(str, Enum):
+    VALID_DRAFT_CONFIG = "VALID_DRAFT_CONFIG"
+    VALID_INFERENCE_QUOTE = "VALID_INFERENCE_QUOTE"
+    RESULT_RECEIPT = "RESULT_RECEIPT"
+
+
+def _load_fixture(path: Path) -> Dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("fixture must be a JSON object")
+    return value
+
+
+def _build_fixture_store(
+    fixture_root: Path, filenames: Mapping[ReviewedFixtureId, str],
+    loader: Any = _load_fixture,
+) -> Any:
+    configured_root = fixture_root.resolve()
+    configured_files = MappingProxyType(dict(filenames))
+    captured_loader = loader
+
+    def read(fixture_id: ReviewedFixtureId) -> Dict[str, Any]:
+        if not isinstance(fixture_id, ReviewedFixtureId) or fixture_id not in configured_files:
+            raise PermissionError("unreviewed fixture identifier")
+        candidate = configured_root / configured_files[fixture_id]
+        if candidate.is_symlink():
+            raise PermissionError("fixture symlink is forbidden")
+        resolved = candidate.resolve(strict=True)
+        if resolved.parent != configured_root:
+            raise PermissionError("fixture escaped reviewed store")
+        return captured_loader(resolved)
+
+    return read
+
+
+_PRODUCTION_FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "examples" / "fixtures" / "testnet"
+load_reviewed_fixture = _build_fixture_store(_PRODUCTION_FIXTURE_ROOT, {
+    ReviewedFixtureId.VALID_DRAFT_CONFIG: "valid_draft_config.json",
+    ReviewedFixtureId.VALID_INFERENCE_QUOTE: "valid_inference_quote.json",
+    ReviewedFixtureId.RESULT_RECEIPT: "result_receipt.json",
+})
 
 
 def current_status() -> Dict[str, str]:

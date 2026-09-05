@@ -346,14 +346,16 @@ def _safe_fetch(
 
 def _local_evidence(root: Path) -> Dict[str, Any]:
     expected = [
-        ("original", root / "receipts/flop-agent-intelligence-e388c6fd.receipt.json", "854b3442645b0dcaeae9d87646e0144fd48f659ef0a72208135eddaa37b279b2"),
-        ("dashboard", root / "receipts/flop-readiness-dashboard-v1-1fdc4b0.receipt.json", "433737734c148e9351bf405252b8aa78ac0e923320366980fe26a97aabb67e70"),
+        ("original", "flop-agent-intelligence-e388c6fd.receipt.json", "854b3442645b0dcaeae9d87646e0144fd48f659ef0a72208135eddaa37b279b2"),
+        ("dashboard", "flop-readiness-dashboard-v1-1fdc4b0.receipt.json", "433737734c148e9351bf405252b8aa78ac0e923320366980fe26a97aabb67e70"),
     ]
     details = {}
-    for name, path, fingerprint in expected:
+    for name, receipt_id, fingerprint in expected:
         try:
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
-            verified = verify_receipt(read_receipt(path))["status"] == "VALID"
+            value = read_receipt(receipt_id)
+            actual = hashlib.sha256(json.dumps(
+                value, indent=2, ensure_ascii=False).encode("utf-8") + b"\n").hexdigest()
+            verified = verify_receipt(value)["status"] == "VALID"
             details[name] = actual == fingerprint and verified
         except Exception:
             details[name] = False
@@ -514,17 +516,19 @@ def _run_monitor(
 
 def _build_monitor_service(
     reviewed_reader: Callable[[ReviewedSourceId], bytes],
+    root: Path = Path(__file__).resolve().parents[2],
 ) -> tuple[Callable[[ReviewedSourceId], bytes], Callable[..., Dict[str, Any]]]:
     """Capture reviewed HTTP policy and source sets before public invocation."""
     endpoints = MappingProxyType(dict(ENDPOINTS))
     official_specs = MappingProxyType(dict(OFFICIAL_SPECS))
     run_impl = _run_monitor
+    configured_root = root.resolve()
 
     def fetch(source_id: ReviewedSourceId) -> bytes:
         return reviewed_reader(source_id)
 
-    def run(root: Path, evidence_mode: str = "local") -> Dict[str, Any]:
-        return run_impl(root, fetch, evidence_mode, endpoints, official_specs)
+    def run(evidence_mode: str = "local") -> Dict[str, Any]:
+        return run_impl(configured_root, fetch, evidence_mode, endpoints, official_specs)
 
     return fetch, run
 
@@ -532,13 +536,26 @@ def _build_monitor_service(
 fetch_bytes, run_monitor = _build_monitor_service(read_configured_endpoint)
 
 
-def save_run(root: Path, record: Dict[str, Any]) -> None:
+def _save_run(root: Path, record: Dict[str, Any]) -> None:
     runtime = root / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     latest = runtime / "latest-health.json"
     latest.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     with (runtime / "health-monitor.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+
+def _build_monitor_persistence(root: Path, saver: Callable[[Path, Dict[str, Any]], None]) -> Callable[[Dict[str, Any]], None]:
+    configured_root = root.resolve()
+    captured_saver = saver
+
+    def save(record: Dict[str, Any]) -> None:
+        captured_saver(configured_root, record)
+
+    return save
+
+
+save_run = _build_monitor_persistence(Path(__file__).resolve().parents[2], _save_run)
 
 
 def exit_code(record: Dict[str, Any]) -> int:

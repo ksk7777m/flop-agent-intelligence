@@ -8,8 +8,9 @@ from flop_agent.presence import (
     AGENT_PATH, CONFIG_PATH, ROOMS_PATH, SEMANTIC_CONTRACT_PATH,
     SEMANTIC_CONTRACT_ANCHOR, LiveWriteDisabled, PresenceConfig, PresenceError,
     approval_digest, apply_payload, canonical_sha256, classify_note,
-    execute_approved_write, observe, presence_path, preview_first_write,
-    load_semantic_contract, runtime_context, scalar_value, validate_approval,
+    execute_approved_write, _observe as observe, presence_path,
+    _preview_first_write as preview_first_write,
+    load_semantic_contract, _load_semantic_contract, runtime_context, scalar_value, validate_approval,
     _build_presence_write_service,
 )
 
@@ -168,7 +169,7 @@ class PresenceAdapterTests(unittest.TestCase):
         pretty = self.state.parent / "pretty.json"
         compact.write_text(json.dumps(reversed_contract, separators=(",", ":")))
         pretty.write_text(json.dumps(CONTRACT, indent=4))
-        self.assertEqual(load_semantic_contract(compact)[1], load_semantic_contract(pretty)[1])
+        self.assertEqual(_load_semantic_contract(compact)[1], _load_semantic_contract(pretty)[1])
         changed = dict(CONTRACT, conditional_update="different")
         self.assertNotEqual(canonical_sha256(CONTRACT), canonical_sha256(changed))
 

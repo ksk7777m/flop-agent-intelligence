@@ -91,8 +91,29 @@ Production API classification:
 - remote classification, minimized evidence, receipt verification, and
   dashboard text rendering: `SAFE_STATIC`
 - `_authorized_local_request`, `official_get`, `_reviewed_kv_read_target`,
-  `_append_activity_at_configured_paths`, and the former Presence mechanism:
+  `_append_activity_at_configured_paths`, `_Store`, `_write_snapshots`,
+  `_recover_snapshot_output`, `_load_fixture`, `_create_identity`, and the
+  former Presence read/write mechanisms:
   `DEPRECATED_INTERNAL` and fail-closed
+
+Final public-effect API inventory (2026-09-05):
+
+- `SEALED_SERVICE`: reviewed HTTP/Technocore readers, readiness and monitor
+  services, fixed-root monitor/KV persistence, fixed-ID receipt and fixture
+  stores, local identity operations, Presence operations, activity append,
+  receipt signing, and the sensitive-action router
+- `SAFE_STATIC`: remote classifiers/minimized evidence/receipt verification,
+  dashboard text rendering, plus disabled subprocess/filesystem/secret/MCP/
+  wallet/claim/payment/Presence-write adapters
+- `DEPRECATED_INTERNAL`: underscore-prefixed fixture mechanisms and their
+  private dependency-injecting factories only
+- `UNSAFE`: **0**
+
+Production callers supply descriptive IDs, enums, records, hashes, or action
+requests. They cannot supply filesystem paths/roots, readers, writers, openers,
+guards, validators, adapters, or callbacks to these effect-bearing services.
+Private factories retain temporary-path and spy injection solely for offline
+tests.
 
 ## Source and contract independence
 

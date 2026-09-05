@@ -6,7 +6,6 @@ before its concrete sink callable can run.  Classifier output is not consulted.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
@@ -19,6 +18,7 @@ from .remote_content_policy import (
     invoke_remote_sink,
     require_local_intent,
 )
+from .testnet import compatibility_status as _compatibility_status
 
 
 class RemoteAction(str, Enum):
@@ -49,22 +49,54 @@ _ACTION_SINK: Mapping[RemoteAction, SinkClass] = {
 _SEALED_ACTION_SINK = MappingProxyType(dict(_ACTION_SINK))
 
 
-@dataclass(frozen=True)
-class SensitiveActionRouter:
-    """Bind each action class to its real adapter boundary."""
+def _build_remote_action_router_type(
+    policy_evaluator: Callable[..., Any],
+    adapters: Mapping[RemoteAction, Callable[[Any], Any]],
+    compatibility_evaluator: Callable[[], Any],
+    capability_validator: Callable[..., Any],
+    reviewed_source_resolver: Callable[..., Any],
+) -> type:
+    """Build a router whose authority-bearing dependencies live only in closures."""
+    configured_adapters = MappingProxyType(dict(adapters))
+    configured_sinks = _SEALED_ACTION_SINK
+    action_type = RemoteAction
+    # Capture all policy inputs now.  They are deliberately not public call inputs.
+    captured_policy = policy_evaluator
+    captured_compatibility = compatibility_evaluator
+    captured_capability = capability_validator
+    captured_source_resolver = reviewed_source_resolver
 
-    sinks: Mapping[RemoteAction, Callable[[Any], Any]]
+    class SealedSensitiveActionRouter:
+        __slots__ = ()
 
-    def dispatch(self, value: UntrustedRemoteValue, action: RemoteAction,
-                 _guard: Callable[..., Any] = invoke_remote_sink,
-                 _action_sinks: Mapping[RemoteAction, SinkClass] = _SEALED_ACTION_SINK,
-                 _action_type: type[RemoteAction] = RemoteAction) -> Any:
-        if not isinstance(action, _action_type) or action not in self.sinks:
-            raise PermissionError("unregistered remote action")
-        return _guard(
-            value, _action_sinks[action],
-            lambda: self.sinks[action](value.value_for_classification_only),
-        )
+        def dispatch(self, value: UntrustedRemoteValue, action: RemoteAction) -> Any:
+            if not isinstance(action, action_type) or action not in configured_adapters:
+                raise PermissionError("unregistered remote action")
+            # Keep these dependencies in the sealed service graph even though remote
+            # proposals are denied by policy before local capability evaluation.
+            _ = (captured_compatibility, captured_capability, captured_source_resolver)
+            return captured_policy(
+                value, configured_sinks[action],
+                lambda: configured_adapters[action](value.value_for_classification_only),
+            )
+
+    SealedSensitiveActionRouter.__name__ = "SensitiveActionRouter"
+    return SealedSensitiveActionRouter
+
+
+def _disabled_remote_adapter(_value: Any) -> Any:
+    raise PermissionError("remote sensitive action is disabled")
+
+
+from .remote_content_policy import resolve_reviewed_source  # captured once below
+
+SensitiveActionRouter = _build_remote_action_router_type(
+    invoke_remote_sink,
+    {action: _disabled_remote_adapter for action in RemoteAction},
+    _compatibility_status,
+    require_local_intent,
+    resolve_reviewed_source,
+)
 
 
 def _build_sensitive_action_service(

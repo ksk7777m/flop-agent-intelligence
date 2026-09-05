@@ -20,7 +20,7 @@ PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness status
 PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness faucet --dry-run
 PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness balance --fixture
 PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness inference --fixture
-PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness verify-receipt examples/fixtures/testnet/result_receipt.json
+PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness verify-receipt RESULT_RECEIPT
 ```
 
 Fixture activity receipts use SHA-256 integrity verification. They are

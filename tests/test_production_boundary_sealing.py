@@ -26,9 +26,10 @@ from flop_agent.presence import (
     ROOMS_PATH,
     PresenceConfig,
     _build_presence_write_service,
+    _build_presence_service,
     approval_digest,
     load_semantic_contract,
-    preview_first_write,
+    _preview_first_write as preview_first_write,
 )
 from flop_agent.remote_content_policy import (
     ContractEvidenceRecord,
@@ -43,6 +44,7 @@ from flop_agent.remote_content_policy import (
     _build_configured_reader,
     _build_contract_verifier,
     resolve_reviewed_source,
+    RemoteContentClass,
 )
 
 
@@ -164,7 +166,7 @@ class ProductionBoundarySealingTests(unittest.TestCase):
                                side_effect=lambda *_a: receipt_key_calls.append(1)):
             with self.assertRaises(PermissionError):
                 receipt.create_receipt(
-                    Path("unused"), "https://example.invalid/repo", REVISION,
+                    "https://example.invalid/repo", REVISION,
                     "artifact", "2026-09-04T00:00:00Z", intent=forged)
 
         contract = "0x" + "1" * 40
@@ -200,12 +202,17 @@ class ProductionBoundarySealingTests(unittest.TestCase):
                 technocore.find_signed):
             self.assertNotIn("opener", inspect.signature(operation).parameters)
             self.assertNotIn("signer", inspect.signature(operation).parameters)
+            self.assertNotIn("identity_path", inspect.signature(operation).parameters)
         for operation in (
                 technocore.healthcheck, readiness.fetch_bytes,
                 readiness.compare_spec_hashes, readiness.run_readiness_check,
                 monitor.fetch_bytes, monitor.run_monitor):
             for parameter in ("fetcher", "opener", "reader", "http_client", "adapter"):
                 self.assertNotIn(parameter, inspect.signature(operation).parameters)
+        self.assertEqual(tuple(inspect.signature(readiness.run_readiness_check).parameters), ())
+        self.assertEqual(
+            tuple(inspect.signature(monitor.run_monitor).parameters),
+            ("evidence_mode",))
         self.assertFalse(hasattr(identity, "load_identity"))
         self.assertFalse(hasattr(identity, "sign_message"))
         for operation in (
@@ -218,6 +225,28 @@ class ProductionBoundarySealingTests(unittest.TestCase):
                 router.invoke_signer, router.write_presence, router.invoke_mcp,
                 router.use_wallet, router.claim_asset, router.make_payment):
             self.assertNotIn("adapter", inspect.signature(operation).parameters)
+
+        self.assertEqual(tuple(inspect.signature(router.SensitiveActionRouter).parameters), ())
+        self.assertEqual(
+            tuple(inspect.signature(router.SensitiveActionRouter.dispatch).parameters),
+            ("self", "value", "action"))
+        self.assertEqual(tuple(inspect.signature(receipt.read_receipt).parameters), ("receipt_id",))
+        self.assertNotIn("identity_path", inspect.signature(receipt.create_receipt).parameters)
+        self.assertEqual(tuple(inspect.signature(identity.create_local_identity).parameters), ())
+        self.assertFalse(hasattr(identity, "create_identity"))
+        self.assertEqual(tuple(inspect.signature(monitor.save_run).parameters), ("record",))
+        from flop_agent import activity
+        self.assertNotIn("jsonl_path", inspect.signature(activity.append_activity).parameters)
+        self.assertNotIn("markdown_path", inspect.signature(activity.append_activity).parameters)
+        from flop_agent import presence
+        self.assertEqual(tuple(inspect.signature(presence.observe).parameters), ("now",))
+        self.assertEqual(
+            tuple(inspect.signature(presence.preview_first_write).parameters),
+            ("application_commit", "now"))
+        self.assertFalse(hasattr(kv, "Store"))
+        self.assertFalse(hasattr(kv, "write_snapshots"))
+        self.assertFalse(hasattr(kv, "recover_snapshot_output"))
+        self.assertFalse(hasattr(testnet, "load_fixture"))
 
     def test_compatibility_and_activity_services_ignore_late_rebinding(self):
         compatibility = testnet.compatibility_status
@@ -292,7 +321,7 @@ class ProductionBoundarySealingTests(unittest.TestCase):
     def test_identity_service_keeps_keys_internal_and_ignores_late_rebinding(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "identity.json"
-            did = identity.create_identity(path)
+            did = identity._create_identity(path)
             canonical, _ = identity.canonical_message("lobby", 7, "fixture")
             record = binding(
                 LocalActionClass.IDENTITY_SIGN, canonical, str(path.resolve()),
@@ -349,7 +378,7 @@ class ProductionBoundarySealingTests(unittest.TestCase):
     def test_receipt_authorized_path_ignores_late_loader_rebinding(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "identity.json"
-            identity.create_identity(path)
+            identity._create_identity(path)
             canonical = receipt.canonical_payload({
                 "schema": receipt.SCHEMA, "repo": "https://example.invalid/repo",
                 "commit": REVISION, "artifact_name": "artifact",
@@ -502,6 +531,142 @@ class ProductionBoundarySealingTests(unittest.TestCase):
                     preview=preview, approval=approval, intent=capability, now=NOW)
             self.assertEqual(result["status"], "SUCCESS")
             self.assertEqual(len(writer_calls), 1)
+
+    def test_public_router_blocks_plain_text_without_callback_injection(self):
+        value = policy.discovered_remote_value(
+            "ordinary harmless words", RemoteOrigin.TECHNOCORE_MESSAGE, "fixture")
+        self.assertEqual(
+            {finding.content_class for finding in value.findings},
+            {RemoteContentClass.PLAIN_TEXT})
+        public_router = router.SensitiveActionRouter()
+        for action in router.RemoteAction:
+            with self.subTest(action=action), self.assertRaises(PermissionError):
+                public_router.dispatch(value, action)
+        with self.assertRaises(TypeError):
+            public_router.dispatch(value, router.RemoteAction.SUBPROCESS,
+                                   _guard=lambda *_a, **_k: None)
+
+    def test_receipt_store_uses_safe_ids_exact_schema_and_redacted_errors(self):
+        valid = {
+            "schema": receipt.SCHEMA,
+            "did": "did:key:zfixture",
+            "payload": {
+                "schema": receipt.SCHEMA,
+                "repo": "https://example.invalid/repo",
+                "commit": REVISION,
+                "artifact_name": "fixture",
+                "timestamp": "2026-09-04T00:00:00Z",
+            },
+            "signature": "fixture",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store_root = root / "receipts"
+            store_root.mkdir()
+            safe = store_root / "safe.receipt.json"
+            safe.write_text(json.dumps(valid), encoding="utf-8")
+            calls = []
+            store = receipt._build_receipt_store(
+                store_root, lambda path: calls.append(path) or path.read_text(encoding="utf-8"))
+            self.assertEqual(store("safe.receipt.json"), valid)
+            self.assertEqual(calls, [safe.resolve()])
+            secret = "WITNESS-PRIVATE-KEY-MATERIAL"
+            outside = root / "secret.json"
+            outside.write_text(json.dumps({"private_key": secret}), encoding="utf-8")
+            for selected in (str(outside), "../secret.json", "file:///tmp/secret.json"):
+                with self.subTest(selected=selected), self.assertRaises(receipt.ReceiptReadError) as caught:
+                    receipt.read_receipt(selected)
+                self.assertNotIn(secret, str(caught.exception))
+                self.assertNotIn(selected, str(caught.exception))
+            secret_file = store_root / "secret.receipt.json"
+            secret_file.write_text(json.dumps({
+                "schema": receipt.SCHEMA, "private_key": secret}), encoding="utf-8")
+            with self.assertRaises(receipt.ReceiptReadError) as caught:
+                store("secret.receipt.json")
+            self.assertNotIn(secret, str(caught.exception))
+
+    def test_public_filesystem_apis_reject_caller_authority_before_adapters(self):
+        from flop_agent import presence
+        attacker_calls = []
+        attacker = lambda *_a, **_k: attacker_calls.append(1)
+        with self.assertRaises(TypeError):
+            presence.observe(state_path=Path("/tmp/attacker"), reader=attacker)
+        with self.assertRaises(TypeError):
+            presence.preview_first_write(
+                REVISION, state_path=Path("/tmp/attacker"), reader=attacker)
+        with self.assertRaises(TypeError):
+            identity.create_local_identity(Path("/tmp/attacker"))
+        with self.assertRaises(TypeError):
+            monitor.save_run(Path("/tmp/attacker"), {"overall_status": "READY"})
+        with self.assertRaises(TypeError):
+            kv.observe_production_kv(Path("/tmp/attacker"))
+        with self.assertRaises(TypeError):
+            kv.recover_production_snapshot_output(Path("/tmp/attacker"))
+        with self.assertRaises(PermissionError):
+            testnet.load_reviewed_fixture("/tmp/attacker.json")
+        self.assertEqual(
+            testnet.load_reviewed_fixture(
+                testnet.ReviewedFixtureId.VALID_DRAFT_CONFIG)["schema"],
+            testnet.SCHEMA)
+        self.assertEqual(attacker_calls, [])
+
+    def test_private_persistence_factories_capture_trusted_paths_and_adapters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            monitor_calls = []
+            save = monitor._build_monitor_persistence(
+                root, lambda selected, record: monitor_calls.append((selected, record)))
+            save({"status": "fixture"})
+            self.assertEqual(monitor_calls, [(root.resolve(), {"status": "fixture"})])
+
+            store_calls, writer_calls, recover_calls = [], [], []
+            marker = object()
+            open_store, publish, recover = kv._build_kv_persistence_service(
+                root / "state.sqlite3", root / "output",
+                store_type=lambda path: store_calls.append(path) or marker,
+                writer=lambda store, configs, output, generated_at=None:
+                    writer_calls.append((store, configs, output, generated_at)),
+                recoverer=lambda output: recover_calls.append(output) or output)
+            self.assertIs(open_store(), marker)
+            publish(marker, [], "2026-09-04T00:00:00Z")
+            self.assertEqual(recover(), (root / "output").resolve())
+            self.assertEqual(store_calls, [(root / "state.sqlite3").resolve()])
+            self.assertEqual(writer_calls[0][2], (root / "output").resolve())
+            self.assertEqual(recover_calls, [(root / "output").resolve()])
+
+    def test_private_presence_and_fixture_services_ignore_global_rebinding(self):
+        _, digest = load_semantic_contract()
+        config = PresenceConfig(
+            room="lobby", nick="fixture-agent",
+            semantic_spec_anchor="technocore-presence-semantic-v0.1-reviewed-2026-08-29",
+            approved_semantic_contract_sha256=digest,
+            approved_agent_version="0.10.0", operator_enabled=False)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reader_calls, writer_calls = [], []
+            reader = lambda path: reader_calls.append(path) or {}
+            observe_service, _, _ = _build_presence_service(
+                config, root / "state.json", root / "audit.jsonl",
+                reader=reader, writer=lambda *_a: writer_calls.append(1))
+            from flop_agent import presence
+            with mock.patch.object(presence, "read_official", side_effect=AssertionError), \
+                 mock.patch.object(presence, "read_presence_note", side_effect=AssertionError):
+                result = observe_service(now=NOW)
+            self.assertEqual(result["status"], "DISABLED")
+            self.assertEqual(reader_calls, [])
+            self.assertEqual(writer_calls, [])
+            self.assertTrue((root / "state.json").is_file())
+
+            fixture = root / "result.json"
+            fixture.write_text('{"fixture":true}', encoding="utf-8")
+            fixture_calls = []
+            fixture_reader = testnet._build_fixture_store(
+                root, {testnet.ReviewedFixtureId.RESULT_RECEIPT: "result.json"},
+                loader=lambda path: fixture_calls.append(path) or {"fixture": True})
+            self.assertEqual(
+                fixture_reader(testnet.ReviewedFixtureId.RESULT_RECEIPT),
+                {"fixture": True})
+            self.assertEqual(fixture_calls, [fixture.resolve()])
 
 
 if __name__ == "__main__":

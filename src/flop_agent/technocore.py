@@ -215,10 +215,41 @@ def conditional_note_payload(current: str, value: str) -> Dict[str, str]:
 
 
 _PRODUCTION_RESPONSE_DECODER = _build_response_decoder()
-read_official, read_presence_note, update_did_note_cas, post_signed, find_signed = (
-    _build_technocore_client(
+_RAW_READ_OFFICIAL, _RAW_READ_PRESENCE_NOTE, _RAW_UPDATE_DID_NOTE_CAS, \
+    _RAW_POST_SIGNED, _RAW_FIND_SIGNED = _build_technocore_client(
         resolve_reviewed_source, require_local_intent, _load_identity,
-        _sign_message, _PRODUCTION_RESPONSE_DECODER))
+        _sign_message, _PRODUCTION_RESPONSE_DECODER)
+
+
+def _build_public_technocore_client(identity_path: Path, read: Any,
+                                    read_presence: Any, update: Any,
+                                    post: Any, find: Any) -> tuple[Any, ...]:
+    configured_identity = identity_path.resolve()
+    captured_post, captured_find = post, find
+
+    def post_signed(room: str, text: str, *, intent: ReviewedLocalIntent,
+                    revision: str, config_version: str, context: str,
+                    nonce: int | None = None) -> Dict[str, Any]:
+        return captured_post(
+            configured_identity, room, text, intent=intent, revision=revision,
+            config_version=config_version, context=context, nonce=nonce)
+
+    def find_signed(room: str, text: str, *, intent: ReviewedLocalIntent,
+                    revision: str, config_version: str,
+                    context: str) -> Dict[str, Any]:
+        return captured_find(
+            configured_identity, room, text, intent=intent, revision=revision,
+            config_version=config_version, context=context)
+
+    return read, read_presence, update, post_signed, find_signed
+
+
+_PRODUCTION_IDENTITY_PATH = Path(__file__).resolve().parents[2] / "secrets" / "agent_identity.json"
+read_official, read_presence_note, update_did_note_cas, post_signed, find_signed = (
+    _build_public_technocore_client(
+        _PRODUCTION_IDENTITY_PATH, _RAW_READ_OFFICIAL,
+        _RAW_READ_PRESENCE_NOTE, _RAW_UPDATE_DID_NOTE_CAS,
+        _RAW_POST_SIGNED, _RAW_FIND_SIGNED))
 healthcheck = _build_technocore_health_service(read_official)
 
 

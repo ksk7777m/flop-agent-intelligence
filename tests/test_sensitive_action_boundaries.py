@@ -130,7 +130,7 @@ class SensitiveActionBoundaryTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with self.assertRaises(PermissionError):
+            with self.assertRaises(TypeError):
                 execute_approved_write(
                     object(), root / "state", root / "audit", preview=preview, approval={},
                     intent=forged, writer=lambda *_: calls.append("presence"),
@@ -139,7 +139,7 @@ class SensitiveActionBoundaryTests(unittest.TestCase):
                             side_effect=lambda *_: calls.append("signer")):
                 with self.assertRaises(PermissionError):
                     create_receipt(
-                        root / "identity.json", "https://example.invalid/repo", REVISION,
+                        "https://example.invalid/repo", REVISION,
                         "artifact", "2026-09-04T00:00:00Z", intent=forged)
         self.assertEqual(calls, [])
 
@@ -149,7 +149,7 @@ class SensitiveActionBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             jsonl, markdown = root / "chosen.jsonl", root / "chosen.md"
-            with self.assertRaises(PermissionError):
+            with self.assertRaises(TypeError):
                 append_activity(jsonl, markdown, "lobby", message)
             self.assertFalse(jsonl.exists())
             self.assertFalse(markdown.exists())

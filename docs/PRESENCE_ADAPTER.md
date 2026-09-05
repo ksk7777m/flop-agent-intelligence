@@ -78,12 +78,11 @@ change invalidates prior approval. Generic `confirm=true` is rejected.
 
 ## Zero-write preview
 
-Copy `examples/presence.example.json` outside Git, keep
-`live_write_enabled: false`, and run:
+The production service captures the reviewed `examples/presence.example.json`
+configuration and private runtime paths. Keep `live_write_enabled: false`, and run:
 
 ```bash
 PYTHONPATH=src python3 -m flop_agent.cli presence preview-first-write \
-  --config runtime/presence.json \
   --application-commit "$(git rev-parse HEAD)"
 ```
 
@@ -92,8 +91,7 @@ sequence, and exact heartbeat note; it prints the proposed request, payload
 hash, and approval binding and performs zero writes. Observation-only mode is:
 
 ```bash
-PYTHONPATH=src python3 -m flop_agent.cli presence observe \
-  --config runtime/presence.json
+PYTHONPATH=src python3 -m flop_agent.cli presence observe
 ```
 
 State and append-only audit files belong under ignored `runtime/`. Audit rows

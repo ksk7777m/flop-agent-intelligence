@@ -74,14 +74,16 @@ def _walk_json(value: Any):
 
 def _build_readiness_service(
     reviewed_reader: Callable[[ReviewedSourceId], bytes],
+    root: Path = Path(__file__).resolve().parents[2],
 ) -> tuple[Callable[[ReviewedSourceId], bytes], Callable[..., Dict[str, Dict[str, str]]],
-           Callable[[Path], Dict[str, Any]]]:
+           Callable[[], Dict[str, Any]]]:
     """Capture the only HTTP reader and reviewed source sets for readiness."""
     specs_by_name = MappingProxyType(dict(OFFICIAL_SPECS))
     endpoints_by_name = MappingProxyType(dict(READINESS_ENDPOINTS))
     digest = hashlib.sha256
     json_loads = json.loads
     validate_data = validate_dashboard_data
+    configured_root = root.resolve()
     now = lambda _datetime=datetime, _utc=timezone.utc: _datetime.now(_utc).isoformat()
 
     def fetch(source_id: ReviewedSourceId) -> bytes:
@@ -99,10 +101,10 @@ def _build_readiness_service(
             }
         return results
 
-    def run(root: Path) -> Dict[str, Any]:
-        validate_data(root / "data")
+    def run() -> Dict[str, Any]:
+        validate_data(configured_root / "data")
         expected = json_loads(
-            (root / "data" / "spec_hashes.json").read_text(encoding="utf-8"))["hashes"]
+            (configured_root / "data" / "spec_hashes.json").read_text(encoding="utf-8"))["hashes"]
         checks: Dict[str, Dict[str, Any]] = {}
         for name, source_id in endpoints_by_name.items():
             try:

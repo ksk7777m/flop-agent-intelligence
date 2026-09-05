@@ -184,7 +184,7 @@ separately reviewed local workflow can issue an exact, one-shot signing
 capability; CLI metadata alone cannot authorize key access or signing.
 
 ```bash
-PYTHONPATH=src python3 -m flop_agent.cli verify-receipt receipts/contribution.json
+PYTHONPATH=src python3 -m flop_agent.cli verify-receipt contribution.receipt.json
 ```
 
 ## Other commands

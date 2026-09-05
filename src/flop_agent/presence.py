@@ -13,8 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
-from .remote_content_policy import LocalActionClass, ReviewedLocalIntent, require_local_intent
-from .technocore import read_official
+from .remote_content_policy import (
+    LocalActionClass, ReviewedLocalIntent, ReviewedSourceId,
+    require_local_intent, reviewed_local_intent,
+)
+from .technocore import read_official, read_presence_note
 
 ADAPTER_VERSION = "Presence V0.1"
 CAPABILITY_CONFIG_VERSION = "presence-v0.1"
@@ -130,7 +133,7 @@ def scalar_value(seq: int) -> str:
     return str(seq)
 
 
-def load_config(path: Path) -> PresenceConfig:
+def _load_config(path: Path) -> PresenceConfig:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -187,8 +190,8 @@ def canonical_sha256(value: Any) -> str:
     return _sha(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
-def load_semantic_contract(path: Path = SEMANTIC_CONTRACT_PATH,
-                           expected_sha256: str | None = None) -> tuple[Dict[str, Any], str]:
+def _load_semantic_contract(path: Path = SEMANTIC_CONTRACT_PATH,
+                            expected_sha256: str | None = None) -> tuple[Dict[str, Any], str]:
     """Load, validate and canonically bind the one reviewed semantic source."""
     try:
         contract = json.loads(path.read_text(encoding="utf-8"))
@@ -223,6 +226,22 @@ def load_semantic_contract(path: Path = SEMANTIC_CONTRACT_PATH,
     if expected_sha256 is not None and digest != expected_sha256:
         raise PresenceError("semantic contract SHA-256 does not match approved review")
     return contract, digest
+
+
+def _build_semantic_contract_reader(path: Path, loader: Any) -> Any:
+    configured_path = path.resolve()
+    captured_loader = loader
+
+    def load_semantic_contract(
+        expected_sha256: str | None = None,
+    ) -> tuple[Dict[str, Any], str]:
+        return captured_loader(configured_path, expected_sha256)
+
+    return load_semantic_contract
+
+
+load_semantic_contract = _build_semantic_contract_reader(
+    SEMANTIC_CONTRACT_PATH, _load_semantic_contract)
 
 
 def detect_server_spec_change(config: PresenceConfig, discovery: Any) -> bool:
@@ -276,8 +295,8 @@ def _blank_state(config: PresenceConfig) -> Dict[str, Any]:
             "known_note_present": False, "writes": 0, "live_write_ready": False}
 
 
-def observe(config: PresenceConfig, state_path: Path, *, reader: Callable[[str], Any] = read_official,
-            now: datetime | None = None) -> Dict[str, Any]:
+def _observe(config: PresenceConfig, state_path: Path, *, reader: Callable[[str], Any],
+             now: datetime | None = None) -> Dict[str, Any]:
     """Observe aggregate room metadata only; no message body is read or retained."""
     observed = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state = _load_state(state_path) or _blank_state(config)
@@ -335,15 +354,15 @@ def validate_approval(metadata: Mapping[str, Any], approval: Mapping[str, Any]) 
     return approval.get("binding_sha256") == approval_digest(metadata) and approval.get("metadata") == metadata
 
 
-def preview_first_write(config: PresenceConfig, state_path: Path, *, reader: Callable[[str], Any],
-                        application_commit: str, now: datetime | None = None,
-                        semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH) -> Dict[str, Any]:
+def _preview_first_write(config: PresenceConfig, state_path: Path, *, reader: Callable[[str], Any],
+                         application_commit: str, now: datetime | None = None,
+                         semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH) -> Dict[str, Any]:
     """Fresh reads, exact request and approval binding; guaranteed zero-write."""
     observed = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state = _load_state(state_path) or _blank_state(config)
     discovery = reader(AGENT_PATH)
     try:
-        contract, contract_digest = load_semantic_contract(
+        contract, contract_digest = _load_semantic_contract(
             semantic_contract_path, config.approved_semantic_contract_sha256)
     except PresenceError:
         state.update({"state": "SPEC_CHANGED", "live_write_ready": False}); _save_state(state_path, state)
@@ -401,18 +420,6 @@ def _append_audit(path: Path, entry: Mapping[str, Any]) -> None:
         stream.write(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
 
 
-def execute_approved_write(config: PresenceConfig, state_path: Path, audit_path: Path, *,
-                           preview: Mapping[str, Any], approval: Mapping[str, Any],
-                           intent: ReviewedLocalIntent,
-                           writer: Callable[[str, Mapping[str, Any]], Any],
-                           reader: Callable[[str], Any], now: datetime | None = None,
-                           semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH) -> Dict[str, Any]:
-    """Deprecated caller-injected writer surface; production Presence stays disabled."""
-    del config, state_path, audit_path, preview, approval, intent, writer, reader, now
-    del semantic_contract_path
-    raise LiveWriteDisabled("Presence writer requires a sealed preconfigured service")
-
-
 def _execute_approved_write_after_capability(
     config: PresenceConfig, state_path: Path, audit_path: Path, *,
     preview: Mapping[str, Any], approval: Mapping[str, Any],
@@ -420,7 +427,7 @@ def _execute_approved_write_after_capability(
     now: datetime | None = None,
     semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH,
     _load: Any = _load_state, _save: Any = _save_state,
-    _contract: Any = load_semantic_contract, _validate: Any = validate_approval,
+    _contract: Any = _load_semantic_contract, _validate: Any = validate_approval,
     _classify: Any = classify_note, _audit: Any = _append_audit,
     _blank: Any = _blank_state, _parse: Any = _parse_time,
     _sha_fn: Any = _sha, _iso_fn: Any = _iso,
@@ -533,6 +540,92 @@ def _build_presence_write_service(
             now=now, semantic_contract_path=captured_contract)
 
     return execute
+
+
+def _build_presence_reader(
+    official_reader: Callable[[ReviewedSourceId], Any],
+    note_reader: Callable[..., Any],
+    intent_issuer: Callable[..., ReviewedLocalIntent],
+    configured_note_path: str,
+) -> Callable[[str], Any]:
+    sources = {
+        AGENT_PATH: ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST,
+        CONFIG_PATH: ReviewedSourceId.TECHNOCORE_CONFIG,
+        ROOMS_PATH: ReviewedSourceId.TECHNOCORE_ROOMS_JSON,
+    }
+    captured_official = official_reader
+    captured_note = note_reader
+    captured_issuer = intent_issuer
+
+    def read(path: str) -> Any:
+        if path == configured_note_path:
+            intent = captured_issuer(
+                LocalActionClass.PRESENCE_NOTE_READ, path,
+                "local Presence configuration")
+            return captured_note(path, intent=intent)
+        if path not in sources:
+            raise PermissionError("Presence requested an unregistered read path")
+        return captured_official(sources[path])
+
+    return read
+
+
+def _disabled_presence_writer(_path: str, _body: Mapping[str, Any]) -> Any:
+    raise LiveWriteDisabled("production Presence writes remain disabled")
+
+
+def _build_presence_service(
+    config: PresenceConfig, state_path: Path, audit_path: Path, *,
+    reader: Callable[[str], Any], writer: Callable[[str, Mapping[str, Any]], Any],
+    capability_validator: Any = require_local_intent,
+    semantic_contract_path: Path = SEMANTIC_CONTRACT_PATH,
+    observe_mechanism: Any = _observe,
+    preview_mechanism: Any = _preview_first_write,
+) -> tuple[Any, Any, Any]:
+    """Capture all read, write, state, audit, and authority dependencies."""
+    captured_config = config
+    captured_state = state_path.resolve()
+    captured_audit = audit_path.resolve()
+    captured_reader = reader
+    captured_contract = semantic_contract_path.resolve()
+    observe_impl = observe_mechanism
+    preview_impl = preview_mechanism
+    execute_impl = _build_presence_write_service(
+        captured_config, captured_state, captured_audit,
+        reader=captured_reader, writer=writer,
+        capability_validator=capability_validator,
+        semantic_contract_path=captured_contract)
+
+    def observe_service(*, now: datetime | None = None) -> Dict[str, Any]:
+        return observe_impl(
+            captured_config, captured_state, reader=captured_reader, now=now)
+
+    def preview_service(application_commit: str, *, now: datetime | None = None) -> Dict[str, Any]:
+        return preview_impl(
+            captured_config, captured_state, reader=captured_reader,
+            application_commit=application_commit, now=now,
+            semantic_contract_path=captured_contract)
+
+    def execute_service(*, preview: Mapping[str, Any], approval: Mapping[str, Any],
+                        intent: ReviewedLocalIntent,
+                        now: datetime | None = None) -> Dict[str, Any]:
+        return execute_impl(preview=preview, approval=approval, intent=intent, now=now)
+
+    return observe_service, preview_service, execute_service
+
+
+_PRODUCTION_ROOT = Path(__file__).resolve().parents[2]
+_PRODUCTION_PRESENCE_CONFIG = _load_config(_PRODUCTION_ROOT / "examples" / "presence.example.json")
+_PRODUCTION_PRESENCE_READER = _build_presence_reader(
+    read_official, read_presence_note, reviewed_local_intent,
+    _PRODUCTION_PRESENCE_CONFIG.note_path)
+observe, preview_first_write, execute_approved_write = _build_presence_service(
+    _PRODUCTION_PRESENCE_CONFIG,
+    _PRODUCTION_ROOT / "runtime" / "presence-state.json",
+    _PRODUCTION_ROOT / "runtime" / "presence-audit.jsonl",
+    reader=_PRODUCTION_PRESENCE_READER,
+    writer=_disabled_presence_writer,
+)
 
 
 def _sealed_presence_mechanism(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:

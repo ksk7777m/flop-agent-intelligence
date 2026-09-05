@@ -67,7 +67,7 @@ def public_key_from_did(did: str) -> bytes:
     return decoded[2:]
 
 
-def create_identity(path: Path) -> str:
+def _create_identity(path: Path) -> str:
     path = path.resolve()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.exists():
@@ -168,6 +168,20 @@ def _build_local_identity_service(
 
 _PRODUCTION_IDENTITY_PATH = (
     Path(__file__).resolve().parents[2] / "secrets" / "agent_identity.json")
+
+
+def _build_identity_creator(identity_path: Path, creator: Any) -> Any:
+    configured_path = identity_path.resolve()
+    captured_creator = creator
+
+    def create_local_identity() -> str:
+        return captured_creator(configured_path)
+
+    return create_local_identity
+
+
+create_local_identity = _build_identity_creator(
+    _PRODUCTION_IDENTITY_PATH, _create_identity)
 get_public_did, verify_local_identity_status, sign_with_authorized_identity = (
     _build_local_identity_service(
         _PRODUCTION_IDENTITY_PATH, require_local_intent, _load_identity,

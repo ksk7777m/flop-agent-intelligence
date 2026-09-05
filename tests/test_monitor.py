@@ -82,9 +82,9 @@ class MonitorTests(unittest.TestCase):
         return self.responses[url]
 
     def run_fixture(self):
-        _, run_monitor = _build_monitor_service(self.fetch)
+        _, run_monitor = _build_monitor_service(self.fetch, self.root)
         with patch("flop_agent.monitor._local_evidence", return_value={"status": "READY", "detail": "verified"}):
-            return run_monitor(self.root)
+            return run_monitor()
 
     def test_normal_ready_and_zero_writes(self):
         result = self.run_fixture()
@@ -215,9 +215,9 @@ class MonitorTests(unittest.TestCase):
 
     def test_invalid_receipt_after_eviction_requires_review(self):
         self.responses[ENDPOINTS["contribution"]] = json.dumps({"first_seq": 2000000, "messages": []}).encode()
-        _, run_monitor = _build_monitor_service(self.fetch)
+        _, run_monitor = _build_monitor_service(self.fetch, self.root)
         with patch("flop_agent.monitor._local_evidence", return_value={"status": "ERROR", "detail": "Receipt verification failed"}):
-            result = run_monitor(self.root)
+            result = run_monitor()
         self.assertEqual(result["checks"]["contribution"]["status"], "REVIEW_REQUIRED")
         self.assertTrue(result["meaningful_change"])
 

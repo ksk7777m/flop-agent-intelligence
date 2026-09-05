@@ -129,26 +129,7 @@ _PRODUCTION_APPEND = _build_activity_service(
     _PUBLIC_ACTIVITY_JSONL, _PUBLIC_ACTIVITY_MARKDOWN, require_local_intent)
 
 
-def _build_public_activity_api(production_append: Any) -> Any:
-    fixed_jsonl, fixed_markdown = _PUBLIC_ACTIVITY_JSONL, _PUBLIC_ACTIVITY_MARKDOWN
-
-    def append_activity(
-        jsonl_path: Path, markdown_path: Path, room: str, message: Dict[str, Any],
-        evidence: Dict[str, Any] | None = None, *,
-        local_provenance: ReviewedLocalIntent | None = None,
-        revision: str | None = None, config_version: str | None = None,
-        context: str = "local-activity-record", output_scope: str = "PUBLIC",
-    ) -> None:
-        if (jsonl_path.resolve() != fixed_jsonl or markdown_path.resolve() != fixed_markdown):
-            raise PermissionError("activity output paths are fixed local configuration")
-        production_append(
-            room, message, evidence, local_provenance=local_provenance,
-            revision=revision, config_version=config_version, context=context,
-            output_scope=output_scope)
-    return append_activity
-
-
-append_activity = _build_public_activity_api(_PRODUCTION_APPEND)
+append_activity = _PRODUCTION_APPEND
 
 
 def _append_activity_at_configured_paths(*_args: Any, **_kwargs: Any) -> None:

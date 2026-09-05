@@ -76,7 +76,7 @@ def validate_name(value: str, label: str = "name") -> str:
     return value
 
 
-def load_config(path: Path) -> list[NamespaceConfig]:
+def _load_config(path: Path) -> list[NamespaceConfig]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if set(raw) - {"namespaces"} or not isinstance(raw.get("namespaces"), list):
         raise ConfigError("config must contain only a namespaces allowlist")
@@ -145,7 +145,7 @@ def note_class(namespace: NamespaceConfig, key: str) -> str:
     return namespace.note_class
 
 
-class Store:
+class _Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
@@ -362,7 +362,7 @@ class Observer:
             raise AttributeError("Observer production dependencies are sealed")
         object.__setattr__(self, name, value)
 
-    def __init__(self, configs: list[NamespaceConfig], store: Store, get: HttpGet | None = None,
+    def __init__(self, configs: list[NamespaceConfig], store: _Store, get: HttpGet | None = None,
                  read_interval: float = 0.0, sleep: Callable[[float], None] = time.sleep,
                  *, _parse_keys: Any = parse_key_list, _note_value: Any = note_value,
                  _remote_value: Any = discovered_remote_value,
@@ -435,7 +435,7 @@ class Observer:
 
 def _build_kv_observer_factory(config_path: Path, opener_builder: Callable[..., object]) -> tuple[Any, Any, Any]:
     """Capture repository policy and the only real KV transport in one service."""
-    configured = tuple(load_config(config_path.resolve()))
+    configured = tuple(_load_config(config_path.resolve()))
     by_namespace = {item.name: item for item in configured}
     origin, observer_version = OFFICIAL_ORIGIN, OBSERVER_VERSION
     parse_url, quote_path, request_type = urlparse, quote, Request
@@ -478,7 +478,7 @@ def _build_kv_observer_factory(config_path: Path, opener_builder: Callable[..., 
         except http_error_type as error:
             return error.code, "", dict(error.headers)
 
-    def build(store: Store, *, read_interval: float = 0.0,
+    def build(store: _Store, *, read_interval: float = 0.0,
               sleep: Callable[[float], None] = time.sleep) -> Observer:
         return observer_type(
             list(configured), store, get, read_interval=read_interval, sleep=sleep)
@@ -531,7 +531,7 @@ def _atomic_pointer(output: Path, generation: Path,
             pointer.unlink()
 
 
-def recover_snapshot_output(output: Path) -> Path | None:
+def _recover_snapshot_output(output: Path) -> Path | None:
     """Recover a missing/dangling current pointer from the latest complete generation."""
     output.parent.mkdir(parents=True, exist_ok=True)
     generations = output.with_name(f"{output.name}-generations")
@@ -563,12 +563,12 @@ def recover_snapshot_output(output: Path) -> Path | None:
     return None
 
 
-def write_snapshots(store: Store, configs: list[NamespaceConfig], output: Path,
-                    generated_at: str | None = None,
-                    fault: Callable[[str], None] | None = None) -> None:
+def _write_snapshots(store: _Store, configs: list[NamespaceConfig], output: Path,
+                     generated_at: str | None = None,
+                     fault: Callable[[str], None] | None = None) -> None:
     """Publish by atomically swapping a symlink; completed generations remain immutable."""
     fault = fault or (lambda _step: None)
-    recover_snapshot_output(output)
+    _recover_snapshot_output(output)
     if output.exists() and not output.is_symlink():
         raise ApiContractError("atomic publication requires a symlink-managed output path")
     generation = store.snapshot(configs, generated_at)
@@ -597,3 +597,66 @@ def write_snapshots(store: Store, configs: list[NamespaceConfig], output: Path,
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
+
+
+def _build_kv_persistence_service(
+    database_path: Path, output_path: Path, *,
+    store_type: type[_Store] = _Store,
+    writer: Callable[..., None] = _write_snapshots,
+    recoverer: Callable[[Path], Path | None] = _recover_snapshot_output,
+) -> tuple[Callable[[], _Store], Callable[..., None], Callable[[], Path | None]]:
+    """Capture production persistence paths and final filesystem adapters."""
+    configured_database = database_path.resolve()
+    configured_output = output_path.resolve()
+    captured_store = store_type
+    captured_writer = writer
+    captured_recoverer = recoverer
+
+    def open_store() -> _Store:
+        return captured_store(configured_database)
+
+    def publish(store: _Store, configs: list[NamespaceConfig],
+                generated_at: str | None = None) -> None:
+        captured_writer(store, configs, configured_output, generated_at)
+
+    def recover() -> Path | None:
+        return captured_recoverer(configured_output)
+
+    return open_store, publish, recover
+
+
+_PRODUCTION_ROOT = Path(__file__).resolve().parents[2]
+_open_production_store, _write_production_snapshots, recover_production_snapshot_output = (
+    _build_kv_persistence_service(
+        _PRODUCTION_ROOT / "runtime" / "kv-observer.sqlite3",
+        _PRODUCTION_ROOT / "runtime" / "kv-api"))
+
+
+def _build_production_kv_service(
+    store_opener: Callable[[], _Store], observer_builder: Callable[..., Observer],
+    interval_reader: Callable[[], float], config_reader: Callable[[], list[NamespaceConfig]],
+    publisher: Callable[..., None],
+) -> Callable[[], Dict[str, Any]]:
+    """Capture both persistence endpoints and the reviewed network observer."""
+    captured_open = store_opener
+    captured_builder = observer_builder
+    captured_interval = interval_reader
+    captured_configs = config_reader
+    captured_publish = publisher
+
+    def observe_production_kv() -> Dict[str, Any]:
+        store = captured_open()
+        try:
+            result = captured_builder(
+                store, read_interval=captured_interval()).poll()
+            captured_publish(store, captured_configs())
+            return result
+        finally:
+            store.db.close()
+
+    return observe_production_kv
+
+
+observe_production_kv = _build_production_kv_service(
+    _open_production_store, build_production_observer,
+    production_read_interval, production_configs, _write_production_snapshots)

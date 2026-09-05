@@ -6,14 +6,13 @@ import json
 from pathlib import Path
 
 from .activity import append_activity
-from .identity import create_identity, get_public_did, verify_local_identity_status
+from .identity import create_local_identity, get_public_did, verify_local_identity_status
 from .registry import contribution_note_plan, did_profile_plan
 from .receipt import create_receipt, read_receipt, verify_receipt
 from .technocore import healthcheck, post_signed
 from .watcher import dry_run
 
 ROOT = Path(__file__).resolve().parents[2]
-IDENTITY = ROOT / "secrets" / "agent_identity.json"
 
 
 def main() -> None:
@@ -38,13 +37,11 @@ def main() -> None:
     inference = testnet_commands.add_parser("inference")
     inference.add_argument("--fixture", action="store_true")
     testnet_receipt = testnet_commands.add_parser("verify-receipt")
-    testnet_receipt.add_argument("file")
+    testnet_receipt.add_argument("fixture_id", choices=("RESULT_RECEIPT",))
     presence = commands.add_parser("presence")
     presence_commands = presence.add_subparsers(dest="presence_command", required=True)
     for name in ("observe", "preview-first-write"):
         presence_action = presence_commands.add_parser(name)
-        presence_action.add_argument("--config", required=True)
-        presence_action.add_argument("--state", default=str(ROOT / "runtime" / "presence-state.json"))
         if name == "preview-first-write":
             presence_action.add_argument("--application-commit", required=True)
     commands.add_parser("draft-contribution")
@@ -58,7 +55,7 @@ def main() -> None:
     create_receipt_cmd.add_argument("--output", required=True)
     create_receipt_cmd.add_argument("--timestamp")
     verify_receipt_cmd = commands.add_parser("verify-receipt")
-    verify_receipt_cmd.add_argument("file")
+    verify_receipt_cmd.add_argument("receipt_id")
     publish = commands.add_parser("publish")
     publish.add_argument("text")
     publish.add_argument("--room", default="lobby")
@@ -77,7 +74,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "create-identity":
-        print(create_identity(IDENTITY))
+        print(create_local_identity())
     elif args.command == "check-identity":
         print(json.dumps(verify_local_identity_status()))
     elif args.command == "watch":
@@ -88,13 +85,13 @@ def main() -> None:
     elif args.command == "readiness-check":
         from .readiness import run_readiness_check
 
-        print(json.dumps(run_readiness_check(ROOT), indent=2))
+        print(json.dumps(run_readiness_check(), indent=2))
     elif args.command == "health-monitor":
         from .monitor import exit_code, run_monitor, save_run
 
-        record = run_monitor(ROOT, evidence_mode="public" if args.public else "local")
+        record = run_monitor(evidence_mode="public" if args.public else "local")
         if not args.no_save:
-            save_run(ROOT, record)
+            save_run(record)
         if args.json:
             print(json.dumps(record, indent=2))
         else:
@@ -117,11 +114,11 @@ def main() -> None:
     elif args.command == "testnet-readiness":
         from .testnet import (
             BalanceAdapter, FaucetAdapter, InferenceAdapter, LiveActionDisabled,
-            current_status, empty_config, inference_request, load_fixture,
+            ReviewedFixtureId, current_status, empty_config, inference_request,
+            load_reviewed_fixture,
             verify_testnet_receipt,
         )
 
-        fixture_root = ROOT / "examples/fixtures/testnet"
         if args.testnet_command == "status":
             print("FLOP TESTNET READINESS\n")
             for label, value in current_status().items():
@@ -129,7 +126,7 @@ def main() -> None:
         elif args.testnet_command == "faucet":
             if not args.dry_run:
                 raise SystemExit(str(LiveActionDisabled("faucet requires --dry-run; live claims are FORBIDDEN_V0")))
-            config = load_fixture(fixture_root / "valid_draft_config.json")
+            config = load_reviewed_fixture(ReviewedFixtureId.VALID_DRAFT_CONFIG)
             print(json.dumps(FaucetAdapter(config).preview_claim(), indent=2))
         elif args.testnet_command == "balance":
             if not args.fixture:
@@ -141,39 +138,19 @@ def main() -> None:
         elif args.testnet_command == "inference":
             if not args.fixture:
                 raise SystemExit(str(LiveActionDisabled("inference is fixture-only in V0")))
-            quote = load_fixture(fixture_root / "valid_inference_quote.json")
+            quote = load_reviewed_fixture(ReviewedFixtureId.VALID_INFERENCE_QUOTE)
             request = inference_request(prompt="fixture prompt")
             adapter = InferenceAdapter(empty_config())
             print(json.dumps({"quote": adapter.quote(request, quote), "preview": adapter.preview(request)}, indent=2))
         elif args.testnet_command == "verify-receipt":
-            print(json.dumps(verify_testnet_receipt(load_fixture(Path(args.file))), indent=2))
+            fixture_id = ReviewedFixtureId(args.fixture_id)
+            print(json.dumps(verify_testnet_receipt(load_reviewed_fixture(fixture_id)), indent=2))
     elif args.command == "presence":
-        from .presence import load_config, observe, preview_first_write
-        from .remote_content_policy import LocalActionClass, ReviewedSourceId, reviewed_local_intent
-        from .technocore import read_official, read_presence_note
-
-        config = load_config(Path(args.config))
+        from .presence import observe, preview_first_write
         if args.presence_command == "observe":
-            result = observe(config, Path(args.state))
+            result = observe()
         else:
-            def presence_reader(path: str):
-                if path == config.note_path:
-                    intent = reviewed_local_intent(
-                        LocalActionClass.PRESENCE_NOTE_READ, path, "local Presence configuration")
-                    return read_presence_note(path, intent=intent)
-                sources = {
-                    "/.well-known/agent.json": ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST,
-                    "/config": ReviewedSourceId.TECHNOCORE_CONFIG,
-                    "/rooms?format=json": ReviewedSourceId.TECHNOCORE_ROOMS_JSON,
-                }
-                if path not in sources:
-                    raise PermissionError("Presence requested an unregistered read path")
-                return read_official(sources[path])
-
-            result = preview_first_write(
-                config, Path(args.state), reader=presence_reader,
-                application_commit=args.application_commit,
-            )
+            result = preview_first_write(args.application_commit)
         print(json.dumps(result, indent=2))
     elif args.command == "draft-contribution":
         print("Built an official-signal monitor for FLOP/Technocore that classifies actionable updates, blocks untrusted wallet/claim instructions, and keeps signed activity logs. Designed to extend into testnet workflows when official APIs are published.")
@@ -199,7 +176,7 @@ def main() -> None:
         raise SystemExit(
             "receipt signing requires an internally issued, payload-bound local capability")
     elif args.command == "verify-receipt":
-        print(json.dumps(verify_receipt(read_receipt(Path(args.file))), indent=2))
+        print(json.dumps(verify_receipt(read_receipt(args.receipt_id)), indent=2))
     elif args.command == "publish":
         if not args.confirm:
             print(json.dumps({"dry_run": True, "room": args.room, "text": args.text}, indent=2))
@@ -220,7 +197,7 @@ def main() -> None:
             LocalActionClass.SIGNED_ROOM_POST, subject,
             "human-approved CLI publication", approval=approval_evidence)
         message = post_signed(
-            IDENTITY, args.room, args.text, intent=intent, revision=args.commit,
+            args.room, args.text, intent=intent, revision=args.commit,
             config_version="technocore-publisher-v1", context="human-approved CLI publication")
         activity_text = str(message.get("swept_text", message["text"]))
         activity_approval = HumanApprovalEvidence(
@@ -231,7 +208,7 @@ def main() -> None:
             LocalActionClass.LOCAL_ACTIVITY_RAW, activity_text,
             "public hash-only activity evidence", approval=activity_approval)
         append_activity(
-            ROOT / "data/activity.jsonl", ROOT / "docs/ACTIVITY_LOG.md", args.room, message,
+            args.room, message,
             evidence={
                 "activity_type": args.activity_type or ("contribution" if args.contribution else "signed_message"),
                 "contribution": args.contribution,
