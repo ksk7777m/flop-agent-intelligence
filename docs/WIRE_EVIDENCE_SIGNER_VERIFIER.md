@@ -50,9 +50,14 @@ Raw export bytes remain inside a sealed verifier service. Public
 `ExportObservation` values contain only source identity, acquisition time,
 length, snapshot SHA-256, verifier revision, generation, and a minimized
 structural assessment. Third-party exports always remain descriptive inputs.
-A structurally clean sequence is not complete: only registry-backed acquisition
-with exact generation, bounds, sequence continuity, and truncation checks can
-issue an opaque `VerifiedTranscriptCompleteness` object.
+A structurally clean sequence is not complete. A repository-controlled,
+closure-sealed acquisition policy binds source, generation, snapshot hash and
+length, record count, first and last sequence values, acquisition time bounds,
+truncation state, verifier revision, and policy version into an opaque
+`TrustedAcquisitionEvidence` capability. Only that capability—not an equal or
+reconstructed `ExportObservation`—can be consumed to issue an opaque
+`VerifiedTranscriptCompleteness` object. Completeness has no caller-supplied
+bounds or truncation override.
 
 The verifier detects malformed records, invalid time, duplicate or reversed
 sequence values, gaps, inconsistent generations, truncation indicators, and
@@ -63,7 +68,9 @@ acquisition-bound mismatches.
 tclk-alpha is classified as coordination only. The adapter verifies both
 Ed25519 signatures, recomputes offer and agreement identifiers, and separately
 checks the exact offer reference, counterparties, protocol, and reviewed lock
-semantics. Signatures cannot override a failure in any other condition.
+semantics. The authority advances agreement state only through the enforced
+`PROPOSED → OFFER_VERIFIED → ACCEPTANCE_VERIFIED → AGREEMENT_VERIFIED`
+sequence. Signatures cannot override a failure in any other condition.
 
 Rail observations preserve both the raw alias and locally canonicalized rail.
 Transcript claims, rail observation, rail cryptographic verification, and
@@ -82,16 +89,29 @@ descriptive enum value; only the configured sequential verifier can issue
 
 Completeness, agreement, rail finality, read-back, and combined bundle claims
 are process-local opaque objects. Their public constructors reject, and they
-cannot be copied or serialized. Each is meaningful only in the private
-registry of the verifier that issued it. Exact cryptographic inputs, IDs,
-provenance, verifier revision, policy version, and verification time are bound
-in private records. Reconstructing visible fields, booleans, enum values, JSON,
-or a token from another authority does not grant authority.
+cannot be copied or serialized. Production uses one service constructed at
+module initialization from repository-controlled, fail-closed policy; no
+caller-configurable production factory remains. Mutable issuance registries
+live only in captured closures, never service attributes. Each token is
+meaningful only by object identity in the closure of the service that issued
+it. Exact cryptographic inputs, IDs, provenance, verifier revision, policy
+version, and verification time are bound in private records. Reconstructing
+visible fields, booleans, enum values, JSON, or a token from another authority
+does not grant authority. This boundary does not claim protection from a
+debugger, unrestricted process-memory access, or deliberate closure-cell
+introspection or mutation.
+
+The production authority revision is a descriptive digest of the authority
+schema and sealed fail-closed root policy. It is not caller-settable and is not
+a trust primitive. It deliberately is not presented as a self-referential Git
+commit hash.
 
 Public `EvidenceBundle` values are descriptive and cannot accept verified
-completeness, agreement, rail, or finality statuses. Only the issuing service
-can project `FINALITY_VERIFIED`, and only from its own registered
-`VerifiedRailFinality`. PaperRail can never produce that token.
+completeness, agreement, rail, or finality statuses. Only the same sealed
+service that issued a bundle can project its verified statuses. Production
+projection rejects test/caller-authority bundles, and `FINALITY_VERIFIED`
+requires that service's own `VerifiedRailFinality` bound to the bundle's
+verified agreement. PaperRail can never produce that token.
 
 ## Secret-safe failures and compatibility
 

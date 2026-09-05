@@ -147,35 +147,29 @@ class NonceAndSignerTests(unittest.TestCase):
         self.assertEqual((result["nonce"], calls), ("7", ["POST", "GET"]))
 
 class EvidenceAuthorityTests(unittest.TestCase):
-    def make_authority(self, raw, acceptance=None, rail=None):
-        rails = {}
-        if acceptance and rail:
-            rails["rail-proof"] = {
-                "agreement_id": acceptance.agreement_id, "rail": rail.rail_canonical,
-                "reference": rail.reference, "terminal_state": rail.terminal_state,
-                "evidence_sha256": authority._rail_observation_hash(rail),
-                "protocol_valid": True, "independent_finality_verified": True,
-                "cryptographic_verification": True}
-        evidence_hash = "e" * 64
-        return authority._build_evidence_authority(
-            {"reviewed": {"source_kind": "CONFIGURED_REVIEWED_EXPORT",
-                           "generation": "gen-1",
-                           "snapshot_sha256": hashlib.sha256(raw).hexdigest()}}, rails,
-            {"readback": {"evidence_sha256": evidence_hash, "events": EVENTS}},
-            REVISION, lambda: 1_800_000_000_000), evidence_hash
+    RAW = (b'{"seq":"1","generation":"gen-1"}\n'
+           b'{"seq":"2","generation":"gen-1"}')
+
+    def make_authority(self):
+        # PRODUCTION_EQUIVALENT_FACTORY: no caller registry, policy, verifier,
+        # clock, marker, or projection dependency enters this boundary.
+        return authority._build_evidence_service_for_test()
+
+    def complete(self, service):
+        acquisition = service.acquire_reviewed_export("reviewed", self.RAW)
+        return acquisition, service.verify_completeness(acquisition)
 
     def test_opaque_types_block_construction_copy_serialization(self):
-        for cls in (authority.VerifiedTranscriptCompleteness, authority.VerifiedAgreement,
+        for cls in (authority.TrustedAcquisitionEvidence,
+                    authority.VerifiedTranscriptCompleteness, authority.VerifiedAgreement,
                     authority.VerifiedRailFinality, authority.VerifiedReadBackEvidence,
                     authority.VerifiedEvidenceBundle):
             with self.assertRaises(PermissionError): cls()
-        raw = b'{"seq":"1","generation":"gen-1"}'
-        auth, _ = self.make_authority(raw)
-        obs = auth.observe_reviewed_export("reviewed", raw, acquired_at_ms=1,
-                                           generation="gen-1")
-        token = auth.verify_completeness(obs, first_seq="1", last_seq="1")
-        for operation in (copy.copy, copy.deepcopy, pickle.dumps):
-            with self.assertRaises(TypeError): operation(token)
+        service = self.make_authority()
+        acquisition, token = self.complete(service)
+        for issued in (acquisition, token):
+            for operation in (copy.copy, copy.deepcopy, pickle.dumps):
+                with self.assertRaises(TypeError): operation(issued)
 
     def test_public_export_has_no_raw_and_third_party_never_complete(self):
         secret = "fixture-secret-90817"
@@ -187,39 +181,62 @@ class EvidenceAuthorityTests(unittest.TestCase):
         self.assertNotIn(secret, rendered); self.assertNotIn("raw", rendered.lower())
         self.assertEqual(observation.as_public_evidence()["completeness"],
                          "TRANSCRIPT_COMPLETENESS_UNVERIFIED")
-        self.assertIsNone(authority.production_evidence_authority.verify_completeness(
-            observation, first_seq="1", last_seq="1"))
+        self.assertIsNone(
+            authority.production_evidence_authority.verify_completeness(observation))
 
-    def test_completeness_requires_registry_exact_bounds_and_no_truncation(self):
-        raw = b'{"seq":"1","generation":"gen-1"}\n{"seq":"2","generation":"gen-1"}'
-        auth, _ = self.make_authority(raw)
-        obs = auth.observe_reviewed_export("reviewed", raw, acquired_at_ms=1,
-                                           generation="gen-1")
-        self.assertIsNone(auth.verify_completeness(obs, first_seq="1", last_seq="3"))
-        self.assertIsNone(auth.verify_completeness(
-            obs, first_seq="1", last_seq="2", truncation_indicated=True))
-        self.assertIsInstance(auth.verify_completeness(obs, first_seq="1", last_seq="2"),
-                              authority.VerifiedTranscriptCompleteness)
+    def test_completeness_consumes_only_bound_trusted_acquisition(self):
+        service = self.make_authority()
+        acquisition, complete = self.complete(service)
+        observation = service.describe_acquisition(acquisition)
+        self.assertEqual((observation.assessment.first_seq,
+                          observation.assessment.last_seq,
+                          observation.assessment.records), ("1", "2", 2))
+        self.assertNotIn("first_seq", inspect.signature(service.verify_completeness).parameters)
+        self.assertNotIn("last_seq", inspect.signature(service.verify_completeness).parameters)
+        self.assertNotIn("truncation_indicated",
+                         inspect.signature(service.verify_completeness).parameters)
+        self.assertIsInstance(complete, authority.VerifiedTranscriptCompleteness)
+        with self.assertRaises(PermissionError):
+            service.acquire_reviewed_export("reviewed", self.RAW[:-1])
+        for source_id in ("reviewed-truncated", "reviewed-outside-bounds",
+                          "reviewed-descriptive"):
+            acquisition = service.acquire_reviewed_export(source_id, self.RAW)
+            self.assertIsNone(service.verify_completeness(acquisition))
+
+    def test_replaced_observation_has_no_acquisition_authority(self):
+        service = self.make_authority()
+        acquisition = service.acquire_reviewed_export("reviewed", self.RAW)
+        original = service.describe_acquisition(acquisition)
+        clone = dataclasses.replace(original)
+        self.assertIsNot(clone, original)
+        self.assertEqual(clone, original)
+        self.assertIsNone(service.verify_completeness(clone))
 
     def test_agreement_arbitrary_id_and_descriptive_forgery_fail(self):
-        raw = b'{"seq":"1","generation":"gen-1"}'
-        proposal, acceptance = agreement_fixture(); auth, _ = self.make_authority(raw)
-        self.assertIsInstance(auth.verify_agreement(proposal, acceptance),
+        proposal, acceptance = agreement_fixture(); service = self.make_authority()
+        self.assertIsInstance(service.verify_agreement(proposal, acceptance),
                               authority.VerifiedAgreement)
-        self.assertIsNone(auth.verify_agreement(
+        self.assertIsNone(service.verify_agreement(
             proposal, dataclasses.replace(acceptance, agreement_id="0" * 64)))
         self.assertIsNone(wire.verify_tclk_alpha_agreement(
             proposal, acceptance).verified_agreement(proposal, acceptance))
 
+    def test_agreement_enforces_state_progression(self):
+        proposal, acceptance = agreement_fixture(); service = self.make_authority()
+        self.assertIsNone(service.verify_agreement(
+            proposal, dataclasses.replace(acceptance, statement="REJECT")))
+        state = wire.AgreementState.PROPOSED
+        for event in ("offer_verified", "acceptance_verified", "agreement_verified"):
+            state = wire.transition_agreement(state, event)
+        self.assertIs(state, wire.AgreementState.AGREEMENT_VERIFIED)
+
     def test_rail_finality_is_registry_issued_and_paper_is_impossible(self):
-        raw = b'{"seq":"1","generation":"gen-1"}'
         proposal, acceptance = agreement_fixture()
         rail = wire.RailObservation.observed(
             "bitcoin", "ref-1", "COMPLETED",
             protocol_valid=True)
-        auth, _ = self.make_authority(raw, acceptance, rail)
-        finality = auth.verify_rail(auth.verify_agreement(proposal, acceptance),
-                                    rail, "rail-proof")
+        service = self.make_authority()
+        finality = service.verify_rail(service.verify_agreement(proposal, acceptance), rail)
         self.assertIsInstance(finality, authority.VerifiedRailFinality)
         self.assertEqual(wire.assess_finality("COMPLETED", rail).finality_status,
                          wire.EvidenceStatus.FINALITY_UNVERIFIED)
@@ -227,30 +244,28 @@ class EvidenceAuthorityTests(unittest.TestCase):
         paper = wire.RailObservation.observed(
             "paper", "ref-1", "COMPLETED",
             protocol_valid=True)
-        paper_auth, _ = self.make_authority(raw, pa, paper)
-        self.assertIsNone(paper_auth.verify_rail(
-            paper_auth.verify_agreement(pp, pa), paper, "rail-proof"))
+        self.assertIsNone(service.verify_rail(service.verify_agreement(pp, pa), paper))
 
     def test_timestamp_flip_third_party_never_changes_finality(self):
         first = b'{"seq":"1","ts":1,"generation":"gen-1"}'
-        proposal, acceptance = agreement_fixture(); auth, _ = self.make_authority(first)
-        agreement = auth.verify_agreement(proposal, acceptance)
+        proposal, acceptance = agreement_fixture(); service = self.make_authority()
+        agreement = service.verify_agreement(proposal, acceptance)
+        self.assertIsInstance(agreement, authority.VerifiedAgreement)
         for raw in (first, b'{"seq":"1","ts":999999,"generation":"gen-1"}'):
             observation = authority.observe_third_party_export(
                 raw, source_id="third-party", acquired_at_ms=1,
                 verifier_revision=REVISION, generation="gen-1")
-            self.assertIsNone(auth.verify_completeness(observation, first_seq="1", last_seq="1"))
-            bundle = auth.issue_bundle(completeness=None, agreement=agreement,
-                                       finality=None, readback=None)
-            self.assertEqual(auth.as_public_evidence(bundle)["finality"],
+            self.assertIsNone(service.verify_completeness(observation))
+            bundle = service.issue_bundle(completeness=None, agreement=agreement,
+                                          finality=None, readback=None)
+            self.assertEqual(service.as_public_evidence(bundle)["finality"],
                              "FINALITY_UNVERIFIED")
 
     def test_readback_and_bundle_require_same_registry_issued_tokens(self):
-        raw = b'{"seq":"1","generation":"gen-1"}'
-        one, evidence_hash = self.make_authority(raw); two, _ = self.make_authority(raw)
+        one, two, evidence_hash = self.make_authority(), self.make_authority(), "e" * 64
         self.assertIsNone(one.verify_readback(
-            "readback", evidence_hash, ("write_accepted", "evidence_confirmed")))
-        readback = one.verify_readback("readback", evidence_hash, EVENTS)
+            evidence_hash, ("write_accepted", "evidence_confirmed")))
+        readback = one.verify_readback(evidence_hash, EVENTS)
         self.assertIsInstance(readback, authority.VerifiedReadBackEvidence)
         with self.assertRaises(PermissionError):
             two.issue_bundle(completeness=None, agreement=None,
@@ -262,6 +277,109 @@ class EvidenceAuthorityTests(unittest.TestCase):
                 wire.EvidenceStatus.AGREEMENT_VERIFIED,
                 wire.EvidenceStatus.RAIL_CRYPTO_VERIFIED,
                 wire.EvidenceStatus.FINALITY_VERIFIED)
+
+    def test_full_production_equivalent_bundle_and_cross_authority_matrix(self):
+        one, two = self.make_authority(), self.make_authority()
+        proposal, acceptance = agreement_fixture()
+        rail = wire.RailObservation.observed(
+            "bitcoin", "ref-1", "COMPLETED", protocol_valid=True)
+        acquisition, complete = self.complete(one)
+        agreement = one.verify_agreement(proposal, acceptance)
+        finality = one.verify_rail(agreement, rail)
+        readback = one.verify_readback("e" * 64, EVENTS)
+        bundle = one.issue_bundle(completeness=complete, agreement=agreement,
+                                  finality=finality, readback=readback)
+        self.assertEqual(dict(one.as_public_evidence(bundle)), {
+            "transcript": "TRANSCRIPT_COMPLETENESS_VERIFIED",
+            "agreement": "AGREEMENT_VERIFIED", "settlement": "RAIL_CRYPTO_VERIFIED",
+            "finality": "FINALITY_VERIFIED", "read_back": "EVIDENCE_CONFIRMED"})
+        with self.assertRaises(PermissionError): two.describe_acquisition(acquisition)
+        self.assertIsNone(two.verify_completeness(acquisition))
+        self.assertIsNone(two.verify_rail(agreement, rail))
+        for kwargs in ({"completeness": complete, "agreement": None,
+                        "finality": None, "readback": None},
+                       {"completeness": None, "agreement": agreement,
+                        "finality": None, "readback": None},
+                       {"completeness": None, "agreement": None,
+                        "finality": finality, "readback": None},
+                       {"completeness": None, "agreement": None,
+                        "finality": None, "readback": readback}):
+            with self.assertRaises(PermissionError): two.issue_bundle(**kwargs)
+        with self.assertRaises(PermissionError): two.as_public_evidence(bundle)
+        with self.assertRaises(PermissionError):
+            authority.production_evidence_authority.as_public_evidence(bundle)
+
+    def test_registry_and_caller_authority_attacks_do_not_reach_production_projection(self):
+        self.assertFalse(hasattr(authority, "_build_evidence_authority"))
+        self.assertEqual(inspect.signature(
+            authority._build_evidence_service_for_test).parameters, {})
+        with self.assertRaises(PermissionError): authority._SealedEvidenceService()
+        forged_finality = object.__new__(authority.VerifiedRailFinality)
+        forged_bundle = object.__new__(authority.VerifiedEvidenceBundle)
+        for name in ("_finality", "__finality", "_bundles", "__bundles", "__dict__"):
+            self.assertFalse(hasattr(authority.production_evidence_authority, name))
+        with self.assertRaises((AttributeError, TypeError)):
+            setattr(authority.production_evidence_authority, "_finality", {forged_finality: object()})
+        with self.assertRaises(PermissionError):
+            authority.production_evidence_authority.issue_bundle(
+                completeness=None, agreement=None, finality=forged_finality, readback=None)
+        with self.assertRaises(PermissionError):
+            authority.production_evidence_authority.as_public_evidence(forged_bundle)
+        helper = tuple.__new__(authority._SealedEvidenceService,
+                               (lambda *_: None,) * 7 + (lambda _bundle: {
+                                   "finality": "FINALITY_VERIFIED"},))
+        self.assertEqual(helper.as_public_evidence(forged_bundle)["finality"],
+                         "FINALITY_VERIFIED")
+        with self.assertRaises(PermissionError):
+            authority.production_evidence_authority.as_public_evidence(forged_bundle)
+
+    def test_constructed_root_ignores_later_module_global_rebinding(self):
+        service = self.make_authority()
+        proposal, acceptance = agreement_fixture()
+        rail = wire.RailObservation.observed(
+            "bitcoin", "ref-1", "COMPLETED", protocol_valid=True)
+        names = ("wire", "_sha", "_safe_export_assessment", "_rail_observation_hash",
+                 "AUTHORITY_SCHEMA_VERSION", "MappingProxyType", "ExportObservation",
+                 "TrustedAcquisitionEvidence", "VerifiedAgreement",
+                 "VerifiedRailFinality", "VerifiedEvidenceBundle")
+        originals = {name: getattr(authority, name) for name in names}
+        try:
+            for name in names:
+                setattr(authority, name, object())
+            acquisition = service.acquire_reviewed_export("reviewed", self.RAW)
+            complete = service.verify_completeness(acquisition)
+            agreement = service.verify_agreement(proposal, acceptance)
+            finality = service.verify_rail(agreement, rail)
+            readback = service.verify_readback("e" * 64, EVENTS)
+            bundle = service.issue_bundle(
+                completeness=complete, agreement=agreement,
+                finality=finality, readback=readback)
+            self.assertEqual(service.as_public_evidence(bundle)["finality"],
+                             "FINALITY_VERIFIED")
+        finally:
+            for name, value in originals.items(): setattr(authority, name, value)
+
+    def test_all_verified_tokens_reject_reconstruction(self):
+        service = self.make_authority(); proposal, acceptance = agreement_fixture()
+        rail = wire.RailObservation.observed(
+            "bitcoin", "ref-1", "COMPLETED", protocol_valid=True)
+        acquisition, complete = self.complete(service)
+        agreement = service.verify_agreement(proposal, acceptance)
+        finality = service.verify_rail(agreement, rail)
+        readback = service.verify_readback("e" * 64, EVENTS)
+        bundle = service.issue_bundle(completeness=complete, agreement=agreement,
+                                      finality=finality, readback=readback)
+        for token in (acquisition, complete, agreement, finality, readback, bundle):
+            with self.subTest(token=type(token).__name__):
+                for operation in (copy.copy, copy.deepcopy, pickle.dumps):
+                    with self.assertRaises(TypeError): operation(token)
+                with self.assertRaises(TypeError): dataclasses.replace(token)
+                forged = object.__new__(type(token))
+                with self.assertRaises(AttributeError): setattr(forged, "authority", True)
+                self.assertIsInstance(json.loads("{}"), dict)
+                with self.assertRaises(SyntaxError): eval(repr(token), {})
+        forged_agreement = object.__new__(authority.VerifiedAgreement)
+        self.assertIsNone(service.verify_rail(forged_agreement, rail))
 
     def test_public_verified_field_forgery_is_rejected(self):
         with self.assertRaises(PermissionError):
