@@ -263,7 +263,8 @@ class RuntimeCapabilityTests(unittest.TestCase):
         self.assertEqual(status["TOOL_OUTPUT_BUDGET"]["framing"], "UNTRUSTED_CONTENT")
         self.assertFalse(status["TOOL_OUTPUT_BUDGET"]["auto_fetch"])
         self.assertFalse(status["TOOL_OUTPUT_BUDGET"]["auto_action"])
-        self.assertFalse(status["REPLAY_SAFETY"]["replay_ledger_implemented"])
+        self.assertTrue(status["REPLAY_SAFETY"]["replay_ledger_implemented"])
+        self.assertTrue(status["REPLAY_SAFETY"]["side_effect_journal_implemented"])
         self.assertEqual(status["RUNTIME_DRIFT"]["runtime"], "RUNTIME_NOT_OBSERVED")
         self.assertEqual(status["PROTOCOL_MODEL"]["ptlc"], "EXPERIMENTAL_UNEXERCISED")
         self.assertEqual(status["PROTOCOL_MODEL"]["owned_room_auth"], "INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE")
@@ -531,10 +532,10 @@ class RuntimeCapabilityTests(unittest.TestCase):
             value = rc.capability_manifest(action=action)
             replay = value["domains"]["REPLAY_SAFETY"][0]
             self.assertTrue(replay["required_for_action"])
-            self.assertFalse(replay["replay_ledger_implemented"])
-            self.assertFalse(replay["side_effect_journal_implemented"])
-            self.assertIn("REPLAY_LEDGER_REQUIRED", replay["blocking_reasons"])
-            self.assertIn("SIDE_EFFECT_JOURNAL_REQUIRED", replay["blocking_reasons"])
+            self.assertTrue(replay["replay_ledger_implemented"])
+            self.assertTrue(replay["side_effect_journal_implemented"])
+            self.assertNotIn("REPLAY_LEDGER_REQUIRED", replay["blocking_reasons"])
+            self.assertNotIn("SIDE_EFFECT_JOURNAL_REQUIRED", replay["blocking_reasons"])
             self.assertFalse(value["ready_to_act"])
 
     def test_contract_rejects_ready_without_replay_or_required_dependency(self):

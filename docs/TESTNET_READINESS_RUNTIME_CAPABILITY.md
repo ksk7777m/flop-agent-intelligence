@@ -78,8 +78,11 @@ network/genesis identities independently. Any mismatch is
 - Tool Output Budget is local Safety Layer policy: 200 records, 2 MiB, and an
   estimated 131,072-token ceiling. Remote/tool output is `UNTRUSTED_CONTENT`;
   discovered URLs and actions remain inert.
-- Replay ledger and side-effect journal are unimplemented readiness interfaces
-  and first-class required dependencies/blockers for Faucet claims and settlement.
+- The replay ledger and side-effect journal are implemented offline as a sealed,
+  local SQLite safety gate. This clears only the implementation blockers; it
+  supplies neither runtime observation nor action authorization. Faucet claims
+  and settlement retain all independent runtime, approval, network, read-back,
+  economic-value, and finality blockers.
 - Agreement, TransferAttempt, and RailObservation are
   `GENERIC_MODEL_READY`; this does not claim tclk/2 is finalized.
 - PTLC remains `EXPERIMENTAL_UNEXERCISED`; owned-room metadata is
