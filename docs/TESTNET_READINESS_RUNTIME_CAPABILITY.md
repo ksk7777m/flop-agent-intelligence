@@ -110,7 +110,11 @@ For every required child, the validator independently requires sufficient
 implementation and documentation state. Runtime-required children must be
 `RUNTIME_OBSERVED` with complete trusted observation evidence; children whose
 reviewed policy requires no runtime observation use the explicit `NOT_REQUIRED`
-runtime state. Every other or future runtime state is denied by default.
+runtime state. Every other or future runtime state is denied by default. The
+semantic validator recomputes freshness with its sealed evaluation clock and
+captured six-hour local-safety TTL: age zero and exactly six hours are accepted,
+while future timestamps and ages greater than six hours fail closed. Callers
+cannot supply the evaluation clock or TTL.
 
 PaperRail fields are canonical: protocol validity is independent from crypto
 verification, economic value, and finality. `PAPER_RAIL` may be protocol-valid,

@@ -56,6 +56,12 @@ def private_manifest(action=rc.ReadinessAction.GENERAL_TESTNET):
     return project(all_observations(), action)
 
 
+def private_validator(clock=lambda: NOW, ttl=timedelta(hours=6)):
+    return rc._build_manifest_validator(
+        rc._action_dependency_policy(rc.Domain, rc.ReadinessAction),
+        rc._production_definitions(), clock, ttl)
+
+
 def all_observations(network=rc.ReviewedRuntimeFixtureId.NETWORK_MATCH):
     ids = (
         rc.ReviewedRuntimeFixtureId.TECHNOCORE_AVAILABLE,
@@ -377,6 +383,75 @@ class RuntimeCapabilityTests(unittest.TestCase):
         value["domains"]["IDENTITY"][0]["runtime_status"] = "FUTURE_OPTIMISTIC_STATE"
         self.assertTrue(list(Draft202012Validator(schema).iter_errors(value)))
         self.assertTrue(rc.validate_capability_manifest(value))
+
+    def test_required_child_timestamp_boundaries_fail_closed(self):
+        validate = private_validator()
+        cases = ((NOW, True), (NOW - timedelta(hours=6), True),
+                 (NOW - timedelta(hours=6, seconds=1), False),
+                 (NOW + timedelta(seconds=1), False),
+                 (datetime(2000, 1, 1, tzinfo=timezone.utc), False),
+                 (datetime(2999, 1, 1, tzinfo=timezone.utc), False))
+        for observed_at, accepted in cases:
+            for authorized in (False, True):
+                value = private_manifest()
+                if authorized:
+                    value.update({"overall_state": "AUTHORIZED",
+                                  "live_runtime_readiness": "AUTHORIZED",
+                                  "authorized_to_act": True})
+                value["domains"]["TECHNOCORE"][0]["observed_at"] = observed_at.isoformat()
+                self.assertEqual(not validate(value), accepted,
+                                 (observed_at, authorized))
+
+    def test_timestamp_attacks_cover_runtime_required_action_domains(self):
+        validate = private_validator()
+        covered = set()
+        for action in rc.ReadinessAction:
+            original = private_manifest(action)
+            for domain, rows in original["domains"].items():
+                child = rows[0]
+                if not child["required_for_action"] or child["runtime_status"] != "RUNTIME_OBSERVED":
+                    continue
+                covered.add(domain)
+                for observed_at in (NOW - timedelta(hours=6, seconds=1),
+                                    NOW + timedelta(seconds=1)):
+                    value = private_manifest(action)
+                    value["domains"][domain][0]["observed_at"] = observed_at.isoformat()
+                    self.assertTrue(validate(value), (action, domain, observed_at))
+        self.assertEqual(covered, {"TECHNOCORE", "EXPORT_EVIDENCE", "FAUCET",
+                                   "TESTNET_NETWORK", "INFERENCE", "SETTLEMENT_RAIL",
+                                   "EVIDENCE_DURABILITY"})
+
+    def test_malformed_required_child_timestamps_fail_closed(self):
+        validate = private_validator()
+        for observed_at in (None, "", "not-a-date", "2026-09-06T06:00:00",
+                            "999999999999-01-01T00:00:00+00:00", 0, float("nan")):
+            value = private_manifest()
+            value["domains"]["TECHNOCORE"][0]["observed_at"] = observed_at
+            self.assertTrue(validate(value), observed_at)
+
+    def test_freshness_policy_resists_module_rebinding(self):
+        validate = private_validator()
+        fresh, stale = private_manifest(), private_manifest()
+        stale["domains"]["TECHNOCORE"][0]["observed_at"] = (
+            NOW - timedelta(hours=6, seconds=1)).isoformat()
+        originals = rc.datetime, rc.timedelta, rc.DEFAULT_OBSERVATION_TTL
+        rc.datetime, rc.timedelta, rc.DEFAULT_OBSERVATION_TTL = object, object, timedelta(days=1)
+        try:
+            self.assertEqual(validate(fresh), ())
+            self.assertTrue(validate(stale))
+        finally:
+            rc.datetime, rc.timedelta, rc.DEFAULT_OBSERVATION_TTL = originals
+
+    def test_runtime_value_observed_timestamp_is_independently_validated(self):
+        validate = private_validator()
+        value = private_manifest()
+        record = value["runtime_values"][0]
+        record.update({"runtime_observed_value": 1, "observed_at":
+                       (NOW - timedelta(hours=6, seconds=1)).isoformat(),
+                       "observation_hash": "a" * 64, "freshness": "FRESH",
+                       "status": "RUNTIME_OBSERVED_VALUE", "ready": True})
+        self.assertIn("RUNTIME_VALUE_STALE_UNMARKED:" + record["value_id"],
+                      validate(value))
 
     def test_required_child_implementation_and_documentation_are_derived(self):
         mutations = (("implementation_status", "NOT_IMPLEMENTED",

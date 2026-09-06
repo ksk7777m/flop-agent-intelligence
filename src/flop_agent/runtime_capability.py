@@ -574,8 +574,12 @@ def _build_clock(datetime_type: type[datetime], utc: timezone) -> Callable[[], d
 def _build_manifest_validator(
     dependencies_input: Mapping[ReadinessAction, frozenset[Domain]],
     definitions_input: tuple[CapabilityDefinition, ...],
+    clock: Callable[[], datetime], ttl: timedelta,
 ) -> Callable[[Mapping[str, Any]], tuple[str, ...]]:
-    mapping_type, sequence_type = Mapping, list
+    mapping_type, sequence_type, datetime_type = Mapping, list, datetime
+    utc, duration = timezone.utc, timedelta
+    if not duration(minutes=1) <= ttl <= duration(days=1):
+        raise ValueError("private manifest-validation TTL is outside bounded policy")
     action_names = frozenset(item.value for item in ReadinessAction)
     domain_names = tuple(item.value for item in Domain)
     expected = MappingProxyType({
@@ -596,9 +600,21 @@ def _build_manifest_validator(
     trusted_runtime_provenance = frozenset({"DIRECT_RUNTIME_OBSERVATION",
                                             "REVIEWED_LOCAL_FIXTURE"})
 
+    def timestamp_age(value: Any, evaluated_at: datetime) -> tuple[timedelta | None, str | None]:
+        if not isinstance(value, str) or not value:
+            return None, "MALFORMED_TIMESTAMP"
+        try:
+            parsed = datetime_type.fromisoformat(value)
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                return None, "MALFORMED_TIMESTAMP"
+            return evaluated_at - parsed.astimezone(utc), None
+        except (OverflowError, TypeError, ValueError):
+            return None, "MALFORMED_TIMESTAMP"
+
     def validate(manifest: Mapping[str, Any]) -> tuple[str, ...]:
         if not isinstance(manifest, mapping_type):
             return ("MANIFEST_NOT_OBJECT",)
+        evaluated_at = clock().astimezone(utc)
         errors: list[str] = []
         action = manifest.get("action")
         if action not in action_names:
@@ -665,6 +681,14 @@ def _build_manifest_validator(
                             or any(row.get(key) is None for key in ("resource_id", "observed_at",
                                                                   "source_hash", "observation_hash"))):
                         errors.append("REQUIRED_CHILD_RUNTIME_EVIDENCE_INVALID:" + str(capability_id))
+                    if runtime_required:
+                        age, timestamp_error = timestamp_age(row.get("observed_at"), evaluated_at)
+                        if timestamp_error is not None:
+                            errors.append("REQUIRED_CHILD_RUNTIME_TIMESTAMP_INVALID:" + str(capability_id))
+                        elif age is not None and age < duration(0):
+                            errors.append("FUTURE_RUNTIME_OBSERVATION:" + str(capability_id))
+                        elif age is not None and age > ttl:
+                            errors.append("STALE_RUNTIME_OBSERVATION:" + str(capability_id))
         if overall_state == "ACTION_READY" and authorized is not False:
             errors.append("ACTION_READY_AUTHORIZATION_INVALID")
         if overall_state == "AUTHORIZED" and authorized is not True:
@@ -707,6 +731,16 @@ def _build_manifest_validator(
                 if status == "RUNTIME_OBSERVED_VALUE" and any(value.get(key) is None for key in
                     ("runtime_observed_value", "observed_at", "source_id", "observation_hash")):
                     errors.append("RUNTIME_VALUE_OBSERVATION_INCOMPLETE:" + str(value_id))
+                if status in {"RUNTIME_OBSERVED_VALUE", "STALE_RUNTIME_VALUE"}:
+                    age, timestamp_error = timestamp_age(value.get("observed_at"), evaluated_at)
+                    if timestamp_error is not None:
+                        errors.append("RUNTIME_VALUE_TIMESTAMP_INVALID:" + str(value_id))
+                    elif age is not None and age < duration(0):
+                        errors.append("RUNTIME_VALUE_FUTURE:" + str(value_id))
+                    elif age is not None and age > ttl and status != "STALE_RUNTIME_VALUE":
+                        errors.append("RUNTIME_VALUE_STALE_UNMARKED:" + str(value_id))
+                    elif age is not None and age <= ttl and status == "STALE_RUNTIME_VALUE":
+                        errors.append("RUNTIME_VALUE_STALE_MISMATCH:" + str(value_id))
             if found_ids != runtime_value_ids:
                 errors.append("RUNTIME_VALUE_SET_INCOMPLETE")
         return tuple(dict.fromkeys(errors))
@@ -717,7 +751,8 @@ _production_clock = _build_clock(datetime, timezone.utc)
 assess_capabilities, capability_manifest = _build_readiness_service(_production_definitions(), _resolve_observation, _production_clock, DEFAULT_OBSERVATION_TTL)
 transition_faucet = _build_faucet_transition_service()
 validate_capability_manifest = _build_manifest_validator(
-    _action_dependency_policy(Domain, ReadinessAction), _production_definitions())
+    _action_dependency_policy(Domain, ReadinessAction), _production_definitions(),
+    _production_clock, DEFAULT_OBSERVATION_TTL)
 
 
 def _build_static_catalogs() -> tuple[Callable[[], Mapping[str, Any]], Callable[[], tuple[Mapping[str, str], ...]]]:
