@@ -126,18 +126,9 @@ def main() -> None:
             for label, value in current_status().items():
                 print(f"{label:<21} {value}")
         elif args.testnet_command == "capabilities":
-            from .runtime_capability import capability_manifest, domain_readiness
+            from .runtime_capability import capability_manifest
 
-            assessment = capability_manifest()
-            print(json.dumps({
-                "schema": assessment["schema"],
-                "implementation_readiness": assessment["implementation_readiness"],
-                "live_runtime_readiness": assessment["live_runtime_readiness"],
-                "ready_to_act": assessment["ready_to_act"],
-                "authorized_to_act": assessment["authorized_to_act"],
-                "blocking_reasons": list(assessment["blocking_reasons"]),
-                "domains": {key: dict(value) for key, value in domain_readiness().items()},
-            }, indent=2))
+            print(json.dumps(capability_manifest(), indent=2))
         elif args.testnet_command == "faucet":
             if not args.dry_run:
                 raise SystemExit(str(LiveActionDisabled("faucet requires --dry-run; live claims are FORBIDDEN_V0")))

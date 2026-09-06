@@ -4,23 +4,21 @@
   "title": "FLOP Runtime Capability Manifest v1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema", "implementation_readiness", "live_runtime_readiness",
-    "overall_state", "ready_to_act", "authorized_to_act",
-    "blocking_reasons", "domains"
-  ],
+  "required": ["schema", "status", "action", "implementation_readiness", "live_runtime_readiness", "overall_state", "ready_to_act", "authorized_to_act", "blocking_reasons", "domains"],
   "properties": {
     "schema": {"const": "flop-runtime-capability-manifest-v1"},
+    "status": {"const": "DESCRIPTIVE_ONLY"},
+    "action": {"enum": ["GENERAL_TESTNET", "FAUCET_CLAIM", "INFERENCE_REQUEST", "SETTLEMENT"]},
     "implementation_readiness": {"enum": ["IMPLEMENTATION_READY", "BLOCKED"]},
-    "live_runtime_readiness": {"enum": ["BLOCKED", "IMPLEMENTATION_READY", "OBSERVATION_REQUIRED", "HUMAN_REVIEW_REQUIRED", "ACTION_READY", "AUTHORIZED"]},
-    "overall_state": {"enum": ["BLOCKED", "IMPLEMENTATION_READY", "OBSERVATION_REQUIRED", "HUMAN_REVIEW_REQUIRED", "ACTION_READY", "AUTHORIZED"]},
+    "live_runtime_readiness": {"$ref": "#/$defs/overall"},
+    "overall_state": {"$ref": "#/$defs/overall"},
     "ready_to_act": {"type": "boolean"},
     "authorized_to_act": {"type": "boolean"},
-    "blocking_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "blocking_reasons": {"type": "array", "items": {"$ref": "#/$defs/blocker"}, "uniqueItems": true},
     "domains": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["IDENTITY", "TECHNOCORE", "EXPORT_EVIDENCE", "FAUCET", "TESTNET_NETWORK", "INFERENCE", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY"],
+      "required": ["IDENTITY", "TECHNOCORE", "EXPORT_EVIDENCE", "FAUCET", "TESTNET_NETWORK", "INFERENCE", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY", "DELEGATION_VERIFICATION", "TOOL_OUTPUT_BUDGET", "REPLAY_SAFETY", "ACTIVITY_QUALITY", "PROTOCOL_MODEL", "RUNTIME_DRIFT"],
       "properties": {
         "IDENTITY": {"$ref": "#/$defs/domain"},
         "TECHNOCORE": {"$ref": "#/$defs/domain"},
@@ -29,31 +27,68 @@
         "TESTNET_NETWORK": {"$ref": "#/$defs/domain"},
         "INFERENCE": {"$ref": "#/$defs/domain"},
         "SETTLEMENT_RAIL": {"$ref": "#/$defs/domain"},
-        "EVIDENCE_DURABILITY": {"$ref": "#/$defs/domain"}
+        "EVIDENCE_DURABILITY": {"$ref": "#/$defs/domain"},
+        "DELEGATION_VERIFICATION": {"$ref": "#/$defs/domain"},
+        "TOOL_OUTPUT_BUDGET": {"$ref": "#/$defs/domain"},
+        "REPLAY_SAFETY": {"$ref": "#/$defs/domain"},
+        "ACTIVITY_QUALITY": {"$ref": "#/$defs/domain"},
+        "PROTOCOL_MODEL": {"$ref": "#/$defs/domain"},
+        "RUNTIME_DRIFT": {"$ref": "#/$defs/domain"}
       }
     }
   },
+  "allOf": [
+    {"if": {"properties": {"authorized_to_act": {"const": true}}, "required": ["authorized_to_act"]}, "then": {"properties": {"ready_to_act": {"const": true}, "overall_state": {"const": "AUTHORIZED"}, "blocking_reasons": {"maxItems": 0}}}},
+    {"if": {"properties": {"overall_state": {"const": "ACTION_READY"}}, "required": ["overall_state"]}, "then": {"properties": {"ready_to_act": {"const": true}, "authorized_to_act": {"const": false}, "blocking_reasons": {"maxItems": 0}}}},
+    {"if": {"properties": {"overall_state": {"enum": ["BLOCKED", "OBSERVATION_REQUIRED", "HUMAN_REVIEW_REQUIRED", "INVALID_CONFIGURATION"]}}, "required": ["overall_state"]}, "then": {"properties": {"ready_to_act": {"const": false}, "authorized_to_act": {"const": false}}}},
+    {"if": {"properties": {"overall_state": {"const": "BLOCKED"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "BLOCKED"}}}},
+    {"if": {"properties": {"overall_state": {"const": "OBSERVATION_REQUIRED"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "OBSERVATION_REQUIRED"}}}},
+    {"if": {"properties": {"overall_state": {"const": "HUMAN_REVIEW_REQUIRED"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "HUMAN_REVIEW_REQUIRED"}}}},
+    {"if": {"properties": {"overall_state": {"const": "ACTION_READY"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "ACTION_READY"}}}},
+    {"if": {"properties": {"overall_state": {"const": "AUTHORIZED"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "AUTHORIZED"}}}},
+    {"if": {"properties": {"overall_state": {"const": "INVALID_CONFIGURATION"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "INVALID_CONFIGURATION"}}}}
+  ],
   "$defs": {
+    "overall": {"enum": ["BLOCKED", "IMPLEMENTATION_READY", "OBSERVATION_REQUIRED", "HUMAN_REVIEW_REQUIRED", "ACTION_READY", "AUTHORIZED", "INVALID_CONFIGURATION"]},
+    "capabilityState": {"enum": ["NOT_IMPLEMENTED", "IMPLEMENTED_OFFLINE", "DOCUMENTED_ONLY", "RUNTIME_NOT_OBSERVED", "RUNTIME_OBSERVED", "RUNTIME_UNAVAILABLE", "STALE_RUNTIME_OBSERVATION", "CONFLICTING_CAPABILITY_EVIDENCE", "LIVE_DOC_RUNTIME_DRIFT", "REVIEW_REQUIRED", "READY_FOR_HUMAN_APPROVAL", "AUTHORIZED", "BLOCKED"]},
+    "provenance": {"type": ["string", "null"], "enum": ["DOCUMENTATION", "SIGNED_OFFICIAL_SOURCE", "REVIEWED_REPOSITORY_SOURCE", "DIRECT_RUNTIME_OBSERVATION", "REVIEWED_LOCAL_FIXTURE", "THIRD_PARTY_REPORT", "UNTRUSTED_CONTEXT", null]},
+    "blocker": {"enum": ["AUTHENTICATION_MODEL_REVIEW_REQUIRED", "BACKUP_DRILL_REQUIRED", "CHAIN_ID_UNDOCUMENTED", "CLAIM_REQUIREMENTS_UNVERIFIED", "COMPLETENESS_RUNTIME_UNVERIFIED", "CONFLICTING_CAPABILITY_EVIDENCE", "COST_SPEND_SEMANTICS_REVIEW_REQUIRED", "DELEGATION_RUNTIME_UNOBSERVED", "ECONOMIC_VALUE_UNVERIFIED", "HUMAN_APPROVAL_REQUIRED", "IMPLEMENTATION_REQUIRED", "INVALID_CONFIGURATION", "MISSING_CRITICAL_DOMAIN", "MISSING_RUNTIME_OBSERVATION", "NETWORK_IDENTITY_MISMATCH", "NETWORK_IDENTITY_UNDOCUMENTED", "OFFICIAL_ENDPOINT_UNVERIFIED", "OWNED_ROOM_INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE", "PTLC_EXPERIMENTAL_UNEXERCISED", "RAIL_FINALITY_UNOBSERVED", "RECOVERY_DRILL_REQUIRED", "RELEASE_MAIN_DOC_RUNTIME_UNRECONCILED", "REPLAY_LEDGER_REQUIRED", "REQUEST_SCHEMA_REVIEW_REQUIRED", "RPC_IDENTITY_UNDOCUMENTED", "RUNTIME_READBACK_NOT_OBSERVED", "RUNTIME_UNAVAILABLE", "RUNTIME_WRITE_NOT_AUTHORIZED", "SIDE_EFFECT_JOURNAL_REQUIRED", "STALE_RUNTIME_OBSERVATION", "TRUSTED_ACQUISITION_RUNTIME_UNVERIFIED", "UPSTREAM_VERSION_NOT_FINALIZED"]},
     "domain": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/capability"}},
     "capability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["capability_id", "domain", "implementation_status", "documented_status", "runtime_status", "source_id", "observed_at", "observation_hash", "policy_version", "verifier_revision", "blocking_reasons", "ready_to_act", "authorized_to_act"],
+      "required": ["capability_id", "domain", "implementation_status", "documented_status", "runtime_status", "provenance", "source_id", "resource_id", "observed_at", "source_hash", "observation_hash", "policy_version", "verifier_revision", "blocking_reasons", "required_for_action", "ready_to_act", "authorized_to_act", "documented_chain_id", "observed_chain_id", "documented_rpc_identity", "observed_rpc_identity", "documented_network_identity", "observed_network_identity", "testnet_live"],
       "properties": {
         "capability_id": {"type": "string", "pattern": "^[a-z0-9_.-]{1,128}$"},
-        "domain": {"type": "string"},
-        "implementation_status": {"type": "string"},
-        "documented_status": {"type": "string"},
-        "runtime_status": {"type": "string"},
-        "source_id": {"type": ["string", "null"]},
+        "domain": {"enum": ["IDENTITY", "TECHNOCORE", "EXPORT_EVIDENCE", "FAUCET", "TESTNET_NETWORK", "INFERENCE", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY", "DELEGATION_VERIFICATION", "TOOL_OUTPUT_BUDGET", "REPLAY_SAFETY", "ACTIVITY_QUALITY", "PROTOCOL_MODEL", "RUNTIME_DRIFT"]},
+        "implementation_status": {"enum": ["NOT_IMPLEMENTED", "IMPLEMENTED_OFFLINE"]},
+        "documented_status": {"enum": ["DOCUMENTED_ONLY", "RUNTIME_NOT_OBSERVED", "REVIEW_REQUIRED"]},
+        "runtime_status": {"$ref": "#/$defs/capabilityState"},
+        "provenance": {"$ref": "#/$defs/provenance"},
+        "source_id": {"type": ["string", "null"], "pattern": "^[A-Z0-9_]{1,128}$"},
+        "resource_id": {"type": ["string", "null"], "pattern": "^[a-z0-9:_.-]{1,128}$"},
         "observed_at": {"type": ["string", "null"], "format": "date-time"},
+        "source_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
         "observation_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-        "policy_version": {"type": "string"},
-        "verifier_revision": {"type": "string"},
-        "blocking_reasons": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "policy_version": {"const": "runtime-capability-safety-policy-v2"},
+        "verifier_revision": {"const": "runtime-capability-verifier-v2"},
+        "blocking_reasons": {"type": "array", "items": {"$ref": "#/$defs/blocker"}, "uniqueItems": true},
+        "required_for_action": {"type": "boolean"},
         "ready_to_act": {"type": "boolean"},
-        "authorized_to_act": {"type": "boolean"}
-      }
+        "authorized_to_act": {"const": false},
+        "documented_chain_id": {"type": ["string", "null"]},
+        "observed_chain_id": {"type": ["string", "null"]},
+        "documented_rpc_identity": {"type": ["string", "null"]},
+        "observed_rpc_identity": {"type": ["string", "null"]},
+        "documented_network_identity": {"type": ["string", "null"]},
+        "observed_network_identity": {"type": ["string", "null"]},
+        "testnet_live": {"type": "boolean"}
+      },
+      "allOf": [
+        {"if": {"properties": {"runtime_status": {"const": "RUNTIME_OBSERVED"}}, "required": ["runtime_status"]}, "then": {"properties": {"provenance": {"enum": ["DIRECT_RUNTIME_OBSERVATION", "REVIEWED_LOCAL_FIXTURE"]}, "observed_at": {"type": "string"}, "source_hash": {"type": "string"}, "observation_hash": {"type": "string"}, "resource_id": {"type": "string"}}}},
+        {"if": {"properties": {"runtime_status": {"const": "STALE_RUNTIME_OBSERVATION"}}, "required": ["runtime_status"]}, "then": {"properties": {"ready_to_act": {"const": false}, "authorized_to_act": {"const": false}, "testnet_live": {"const": false}}}},
+        {"if": {"properties": {"testnet_live": {"const": true}}, "required": ["testnet_live"]}, "then": {"properties": {"domain": {"const": "TESTNET_NETWORK"}, "runtime_status": {"const": "RUNTIME_OBSERVED"}, "ready_to_act": {"const": true}}}}
+      ]
     }
   }
 }

@@ -15,9 +15,11 @@ Documentation, reviewed repository sources, signed official sources, direct
 runtime observations, third-party reports, and local fixtures have distinct
 provenance. Third-party reports are `UNTRUSTED_CONTEXT` and cannot promote
 runtime readiness. Runtime evidence is an opaque process-local token issued by
-the sealed verifier for a fixed reviewed-source probe. Its public projection is
-`DESCRIPTIVE_ONLY`; it cannot be copied, serialized, reconstructed, or used
-across verifier authorities.
+the sealed verifier for a fixed `ReviewedRuntimeFixtureId` or, in a future
+separately reviewed package, sealed acquisition evidence. Arbitrary mappings,
+paths, URLs, timestamps, hashes, and response labels cannot issue production
+authority. Its public projection is `DESCRIPTIVE_ONLY`; it cannot be copied,
+serialized, reconstructed, or used across verifier authorities.
 
 The checked-in package performs no live probe. Future read-only probes are
 inert specifications binding an exact reviewed source ID, method, endpoint ID,
@@ -29,7 +31,8 @@ wallet operation, inference spend, payment, or Technocore write.
 ## Freshness and conflicts
 
 The local Safety Layer default TTL is six hours. It is conservative policy, not
-a protocol truth. A future or expired observation is
+a protocol truth. The production TTL and clock are captured by the sealed
+service and are not public parameters. A future or expired observation is
 `STALE_RUNTIME_OBSERVATION`. Documentation claiming availability while the
 reviewed runtime reports unavailability is
 `CONFLICTING_CAPABILITY_EVIDENCE`; neither record rewrites the other.
@@ -41,3 +44,51 @@ configured action-authorization store, so it cannot mint authorization. Faucet
 claims and inference execution remain disabled. PaperRail protocol validity is
 not economic value: `economic_value_verified` remains false until independent
 economic and finality evidence exists.
+
+## Canonical gates and dependencies
+
+Critical domains are explicit and cannot be omitted. An empty definition set or
+a missing critical domain is `INVALID_CONFIGURATION`, never vacuously ready.
+Action dependency graphs are fixed: Faucet, inference, settlement, and general
+testnet review consume only their declared domain dependencies. Identity backup
+and recovery, inference schema/auth/spend review, rail finality/economic value,
+and evidence durability are canonical blockers rather than dashboard-only text.
+
+Network observations bind documented and observed chain, RPC, and
+network/genesis identities independently. Any mismatch is
+`CONFLICTING_CAPABILITY_EVIDENCE`, keeps `testnet_live` false, and blocks action.
+
+## Offline capability taxonomy
+
+- Native Export separates verifier implementation, documentation, runtime
+  observation, trusted acquisition, and completeness.
+- Delegation Verification is offline-only, preserves lossless delegation nonce
+  handling, and keeps root keys local.
+- Tool Output Budget is local Safety Layer policy: 200 records, 2 MiB, and an
+  estimated 131,072-token ceiling. Remote/tool output is `UNTRUSTED_CONTENT`;
+  discovered URLs and actions remain inert.
+- Replay ledger and side-effect journal are unimplemented readiness interfaces
+  and blockers for future claims and payments.
+- Agreement, TransferAttempt, and RailObservation are
+  `GENERIC_MODEL_READY`; this does not claim tclk/2 is finalized.
+- PTLC remains `EXPERIMENTAL_UNEXERCISED`; owned-room metadata is
+  `INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE`.
+- Remote/hosted MCPs have no root DID, signer, wallet, or payment-key custody.
+
+`/config` is modeled only as a future reviewed runtime source. Release, main,
+live documentation, and runtime observations remain independent. Mutable
+capacity, timing, quota, and rate-limit values are documented/observed/stale/
+conflicting values, never permanent protocol constants.
+
+## Captured dependency inventory
+
+| Callable | Captured dependencies | Method |
+|---|---|---|
+| Runtime issuer | Fixture enum, fixed records, reviewed probes, registry | Closure |
+| Observation validator | Exact token type and same weak registry | Closure |
+| Staleness evaluator | Clock, six-hour TTL, UTC, duration type | Closure |
+| Conflict evaluator | Response/state/domain enums and identity comparison | Closure |
+| Aggregator | Definitions, critical domains, action dependencies | Closure |
+| Faucet transition evaluator | Nested immutable transition graph | Closure |
+| Action validator | Exact opaque type; no configured issuer | Closure |
+| Schema projection | Assessor and fixed output keys | Closure |

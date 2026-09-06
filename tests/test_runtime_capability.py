@@ -1,145 +1,289 @@
 import copy
+import dataclasses
+import inspect
 import json
 import pickle
+import subprocess
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from jsonschema import Draft202012Validator
 
 from flop_agent import runtime_capability as rc
-from jsonschema import Draft202012Validator
-from pathlib import Path
+from flop_agent.remote_content_policy import resolve_reviewed_source
 
 
 NOW = datetime(2026, 9, 6, 6, 0, tzinfo=timezone.utc)
-HASH = "a" * 64
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def observation(capability_id="technocore.runtime", response="AVAILABLE", observed_at="2026-09-06T05:00:00Z"):
-    probe = {item.capability_id: item for item in rc.probe_manifest()}[capability_id]
-    return rc.verify_runtime_fixture({
-        "schema": "flop-runtime-observation-fixture-v1",
-        "capability_id": capability_id,
-        "domain": probe.domain.value,
-        "source_id": probe.source_id.value,
-        "endpoint_id": probe.endpoint_id,
-        "method": probe.method,
-        "response_class": response,
-        "observed_at": observed_at,
-        "source_hash": HASH,
-    })
+def issue(fixture_id):
+    return rc.reviewed_runtime_observation(fixture_id)
+
+
+def ready_definitions():
+    state, domain, source = rc.CapabilityState, rc.Domain, rc.ReviewedSourceId
+    offline, documented = state.IMPLEMENTED_OFFLINE, state.DOCUMENTED_ONLY
+    return (
+        rc.CapabilityDefinition("identity.architecture", domain.IDENTITY, offline, documented, source.TECHNOCORE_SECURITY, False, True, ()),
+        rc.CapabilityDefinition("technocore.runtime", domain.TECHNOCORE, offline, documented, source.TECHNOCORE_HEALTH, True, True, ()),
+        rc.CapabilityDefinition("export.runtime", domain.EXPORT_EVIDENCE, offline, documented, source.TECHNOCORE_ROOMS_JSON, True, True, ()),
+        rc.CapabilityDefinition("faucet.runtime", domain.FAUCET, offline, documented, source.FLOP_FINANCE_TEASER, True, True, ()),
+        rc.CapabilityDefinition("network.identity", domain.TESTNET_NETWORK, offline, documented, source.FLOP_FINANCE_TEASER, True, True, (), "fixture-chain-a", "fixture-rpc-a", "fixture-genesis-a"),
+        rc.CapabilityDefinition("inference.runtime", domain.INFERENCE, offline, documented, source.FLOP_FINANCE_TEASER, True, True, ()),
+        rc.CapabilityDefinition("rail.runtime", domain.SETTLEMENT_RAIL, offline, documented, source.FLOP_FINANCE_TEASER, True, True, ()),
+        rc.CapabilityDefinition("durability.readback", domain.EVIDENCE_DURABILITY, offline, documented, source.TECHNOCORE_ROOMS_JSON, True, True, ()),
+    )
+
+
+def private_service(definitions=None, clock=lambda: NOW, ttl=timedelta(hours=6)):
+    return rc._build_readiness_service(
+        ready_definitions() if definitions is None else definitions,
+        rc._resolve_observation, clock, ttl)[0]
+
+
+def all_observations(network=rc.ReviewedRuntimeFixtureId.NETWORK_MATCH):
+    ids = (
+        rc.ReviewedRuntimeFixtureId.TECHNOCORE_AVAILABLE,
+        rc.ReviewedRuntimeFixtureId.EXPORT_AVAILABLE,
+        rc.ReviewedRuntimeFixtureId.FAUCET_AVAILABLE,
+        network,
+        rc.ReviewedRuntimeFixtureId.INFERENCE_AVAILABLE,
+        rc.ReviewedRuntimeFixtureId.RAIL_AVAILABLE,
+        rc.ReviewedRuntimeFixtureId.DURABILITY_AVAILABLE,
+    )
+    return tuple(issue(item) for item in ids)
 
 
 class RuntimeCapabilityTests(unittest.TestCase):
-    def test_documented_is_not_observed(self):
-        result = rc.assess_capabilities(now=NOW)
+    def test_production_api_has_no_sensitive_policy_injection(self):
+        forbidden = {"now", "ttl", "definitions", "resolver", "blocker_builder",
+                     "state_type", "policy", "registry", "verifier", "issuer",
+                     "fetcher", "reader", "opener", "url", "callback", "clock"}
+        for function in (rc.assess_capabilities, rc.capability_manifest,
+                         rc.reviewed_runtime_observation, rc.public_observation,
+                         rc.transition_faucet):
+            names = {name.lstrip("_").lower() for name in inspect.signature(function).parameters}
+            self.assertFalse(names & forbidden, (function, names & forbidden))
+
+    def test_empty_definitions_never_ready_or_authorized(self):
+        assess = private_service(definitions=())
+        result = assess()
+        self.assertEqual(result["overall_state"], "INVALID_CONFIGURATION")
+        self.assertFalse(result["ready_to_act"])
+        self.assertFalse(result["authorized_to_act"])
+
+    def test_missing_critical_domain_blocks(self):
+        assess = private_service(definitions=ready_definitions()[:-1])
+        result = assess(all_observations())
+        self.assertEqual(result["overall_state"], "INVALID_CONFIGURATION")
+        self.assertIn("MISSING_CRITICAL_DOMAIN", result["blocking_reasons"])
+
+    def test_arbitrary_fixture_mapping_and_raw_id_cannot_issue(self):
+        with self.assertRaises((PermissionError, TypeError)):
+            rc.reviewed_runtime_observation({"response_class": "AVAILABLE"})
+        with self.assertRaises((PermissionError, TypeError)):
+            rc.reviewed_runtime_observation("TECHNOCORE_AVAILABLE")
+
+    def test_documented_and_implemented_do_not_imply_observed(self):
+        result = private_service()()
         item = result["domains"]["TECHNOCORE"][0]
+        self.assertEqual(item["implementation_status"], "IMPLEMENTED_OFFLINE")
         self.assertEqual(item["documented_status"], "DOCUMENTED_ONLY")
         self.assertEqual(item["runtime_status"], "RUNTIME_NOT_OBSERVED")
-
-    def test_observed_is_not_authorized(self):
-        item = rc.assess_capabilities((observation(),), now=NOW)["domains"]["TECHNOCORE"][0]
-        self.assertEqual(item["runtime_status"], "RUNTIME_OBSERVED")
-        self.assertFalse(item["authorized_to_act"])
-
-    def test_third_party_report_cannot_promote_readiness(self):
-        context = rc.CapabilityEvidence("faucet.runtime", rc.Provenance.THIRD_PARTY_REPORT, "social", "AVAILABLE")
-        result = rc.assess_capabilities(now=NOW)
-        self.assertEqual(context.provenance, rc.Provenance.THIRD_PARTY_REPORT)
-        self.assertEqual(result["domains"]["FAUCET"][0]["runtime_status"], "RUNTIME_NOT_OBSERVED")
-
-    def test_stale_runtime_observation(self):
-        token = observation(observed_at="2026-09-05T00:00:00Z")
-        item = rc.assess_capabilities((token,), now=NOW)["domains"]["TECHNOCORE"][0]
-        self.assertEqual(item["runtime_status"], "STALE_RUNTIME_OBSERVATION")
-
-    def test_conflicting_documentation_and_runtime(self):
-        item = rc.assess_capabilities((observation(response="UNAVAILABLE"),), now=NOW)["domains"]["TECHNOCORE"][0]
-        self.assertEqual(item["runtime_status"], "CONFLICTING_CAPABILITY_EVIDENCE")
-
-    def test_faucet_documented_but_unobserved_and_unapproved(self):
-        item = rc.assess_capabilities(now=NOW)["domains"]["FAUCET"][0]
-        self.assertEqual(item["documented_status"], "DOCUMENTED_ONLY")
-        self.assertIn("MISSING_RUNTIME_OBSERVATION", item["blocking_reasons"])
-        self.assertIn("HUMAN_APPROVAL_REQUIRED", item["blocking_reasons"])
-
-    def test_faucet_state_machine_is_ordered_and_cannot_authorize(self):
-        state = rc.FaucetState.NO_OFFICIAL_ENDPOINT
-        for event in ("documented", "source_reviewed", "runtime_observed",
-                      "requirements_verified", "request_approval"):
-            state = rc.transition_faucet(state, event)
-        self.assertEqual(state, rc.FaucetState.READY_FOR_HUMAN_APPROVAL)
-        with self.assertRaises(ValueError):
-            rc.transition_faucet(state, "authorize")
-
-    def test_no_official_endpoint_fails_closed(self):
-        definition = rc.CapabilityDefinition("x", rc.Domain.FAUCET, rc.CapabilityState.IMPLEMENTED_OFFLINE, rc.CapabilityState.DOCUMENTED_ONLY, None)
-        self.assertIn("OFFICIAL_ENDPOINT_UNVERIFIED", rc._blockers(definition, rc.CapabilityState.RUNTIME_NOT_OBSERVED))
-
-    def test_chain_id_documented_does_not_make_it_observed(self):
-        item = rc.assess_capabilities(now=NOW)["domains"]["TESTNET_NETWORK"][0]
-        self.assertEqual(item["runtime_status"], "RUNTIME_NOT_OBSERVED")
-        self.assertIn("CHAIN_ID_UNOBSERVED", item["blocking_reasons"])
-
-    def test_inference_unavailable_remains_blocked(self):
-        token = observation("inference.runtime", "UNAVAILABLE")
-        item = rc.assess_capabilities((token,), now=NOW)["domains"]["INFERENCE"][0]
-        self.assertFalse(item["ready_to_act"])
-
-    def test_paperrail_is_not_economic_value(self):
-        rail = rc.domain_readiness()["SETTLEMENT_RAIL"]
-        self.assertTrue(rail["paperrail_protocol_valid"])
-        self.assertFalse(rail["economic_value_verified"])
-
-    def test_one_critical_domain_blocks_overall(self):
-        result = rc.assess_capabilities((observation(),), now=NOW)
-        self.assertEqual(result["overall_state"], "OBSERVATION_REQUIRED")
         self.assertFalse(result["ready_to_act"])
 
-    def test_human_approval_is_separate_authority(self):
-        with self.assertRaises(PermissionError):
-            rc.ActionAuthorization("approved")
-        self.assertFalse(rc.assess_capabilities(now=NOW)["authorized_to_act"])
+    def test_third_party_and_descriptive_records_cannot_promote(self):
+        values = ({"status": "RUNTIME_OBSERVED", "provenance": "THIRD_PARTY_REPORT"},
+                  {"status": "RUNTIME_OBSERVED", "provenance": "UNTRUSTED_CONTEXT"})
+        for value in values:
+            with self.assertRaises((PermissionError, TypeError)):
+                rc.assess_capabilities((value,))
 
-    def test_serialized_evidence_cannot_become_authority(self):
-        token = observation()
-        public = dict(rc.public_observation(token))
-        serialized = json.loads(json.dumps(public))
-        with self.assertRaises((PermissionError, TypeError)):
-            rc.assess_capabilities((serialized,), now=NOW)
+    def test_observation_construction_copy_replace_pickle_and_json_rejected(self):
+        with self.assertRaises(PermissionError):
+            rc.RuntimeCapabilityObservation()
+        raw = object.__new__(rc.RuntimeCapabilityObservation)
+        with self.assertRaises(PermissionError):
+            rc.assess_capabilities((raw,))
+        token = issue(rc.ReviewedRuntimeFixtureId.TECHNOCORE_AVAILABLE)
+        with self.assertRaises(TypeError):
+            dataclasses.replace(token)
         for operation in (copy.copy, copy.deepcopy, pickle.dumps):
             with self.assertRaises(TypeError):
                 operation(token)
+        projection = json.loads(json.dumps(dict(rc.public_observation(token))))
+        self.assertEqual(projection["status"], "DESCRIPTIVE_ONLY")
+        with self.assertRaises((PermissionError, TypeError)):
+            rc.assess_capabilities((projection,))
 
-    def test_caller_created_observation_rejected(self):
+    def test_cross_authority_token_is_rejected(self):
+        other_issue, _, _, _ = rc._build_runtime_authority(rc._PROBES, resolve_reviewed_source)
+        token = other_issue(rc.ReviewedRuntimeFixtureId.TECHNOCORE_AVAILABLE)
         with self.assertRaises(PermissionError):
-            rc.RuntimeCapabilityObservation()
+            rc.assess_capabilities((token,))
 
-    def test_cross_authority_observation_rejected(self):
-        issue, _ = rc._new_runtime_authority()
-        probe = {item.capability_id: item for item in rc.probe_manifest()}["technocore.runtime"]
-        token = issue({"schema": "flop-runtime-observation-fixture-v1", "capability_id": probe.capability_id, "domain": probe.domain.value, "source_id": probe.source_id.value, "endpoint_id": probe.endpoint_id, "method": "GET", "response_class": "AVAILABLE", "observed_at": "2026-09-06T05:00:00Z", "source_hash": HASH})
+    def test_stale_observation_is_not_actionable(self):
+        result = private_service()((issue(rc.ReviewedRuntimeFixtureId.TECHNOCORE_STALE),)
+                                   + all_observations()[1:])
+        item = result["domains"]["TECHNOCORE"][0]
+        self.assertEqual(item["runtime_status"], "STALE_RUNTIME_OBSERVATION")
+        self.assertFalse(item["ready_to_act"])
+        self.assertFalse(result["ready_to_act"])
+
+    def test_public_clock_and_ttl_injection_are_absent(self):
+        signature = inspect.signature(rc.assess_capabilities)
+        self.assertNotIn("now", signature.parameters)
+        self.assertNotIn("ttl", signature.parameters)
+        with self.assertRaises(TypeError):
+            rc.assess_capabilities(now=NOW)
+        with self.assertRaises(TypeError):
+            rc.assess_capabilities(ttl=timedelta(days=365))
+
+    def test_unavailable_conflict_survives_module_rebinding(self):
+        token = issue(rc.ReviewedRuntimeFixtureId.TECHNOCORE_UNAVAILABLE)
+        assess = private_service()
+        originals = rc.ResponseClass, rc.CapabilityState, rc.OverallState
+        rc.ResponseClass = type("FakeResponse", (), {"UNAVAILABLE": object()})
+        rc.CapabilityState = object
+        rc.OverallState = object
+        try:
+            item = assess((token,))["domains"]["TECHNOCORE"][0]
+        finally:
+            rc.ResponseClass, rc.CapabilityState, rc.OverallState = originals
+        self.assertEqual(item["runtime_status"], "CONFLICTING_CAPABILITY_EVIDENCE")
+
+    def test_faucet_progression_is_sealed_and_never_authorizes(self):
+        transition = rc.transition_faucet
+        rc._FAUCET_TRANSITIONS = {rc.FaucetState.NO_OFFICIAL_ENDPOINT: {
+            "jump": "AUTHORIZED_TO_CLAIM"}}
+        state = rc.FaucetState.NO_OFFICIAL_ENDPOINT
+        for event in ("documented", "source_reviewed", "runtime_observed",
+                      "requirements_verified", "request_approval"):
+            state = transition(state, event)
+        self.assertEqual(state.value, "READY_FOR_HUMAN_APPROVAL")
+        with self.assertRaises(ValueError):
+            transition(rc.FaucetState.NO_OFFICIAL_ENDPOINT, "jump")
+        with self.assertRaises(ValueError):
+            transition(state, "authorize")
+
+    def test_faucet_runtime_still_requires_requirements_and_human(self):
+        token = issue(rc.ReviewedRuntimeFixtureId.FAUCET_AVAILABLE)
+        item = rc.assess_capabilities((token,), rc.ReadinessAction.FAUCET_CLAIM)["domains"]["FAUCET"][0]
+        self.assertEqual(item["runtime_status"], "RUNTIME_OBSERVED")
+        self.assertIn("CLAIM_REQUIREMENTS_UNVERIFIED", item["blocking_reasons"])
+        self.assertIn("HUMAN_APPROVAL_REQUIRED", item["blocking_reasons"])
+        self.assertFalse(item["authorized_to_act"])
+
+    def test_every_prerequisite_ready_does_not_authorize(self):
+        result = private_service()(all_observations())
+        self.assertEqual(result["overall_state"], "ACTION_READY")
+        self.assertTrue(result["ready_to_act"])
+        self.assertFalse(result["authorized_to_act"])
+
+    def test_action_authority_is_unconstructible_and_not_observation(self):
         with self.assertRaises(PermissionError):
-            rc.assess_capabilities((token,), now=NOW)
+            rc.ActionAuthorization()
+        token = issue(rc.ReviewedRuntimeFixtureId.FAUCET_AVAILABLE)
+        with self.assertRaises(PermissionError):
+            rc.assess_capabilities((token,), authorization=token)
 
-    def test_probe_specs_are_inert_and_bounded(self):
+    def test_chain_rpc_and_genesis_mismatch_block_live(self):
+        result = private_service()(all_observations(rc.ReviewedRuntimeFixtureId.NETWORK_MISMATCH))
+        item = result["domains"]["TESTNET_NETWORK"][0]
+        self.assertEqual(item["documented_chain_id"], "fixture-chain-a")
+        self.assertEqual(item["observed_chain_id"], "fixture-chain-b")
+        self.assertEqual(item["runtime_status"], "CONFLICTING_CAPABILITY_EVIDENCE")
+        self.assertFalse(item["testnet_live"])
+        self.assertFalse(result["ready_to_act"])
+
+    def test_matching_network_identity_can_be_live_only_when_ready(self):
+        result = private_service()(all_observations())
+        item = result["domains"]["TESTNET_NETWORK"][0]
+        self.assertTrue(item["testnet_live"])
+        self.assertEqual(item["documented_rpc_identity"], item["observed_rpc_identity"])
+
+    def test_inference_schema_auth_and_spend_are_canonical_blockers(self):
+        item = rc.assess_capabilities((issue(rc.ReviewedRuntimeFixtureId.INFERENCE_AVAILABLE),),
+            rc.ReadinessAction.INFERENCE_REQUEST)["domains"]["INFERENCE"][0]
+        for blocker in ("REQUEST_SCHEMA_REVIEW_REQUIRED", "AUTHENTICATION_MODEL_REVIEW_REQUIRED",
+                        "COST_SPEND_SEMANTICS_REVIEW_REQUIRED", "HUMAN_APPROVAL_REQUIRED"):
+            self.assertIn(blocker, item["blocking_reasons"])
+        self.assertFalse(item["ready_to_act"])
+
+    def test_identity_backup_and_recovery_are_canonical_blockers(self):
+        item = rc.assess_capabilities()["domains"]["IDENTITY"][0]
+        self.assertIn("BACKUP_DRILL_REQUIRED", item["blocking_reasons"])
+        self.assertIn("RECOVERY_DRILL_REQUIRED", item["blocking_reasons"])
+
+    def test_rail_durability_and_paperrail_remain_fail_closed(self):
+        manifest = rc.assess_capabilities()
+        rail = manifest["domains"]["SETTLEMENT_RAIL"][0]
+        durability = manifest["domains"]["EVIDENCE_DURABILITY"][0]
+        self.assertIn("ECONOMIC_VALUE_UNVERIFIED", rail["blocking_reasons"])
+        self.assertIn("RUNTIME_WRITE_NOT_AUTHORIZED", durability["blocking_reasons"])
+        self.assertTrue(rc.domain_readiness()["SETTLEMENT_RAIL"]["paperrail_protocol_valid"])
+        self.assertFalse(rc.domain_readiness()["SETTLEMENT_RAIL"]["economic_value_verified"])
+
+    def test_future_probes_are_fixed_reviewed_and_inert(self):
         for probe in rc.probe_manifest():
+            self.assertIsInstance(probe.source_id, rc.ReviewedSourceId)
             self.assertEqual(probe.method, "GET")
             self.assertFalse(probe.redirects)
             self.assertEqual(probe.retry_count, 0)
+        config = [item for item in rc.probe_manifest() if item.capability_id == "technocore.config"][0]
+        self.assertEqual(config.source_id, rc.ReviewedSourceId.TECHNOCORE_CONFIG)
 
-    def test_public_manifest_matches_canonical_schema(self):
-        root = Path(__file__).resolve().parents[1]
-        schema = json.loads((root / "schemas/runtime-capability.v1.json").read_text())
-        Draft202012Validator(schema).validate(rc.capability_manifest(now=NOW))
+    def test_delegation_budget_replay_drift_and_protocol_taxonomy(self):
+        status = rc.domain_readiness()
+        self.assertFalse(status["DELEGATION_VERIFICATION"]["delegation_ready"])
+        self.assertTrue(status["DELEGATION_VERIFICATION"]["root_key_local_only"])
+        self.assertEqual(status["TOOL_OUTPUT_BUDGET"]["framing"], "UNTRUSTED_CONTENT")
+        self.assertFalse(status["TOOL_OUTPUT_BUDGET"]["auto_fetch"])
+        self.assertFalse(status["TOOL_OUTPUT_BUDGET"]["auto_action"])
+        self.assertFalse(status["REPLAY_SAFETY"]["replay_ledger_implemented"])
+        self.assertEqual(status["RUNTIME_DRIFT"]["runtime"], "RUNTIME_NOT_OBSERVED")
+        self.assertEqual(status["PROTOCOL_MODEL"]["ptlc"], "EXPERIMENTAL_UNEXERCISED")
+        self.assertEqual(status["PROTOCOL_MODEL"]["owned_room_auth"], "INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE")
+        self.assertFalse(status["PROTOCOL_MODEL"]["remote_mcp_key_custody"])
 
-    def test_production_assessor_ignores_authority_global_rebinding(self):
-        token = observation()
-        original = rc._resolve_observation
-        rc._resolve_observation = lambda _token: (_ for _ in ()).throw(AssertionError("rebound"))
+    def test_security_sensitive_callables_have_no_module_global_reads(self):
+        functions = (rc.reviewed_runtime_observation, rc._resolve_observation,
+                     rc.public_observation, rc.assess_capabilities,
+                     rc.transition_faucet, rc.capability_manifest)
+        for function in functions:
+            self.assertEqual(inspect.getclosurevars(function).globals, {}, function)
+
+    def test_module_rebinding_cannot_change_production_projection(self):
+        before = rc.capability_manifest()
+        originals = rc.MANIFEST_SCHEMA, rc.DEFAULT_OBSERVATION_TTL, rc._PROBES
+        rc.MANIFEST_SCHEMA, rc.DEFAULT_OBSERVATION_TTL, rc._PROBES = "forged", timedelta(days=999), ()
         try:
-            item = rc.assess_capabilities((token,), now=NOW)["domains"]["TECHNOCORE"][0]
+            after = rc.capability_manifest()
         finally:
-            rc._resolve_observation = original
-        self.assertEqual(item["runtime_status"], "RUNTIME_OBSERVED")
+            rc.MANIFEST_SCHEMA, rc.DEFAULT_OBSERVATION_TTL, rc._PROBES = originals
+        self.assertEqual(before, after)
+
+    def test_manifest_and_cli_validate_against_canonical_schema(self):
+        schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
+        validator = Draft202012Validator(schema)
+        validator.validate(rc.capability_manifest())
+        output = subprocess.check_output(
+            ["python3", "-m", "flop_agent.cli", "testnet-readiness", "capabilities"],
+            cwd=ROOT, env={"PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1"})
+        cli = json.loads(output)
+        self.assertEqual(list(validator.iter_errors(cli)), [])
+
+    def test_schema_rejects_authorized_without_ready_and_action_ready_blockers(self):
+        schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
+        validator = Draft202012Validator(schema)
+        value = rc.capability_manifest()
+        value["authorized_to_act"], value["ready_to_act"] = True, False
+        self.assertTrue(list(validator.iter_errors(value)))
+        value = rc.capability_manifest()
+        value["overall_state"], value["blocking_reasons"] = "ACTION_READY", ["MISSING_RUNTIME_OBSERVATION"]
+        self.assertTrue(list(validator.iter_errors(value)))
 
 
 if __name__ == "__main__":
