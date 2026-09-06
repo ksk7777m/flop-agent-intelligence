@@ -31,6 +31,7 @@ def main() -> None:
     testnet = commands.add_parser("testnet-readiness")
     testnet_commands = testnet.add_subparsers(dest="testnet_command", required=True)
     testnet_commands.add_parser("status")
+    testnet_commands.add_parser("capabilities")
     faucet = testnet_commands.add_parser("faucet")
     faucet.add_argument("--dry-run", action="store_true")
     balance = testnet_commands.add_parser("balance")
@@ -124,6 +125,19 @@ def main() -> None:
             print("FLOP TESTNET READINESS\n")
             for label, value in current_status().items():
                 print(f"{label:<21} {value}")
+        elif args.testnet_command == "capabilities":
+            from .runtime_capability import capability_manifest, domain_readiness
+
+            assessment = capability_manifest()
+            print(json.dumps({
+                "schema": assessment["schema"],
+                "implementation_readiness": assessment["implementation_readiness"],
+                "live_runtime_readiness": assessment["live_runtime_readiness"],
+                "ready_to_act": assessment["ready_to_act"],
+                "authorized_to_act": assessment["authorized_to_act"],
+                "blocking_reasons": list(assessment["blocking_reasons"]),
+                "domains": {key: dict(value) for key, value in domain_readiness().items()},
+            }, indent=2))
         elif args.testnet_command == "faucet":
             if not args.dry_run:
                 raise SystemExit(str(LiveActionDisabled("faucet requires --dry-run; live claims are FORBIDDEN_V0")))

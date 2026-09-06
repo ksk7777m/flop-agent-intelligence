@@ -48,6 +48,13 @@
       "path": "schemas/capabilities.v1.json",
       "purpose": "Strictly validates disabled write, scheduler, Presence, KV, Engagement, collaboration, and drift capability states.",
       "related_endpoint": "https://ksk7777m.github.io/flop-agent-intelligence/api/capabilities.json"
+    },
+    {
+      "name": "Runtime Capability Manifest V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/runtime-capability.v1.json",
+      "path": "schemas/runtime-capability.v1.json",
+      "purpose": "Separates implementation, documentation, runtime observation, action readiness, and action authorization.",
+      "related_endpoint": null
     }
   ]
 }
