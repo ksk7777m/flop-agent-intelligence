@@ -172,6 +172,13 @@ class CapabilityDefinition:
     documented_chain_id: str | None = None
     documented_rpc_identity: str | None = None
     documented_network_identity: str | None = None
+    rail_type: str | None = None
+    protocol_valid: bool | None = None
+    rail_crypto_verified: bool | None = None
+    economic_value_verified: bool | None = None
+    finality_verified: bool | None = None
+    replay_ledger_implemented: bool | None = None
+    side_effect_journal_implemented: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -241,14 +248,14 @@ def _production_definitions() -> tuple[CapabilityDefinition, ...]:
         CapabilityDefinition("identity.architecture", Domain.IDENTITY, offline, documented, ReviewedSourceId.TECHNOCORE_SECURITY, False, True, ("BACKUP_DRILL_REQUIRED", "RECOVERY_DRILL_REQUIRED")),
         CapabilityDefinition("technocore.runtime", Domain.TECHNOCORE, offline, documented, ReviewedSourceId.TECHNOCORE_HEALTH, True, True, ()),
         CapabilityDefinition("export.runtime", Domain.EXPORT_EVIDENCE, offline, documented, ReviewedSourceId.TECHNOCORE_ROOMS_JSON, True, True, ("TRUSTED_ACQUISITION_RUNTIME_UNVERIFIED", "COMPLETENESS_RUNTIME_UNVERIFIED")),
-        CapabilityDefinition("faucet.runtime", Domain.FAUCET, offline, documented, ReviewedSourceId.FLOP_FINANCE_TEASER, True, True, ("CLAIM_REQUIREMENTS_UNVERIFIED", "HUMAN_APPROVAL_REQUIRED", "REPLAY_LEDGER_REQUIRED", "SIDE_EFFECT_JOURNAL_REQUIRED")),
+        CapabilityDefinition("faucet.runtime", Domain.FAUCET, offline, documented, ReviewedSourceId.FLOP_FINANCE_TEASER, True, True, ("CLAIM_REQUIREMENTS_UNVERIFIED", "HUMAN_APPROVAL_REQUIRED")),
         CapabilityDefinition("network.identity", Domain.TESTNET_NETWORK, offline, documented, ReviewedSourceId.FLOP_FINANCE_TEASER, True, True, ("CHAIN_ID_UNDOCUMENTED", "RPC_IDENTITY_UNDOCUMENTED", "NETWORK_IDENTITY_UNDOCUMENTED")),
         CapabilityDefinition("inference.runtime", Domain.INFERENCE, offline, documented, ReviewedSourceId.FLOP_FINANCE_TEASER, True, True, ("REQUEST_SCHEMA_REVIEW_REQUIRED", "AUTHENTICATION_MODEL_REVIEW_REQUIRED", "COST_SPEND_SEMANTICS_REVIEW_REQUIRED", "HUMAN_APPROVAL_REQUIRED")),
-        CapabilityDefinition("rail.runtime", Domain.SETTLEMENT_RAIL, offline, documented, ReviewedSourceId.FLOP_FINANCE_TEASER, True, True, ("RAIL_FINALITY_UNOBSERVED", "ECONOMIC_VALUE_UNVERIFIED", "REPLAY_LEDGER_REQUIRED", "SIDE_EFFECT_JOURNAL_REQUIRED")),
+        CapabilityDefinition("rail.runtime", Domain.SETTLEMENT_RAIL, offline, documented, ReviewedSourceId.FLOP_FINANCE_TEASER, True, True, ("RAIL_FINALITY_UNOBSERVED", "ECONOMIC_VALUE_UNVERIFIED"), rail_type="PAPER_RAIL", protocol_valid=True, rail_crypto_verified=True, economic_value_verified=False, finality_verified=False),
         CapabilityDefinition("durability.readback", Domain.EVIDENCE_DURABILITY, offline, CapabilityState.RUNTIME_NOT_OBSERVED, ReviewedSourceId.TECHNOCORE_ROOMS_JSON, True, True, ("RUNTIME_WRITE_NOT_AUTHORIZED", "RUNTIME_READBACK_NOT_OBSERVED")),
         CapabilityDefinition("delegation.verification", Domain.DELEGATION_VERIFICATION, offline, documented, ReviewedSourceId.TECHNOCORE_SECURITY, True, False, ("DELEGATION_RUNTIME_UNOBSERVED",)),
         CapabilityDefinition("tool.output_budget", Domain.TOOL_OUTPUT_BUDGET, offline, CapabilityState.REVIEW_REQUIRED, None, False, False, ()),
-        CapabilityDefinition("replay.safety", Domain.REPLAY_SAFETY, CapabilityState.NOT_IMPLEMENTED, CapabilityState.REVIEW_REQUIRED, None, False, False, ("REPLAY_LEDGER_REQUIRED", "SIDE_EFFECT_JOURNAL_REQUIRED")),
+        CapabilityDefinition("replay.safety", Domain.REPLAY_SAFETY, CapabilityState.NOT_IMPLEMENTED, CapabilityState.REVIEW_REQUIRED, None, False, False, ("REPLAY_LEDGER_REQUIRED", "SIDE_EFFECT_JOURNAL_REQUIRED"), replay_ledger_implemented=False, side_effect_journal_implemented=False),
         CapabilityDefinition("activity.quality", Domain.ACTIVITY_QUALITY, offline, CapabilityState.REVIEW_REQUIRED, None, False, False, ()),
         CapabilityDefinition("protocol.generic_models", Domain.PROTOCOL_MODEL, offline, documented, ReviewedSourceId.TECHNOCORE_SECURITY, False, False, ("UPSTREAM_VERSION_NOT_FINALIZED", "PTLC_EXPERIMENTAL_UNEXERCISED", "OWNED_ROOM_INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE")),
         CapabilityDefinition("runtime.release_drift", Domain.RUNTIME_DRIFT, offline, documented, ReviewedSourceId.TECHNOCORE_CONFIG, True, False, ("RELEASE_MAIN_DOC_RUNTIME_UNRECONCILED",)),
@@ -363,6 +370,27 @@ def _build_faucet_transition_service() -> Callable[[FaucetState, str], FaucetSta
     return transition
 
 
+def _action_dependency_policy(
+    domain_type: type[Domain], action_type: type[ReadinessAction],
+) -> Mapping[ReadinessAction, frozenset[Domain]]:
+    general = frozenset({domain_type.IDENTITY, domain_type.TECHNOCORE,
+        domain_type.EXPORT_EVIDENCE, domain_type.FAUCET, domain_type.TESTNET_NETWORK,
+        domain_type.INFERENCE, domain_type.SETTLEMENT_RAIL,
+        domain_type.EVIDENCE_DURABILITY, domain_type.REPLAY_SAFETY})
+    return MappingProxyType({
+        action_type.GENERAL_TESTNET: general,
+        action_type.FAUCET_CLAIM: frozenset({domain_type.IDENTITY, domain_type.TECHNOCORE,
+            domain_type.FAUCET, domain_type.TESTNET_NETWORK,
+            domain_type.EVIDENCE_DURABILITY, domain_type.REPLAY_SAFETY}),
+        action_type.INFERENCE_REQUEST: frozenset({domain_type.IDENTITY,
+            domain_type.TESTNET_NETWORK, domain_type.INFERENCE,
+            domain_type.EVIDENCE_DURABILITY}),
+        action_type.SETTLEMENT: frozenset({domain_type.IDENTITY,
+            domain_type.SETTLEMENT_RAIL, domain_type.EVIDENCE_DURABILITY,
+            domain_type.REPLAY_SAFETY}),
+    })
+
+
 def _build_readiness_service(
     definitions_input: tuple[CapabilityDefinition, ...],
     resolver: Callable[[RuntimeCapabilityObservation], _ObservationRecord],
@@ -377,12 +405,7 @@ def _build_readiness_service(
     required_domains = frozenset({Domain.IDENTITY, Domain.TECHNOCORE, Domain.EXPORT_EVIDENCE,
         Domain.FAUCET, Domain.TESTNET_NETWORK, Domain.INFERENCE, Domain.SETTLEMENT_RAIL,
         Domain.EVIDENCE_DURABILITY})
-    action_dependencies = proxy({
-        action_type.GENERAL_TESTNET: required_domains,
-        action_type.FAUCET_CLAIM: frozenset({Domain.IDENTITY, Domain.TECHNOCORE, Domain.FAUCET, Domain.TESTNET_NETWORK, Domain.EVIDENCE_DURABILITY}),
-        action_type.INFERENCE_REQUEST: frozenset({Domain.IDENTITY, Domain.TESTNET_NETWORK, Domain.INFERENCE, Domain.EVIDENCE_DURABILITY}),
-        action_type.SETTLEMENT: frozenset({Domain.IDENTITY, Domain.TESTNET_NETWORK, Domain.SETTLEMENT_RAIL, Domain.EVIDENCE_DURABILITY}),
-    })
+    action_dependencies = _action_dependency_policy(domain_type, action_type)
     definitions = tuple(definitions_input)
     configured_domains = frozenset(item.domain for item in definitions if item.critical)
     configuration_valid = bool(definitions) and required_domains <= configured_domains
@@ -476,7 +499,14 @@ def _build_readiness_service(
                 "observed_rpc_identity": observed_rpc,
                 "documented_network_identity": definition.documented_network_identity,
                 "observed_network_identity": observed_network,
-                "testnet_live": (definition.domain is domain_type.TESTNET_NETWORK and ready)}
+                "testnet_live": (definition.domain is domain_type.TESTNET_NETWORK and ready),
+                "rail_type": definition.rail_type,
+                "protocol_valid": definition.protocol_valid,
+                "rail_crypto_verified": definition.rail_crypto_verified,
+                "economic_value_verified": definition.economic_value_verified,
+                "finality_verified": definition.finality_verified,
+                "replay_ledger_implemented": definition.replay_ledger_implemented,
+                "side_effect_journal_implemented": definition.side_effect_journal_implemented}
             rows[definition.domain.value].append(row)
             if required:
                 critical_rows.append(row)
@@ -501,6 +531,18 @@ def _build_readiness_service(
             "live_runtime_readiness": overall_state.value, "overall_state": overall_state.value,
             "ready_to_act": all_ready, "authorized_to_act": False,
             "blocking_reasons": tuple(blockers),
+            "action_dependencies": proxy({
+                item.value: proxy({domain.value: ("REQUIRED" if domain in dependencies else "NOT_APPLICABLE")
+                                   for domain in domain_type})
+                for item, dependencies in action_dependencies.items()}),
+            "runtime_values": tuple(
+                proxy({"value_id": value_id, "documented_value": None,
+                       "runtime_observed_value": None, "observed_at": None,
+                       "source_id": "TECHNOCORE_CONFIG", "observation_hash": None,
+                       "freshness": "NOT_OBSERVED", "status": "NOT_OBSERVED",
+                       "ready": False})
+                for value_id in ("stillborn_seconds", "idle_seconds", "room_capacity",
+                                 "note_capacity", "rate_limit", "quota")),
             "domains": proxy({key: tuple(value) for key, value in rows.items()})})
 
     def project(observations: tuple[RuntimeCapabilityObservation, ...] = (),
@@ -512,6 +554,8 @@ def _build_readiness_service(
             "overall_state": result["overall_state"], "ready_to_act": result["ready_to_act"],
             "authorized_to_act": result["authorized_to_act"],
             "blocking_reasons": list(result["blocking_reasons"]),
+            "action_dependencies": {key: dict(value) for key, value in result["action_dependencies"].items()},
+            "runtime_values": [dict(value) for value in result["runtime_values"]],
             "domains": {key: list(value) for key, value in result["domains"].items()}}
     return assess, project
 
@@ -526,9 +570,132 @@ def _build_clock(datetime_type: type[datetime], utc: timezone) -> Callable[[], d
     return clock
 
 
+def _build_manifest_validator(
+    dependencies_input: Mapping[ReadinessAction, frozenset[Domain]],
+) -> Callable[[Mapping[str, Any]], tuple[str, ...]]:
+    mapping_type, sequence_type = Mapping, list
+    action_names = frozenset(item.value for item in ReadinessAction)
+    domain_names = tuple(item.value for item in Domain)
+    expected = MappingProxyType({
+        action.value: MappingProxyType({
+            domain: ("REQUIRED" if domain in {item.value for item in domains}
+                     else "NOT_APPLICABLE")
+            for domain in domain_names})
+        for action, domains in dependencies_input.items()})
+    blocked_states = frozenset({"BLOCKED", "OBSERVATION_REQUIRED",
+                                "HUMAN_REVIEW_REQUIRED", "INVALID_CONFIGURATION"})
+    runtime_value_ids = frozenset({"stillborn_seconds", "idle_seconds",
+        "room_capacity", "note_capacity", "rate_limit", "quota"})
+    runtime_statuses = frozenset({"DOCUMENTED_ONLY", "RUNTIME_OBSERVED_VALUE",
+        "STALE_RUNTIME_VALUE", "CONFLICTING_VALUE", "NOT_OBSERVED"})
+
+    def validate(manifest: Mapping[str, Any]) -> tuple[str, ...]:
+        if not isinstance(manifest, mapping_type):
+            return ("MANIFEST_NOT_OBJECT",)
+        errors: list[str] = []
+        action = manifest.get("action")
+        if action not in action_names:
+            errors.append("ACTION_INVALID")
+        domains = manifest.get("domains")
+        rows: list[Mapping[str, Any]] = []
+        if isinstance(domains, mapping_type):
+            for name in domain_names:
+                values = domains.get(name)
+                if not isinstance(values, sequence_type) or not values:
+                    errors.append("DOMAIN_MISSING:" + name)
+                    continue
+                if not all(isinstance(value, mapping_type) for value in values):
+                    errors.append("DOMAIN_ROW_INVALID:" + name)
+                    continue
+                rows.extend(values)
+        else:
+            errors.append("DOMAINS_INVALID")
+        dependency_manifest = manifest.get("action_dependencies")
+        if not isinstance(dependency_manifest, mapping_type):
+            errors.append("DEPENDENCY_GRAPH_MISSING")
+        else:
+            for name, policy in expected.items():
+                if dependency_manifest.get(name) != policy:
+                    errors.append("DEPENDENCY_GRAPH_MISMATCH:" + name)
+        if action in expected:
+            required_domains = frozenset(name for name, label in expected[action].items()
+                                         if label == "REQUIRED")
+            for name in required_domains:
+                if not any(row.get("domain") == name and row.get("required_for_action") is True
+                           for row in rows):
+                    errors.append("REQUIRED_DEPENDENCY_MISSING:" + name)
+            for row in rows:
+                should_be_required = row.get("domain") in required_domains
+                if row.get("required_for_action") is not should_be_required:
+                    errors.append("REQUIRED_DEPENDENCY_LABEL_INVALID:" + str(row.get("capability_id")))
+        overall_state = manifest.get("overall_state")
+        ready = manifest.get("ready_to_act")
+        authorized = manifest.get("authorized_to_act")
+        blockers = manifest.get("blocking_reasons")
+        required_rows = [row for row in rows if row.get("required_for_action") is True]
+        if overall_state in {"ACTION_READY", "AUTHORIZED"}:
+            if ready is not True:
+                errors.append("ACTION_STATE_NOT_READY")
+            if blockers != []:
+                errors.append("ACTION_STATE_HAS_BLOCKERS")
+            for row in required_rows:
+                if row.get("ready_to_act") is not True or row.get("blocking_reasons") != []:
+                    errors.append("REQUIRED_CHILD_NOT_READY:" + str(row.get("capability_id")))
+                if row.get("runtime_status") == "STALE_RUNTIME_OBSERVATION":
+                    errors.append("REQUIRED_CHILD_STALE:" + str(row.get("capability_id")))
+        if overall_state == "ACTION_READY" and authorized is not False:
+            errors.append("ACTION_READY_AUTHORIZATION_INVALID")
+        if overall_state == "AUTHORIZED" and authorized is not True:
+            errors.append("AUTHORIZED_WITHOUT_AUTHORITY")
+        if overall_state in blocked_states and authorized is not False:
+            errors.append("BLOCKED_STATE_AUTHORIZED")
+        for row in rows:
+            if row.get("rail_type") == "PAPER_RAIL":
+                if row.get("economic_value_verified") is not False:
+                    errors.append("PAPER_RAIL_ECONOMIC_VALUE_INVALID")
+                if row.get("finality_verified") is not False:
+                    errors.append("PAPER_RAIL_FINALITY_INVALID")
+            if (overall_state in {"ACTION_READY", "AUTHORIZED"}
+                    and row.get("domain") == "REPLAY_SAFETY"
+                    and row.get("required_for_action") is True):
+                if row.get("replay_ledger_implemented") is not True:
+                    errors.append("REPLAY_LEDGER_NOT_READY")
+                if row.get("side_effect_journal_implemented") is not True:
+                    errors.append("SIDE_EFFECT_JOURNAL_NOT_READY")
+        runtime_values = manifest.get("runtime_values")
+        if not isinstance(runtime_values, sequence_type):
+            errors.append("RUNTIME_VALUES_INVALID")
+        else:
+            found_ids: set[str] = set()
+            for value in runtime_values:
+                if not isinstance(value, mapping_type):
+                    errors.append("RUNTIME_VALUE_INVALID")
+                    continue
+                value_id, status = value.get("value_id"), value.get("status")
+                if value_id not in runtime_value_ids or value_id in found_ids:
+                    errors.append("RUNTIME_VALUE_ID_INVALID:" + str(value_id))
+                found_ids.add(value_id)
+                if status not in runtime_statuses:
+                    errors.append("RUNTIME_VALUE_STATUS_INVALID:" + str(value_id))
+                documented, observed_value = value.get("documented_value"), value.get("runtime_observed_value")
+                if documented is not None and observed_value is not None and documented != observed_value and status != "CONFLICTING_VALUE":
+                    errors.append("RUNTIME_VALUE_CONFLICT_UNMARKED:" + str(value_id))
+                if status in {"CONFLICTING_VALUE", "STALE_RUNTIME_VALUE"} and value.get("ready") is not False:
+                    errors.append("RUNTIME_VALUE_UNSAFE_READY:" + str(value_id))
+                if status == "RUNTIME_OBSERVED_VALUE" and any(value.get(key) is None for key in
+                    ("runtime_observed_value", "observed_at", "source_id", "observation_hash")):
+                    errors.append("RUNTIME_VALUE_OBSERVATION_INCOMPLETE:" + str(value_id))
+            if found_ids != runtime_value_ids:
+                errors.append("RUNTIME_VALUE_SET_INCOMPLETE")
+        return tuple(dict.fromkeys(errors))
+    return validate
+
+
 _production_clock = _build_clock(datetime, timezone.utc)
 assess_capabilities, capability_manifest = _build_readiness_service(_production_definitions(), _resolve_observation, _production_clock, DEFAULT_OBSERVATION_TTL)
 transition_faucet = _build_faucet_transition_service()
+validate_capability_manifest = _build_manifest_validator(
+    _action_dependency_policy(Domain, ReadinessAction))
 
 
 def _build_static_catalogs() -> tuple[Callable[[], Mapping[str, Any]], Callable[[], tuple[Mapping[str, str], ...]]]:

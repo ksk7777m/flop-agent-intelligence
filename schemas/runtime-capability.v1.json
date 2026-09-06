@@ -4,7 +4,7 @@
   "title": "FLOP Runtime Capability Manifest v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "status", "action", "implementation_readiness", "live_runtime_readiness", "overall_state", "ready_to_act", "authorized_to_act", "blocking_reasons", "domains"],
+  "required": ["schema", "status", "action", "implementation_readiness", "live_runtime_readiness", "overall_state", "ready_to_act", "authorized_to_act", "blocking_reasons", "action_dependencies", "runtime_values", "domains"],
   "properties": {
     "schema": {"const": "flop-runtime-capability-manifest-v1"},
     "status": {"const": "DESCRIPTIVE_ONLY"},
@@ -15,6 +15,8 @@
     "ready_to_act": {"type": "boolean"},
     "authorized_to_act": {"type": "boolean"},
     "blocking_reasons": {"type": "array", "items": {"$ref": "#/$defs/blocker"}, "uniqueItems": true},
+    "action_dependencies": {"$ref": "#/$defs/actionDependencies"},
+    "runtime_values": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"$ref": "#/$defs/runtimeValue"}},
     "domains": {
       "type": "object",
       "additionalProperties": false,
@@ -46,6 +48,7 @@
     {"if": {"properties": {"overall_state": {"const": "HUMAN_REVIEW_REQUIRED"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "HUMAN_REVIEW_REQUIRED"}}}},
     {"if": {"properties": {"overall_state": {"const": "ACTION_READY"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "ACTION_READY"}}}},
     {"if": {"properties": {"overall_state": {"const": "AUTHORIZED"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "AUTHORIZED"}}}},
+    {"if": {"properties": {"overall_state": {"const": "AUTHORIZED"}}, "required": ["overall_state"]}, "then": {"properties": {"ready_to_act": {"const": true}, "authorized_to_act": {"const": true}, "blocking_reasons": {"maxItems": 0}}}},
     {"if": {"properties": {"overall_state": {"const": "INVALID_CONFIGURATION"}}, "required": ["overall_state"]}, "then": {"properties": {"live_runtime_readiness": {"const": "INVALID_CONFIGURATION"}}}}
   ],
   "$defs": {
@@ -53,11 +56,42 @@
     "capabilityState": {"enum": ["NOT_IMPLEMENTED", "IMPLEMENTED_OFFLINE", "DOCUMENTED_ONLY", "RUNTIME_NOT_OBSERVED", "RUNTIME_OBSERVED", "RUNTIME_UNAVAILABLE", "STALE_RUNTIME_OBSERVATION", "CONFLICTING_CAPABILITY_EVIDENCE", "LIVE_DOC_RUNTIME_DRIFT", "REVIEW_REQUIRED", "READY_FOR_HUMAN_APPROVAL", "AUTHORIZED", "BLOCKED"]},
     "provenance": {"type": ["string", "null"], "enum": ["DOCUMENTATION", "SIGNED_OFFICIAL_SOURCE", "REVIEWED_REPOSITORY_SOURCE", "DIRECT_RUNTIME_OBSERVATION", "REVIEWED_LOCAL_FIXTURE", "THIRD_PARTY_REPORT", "UNTRUSTED_CONTEXT", null]},
     "blocker": {"enum": ["AUTHENTICATION_MODEL_REVIEW_REQUIRED", "BACKUP_DRILL_REQUIRED", "CHAIN_ID_UNDOCUMENTED", "CLAIM_REQUIREMENTS_UNVERIFIED", "COMPLETENESS_RUNTIME_UNVERIFIED", "CONFLICTING_CAPABILITY_EVIDENCE", "COST_SPEND_SEMANTICS_REVIEW_REQUIRED", "DELEGATION_RUNTIME_UNOBSERVED", "ECONOMIC_VALUE_UNVERIFIED", "HUMAN_APPROVAL_REQUIRED", "IMPLEMENTATION_REQUIRED", "INVALID_CONFIGURATION", "MISSING_CRITICAL_DOMAIN", "MISSING_RUNTIME_OBSERVATION", "NETWORK_IDENTITY_MISMATCH", "NETWORK_IDENTITY_UNDOCUMENTED", "OFFICIAL_ENDPOINT_UNVERIFIED", "OWNED_ROOM_INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE", "PTLC_EXPERIMENTAL_UNEXERCISED", "RAIL_FINALITY_UNOBSERVED", "RECOVERY_DRILL_REQUIRED", "RELEASE_MAIN_DOC_RUNTIME_UNRECONCILED", "REPLAY_LEDGER_REQUIRED", "REQUEST_SCHEMA_REVIEW_REQUIRED", "RPC_IDENTITY_UNDOCUMENTED", "RUNTIME_READBACK_NOT_OBSERVED", "RUNTIME_UNAVAILABLE", "RUNTIME_WRITE_NOT_AUTHORIZED", "SIDE_EFFECT_JOURNAL_REQUIRED", "STALE_RUNTIME_OBSERVATION", "TRUSTED_ACQUISITION_RUNTIME_UNVERIFIED", "UPSTREAM_VERSION_NOT_FINALIZED"]},
+    "dependencyMatrix": {
+      "type": "object", "additionalProperties": false,
+      "required": ["IDENTITY", "TECHNOCORE", "EXPORT_EVIDENCE", "FAUCET", "TESTNET_NETWORK", "INFERENCE", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY", "DELEGATION_VERIFICATION", "TOOL_OUTPUT_BUDGET", "REPLAY_SAFETY", "ACTIVITY_QUALITY", "PROTOCOL_MODEL", "RUNTIME_DRIFT"],
+      "properties": {
+        "IDENTITY": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "TECHNOCORE": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "EXPORT_EVIDENCE": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "FAUCET": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "TESTNET_NETWORK": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "INFERENCE": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "SETTLEMENT_RAIL": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "EVIDENCE_DURABILITY": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "DELEGATION_VERIFICATION": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "TOOL_OUTPUT_BUDGET": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "REPLAY_SAFETY": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "ACTIVITY_QUALITY": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "PROTOCOL_MODEL": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}, "RUNTIME_DRIFT": {"enum": ["REQUIRED", "OPTIONAL", "NOT_APPLICABLE"]}
+      }
+    },
+    "actionDependencies": {
+      "type": "object", "additionalProperties": false,
+      "required": ["GENERAL_TESTNET", "FAUCET_CLAIM", "INFERENCE_REQUEST", "SETTLEMENT"],
+      "properties": {"GENERAL_TESTNET": {"$ref": "#/$defs/dependencyMatrix"}, "FAUCET_CLAIM": {"$ref": "#/$defs/dependencyMatrix"}, "INFERENCE_REQUEST": {"$ref": "#/$defs/dependencyMatrix"}, "SETTLEMENT": {"$ref": "#/$defs/dependencyMatrix"}}
+    },
+    "runtimeValue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value_id", "documented_value", "runtime_observed_value", "observed_at", "source_id", "observation_hash", "freshness", "status", "ready"],
+      "properties": {
+        "value_id": {"enum": ["stillborn_seconds", "idle_seconds", "room_capacity", "note_capacity", "rate_limit", "quota"]},
+        "documented_value": {"type": ["string", "number", "integer", "boolean", "null"]},
+        "runtime_observed_value": {"type": ["string", "number", "integer", "boolean", "null"]},
+        "observed_at": {"type": ["string", "null"], "format": "date-time"},
+        "source_id": {"const": "TECHNOCORE_CONFIG"},
+        "observation_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "freshness": {"enum": ["FRESH", "STALE", "NOT_OBSERVED"]},
+        "status": {"enum": ["DOCUMENTED_ONLY", "RUNTIME_OBSERVED_VALUE", "STALE_RUNTIME_VALUE", "CONFLICTING_VALUE", "NOT_OBSERVED"]},
+        "ready": {"type": "boolean"}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"enum": ["STALE_RUNTIME_VALUE", "CONFLICTING_VALUE"]}}, "required": ["status"]}, "then": {"properties": {"ready": {"const": false}}}},
+        {"if": {"properties": {"status": {"const": "RUNTIME_OBSERVED_VALUE"}}, "required": ["status"]}, "then": {"properties": {"runtime_observed_value": {"type": ["string", "number", "integer", "boolean"]}, "observed_at": {"type": "string"}, "observation_hash": {"type": "string"}, "freshness": {"const": "FRESH"}}}}
+      ]
+    },
     "domain": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/capability"}},
     "capability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["capability_id", "domain", "implementation_status", "documented_status", "runtime_status", "provenance", "source_id", "resource_id", "observed_at", "source_hash", "observation_hash", "policy_version", "verifier_revision", "blocking_reasons", "required_for_action", "ready_to_act", "authorized_to_act", "documented_chain_id", "observed_chain_id", "documented_rpc_identity", "observed_rpc_identity", "documented_network_identity", "observed_network_identity", "testnet_live"],
+      "required": ["capability_id", "domain", "implementation_status", "documented_status", "runtime_status", "provenance", "source_id", "resource_id", "observed_at", "source_hash", "observation_hash", "policy_version", "verifier_revision", "blocking_reasons", "required_for_action", "ready_to_act", "authorized_to_act", "documented_chain_id", "observed_chain_id", "documented_rpc_identity", "observed_rpc_identity", "documented_network_identity", "observed_network_identity", "testnet_live", "rail_type", "protocol_valid", "rail_crypto_verified", "economic_value_verified", "finality_verified", "replay_ledger_implemented", "side_effect_journal_implemented"],
       "properties": {
         "capability_id": {"type": "string", "pattern": "^[a-z0-9_.-]{1,128}$"},
         "domain": {"enum": ["IDENTITY", "TECHNOCORE", "EXPORT_EVIDENCE", "FAUCET", "TESTNET_NETWORK", "INFERENCE", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY", "DELEGATION_VERIFICATION", "TOOL_OUTPUT_BUDGET", "REPLAY_SAFETY", "ACTIVITY_QUALITY", "PROTOCOL_MODEL", "RUNTIME_DRIFT"]},
@@ -82,12 +116,20 @@
         "observed_rpc_identity": {"type": ["string", "null"]},
         "documented_network_identity": {"type": ["string", "null"]},
         "observed_network_identity": {"type": ["string", "null"]},
-        "testnet_live": {"type": "boolean"}
+        "testnet_live": {"type": "boolean"},
+        "rail_type": {"type": ["string", "null"], "enum": ["PAPER_RAIL", "VERIFIED_TEST_RAIL", null]},
+        "protocol_valid": {"type": ["boolean", "null"]},
+        "rail_crypto_verified": {"type": ["boolean", "null"]},
+        "economic_value_verified": {"type": ["boolean", "null"]},
+        "finality_verified": {"type": ["boolean", "null"]},
+        "replay_ledger_implemented": {"type": ["boolean", "null"]},
+        "side_effect_journal_implemented": {"type": ["boolean", "null"]}
       },
       "allOf": [
         {"if": {"properties": {"runtime_status": {"const": "RUNTIME_OBSERVED"}}, "required": ["runtime_status"]}, "then": {"properties": {"provenance": {"enum": ["DIRECT_RUNTIME_OBSERVATION", "REVIEWED_LOCAL_FIXTURE"]}, "observed_at": {"type": "string"}, "source_hash": {"type": "string"}, "observation_hash": {"type": "string"}, "resource_id": {"type": "string"}}}},
         {"if": {"properties": {"runtime_status": {"const": "STALE_RUNTIME_OBSERVATION"}}, "required": ["runtime_status"]}, "then": {"properties": {"ready_to_act": {"const": false}, "authorized_to_act": {"const": false}, "testnet_live": {"const": false}}}},
-        {"if": {"properties": {"testnet_live": {"const": true}}, "required": ["testnet_live"]}, "then": {"properties": {"domain": {"const": "TESTNET_NETWORK"}, "runtime_status": {"const": "RUNTIME_OBSERVED"}, "ready_to_act": {"const": true}}}}
+        {"if": {"properties": {"testnet_live": {"const": true}}, "required": ["testnet_live"]}, "then": {"properties": {"domain": {"const": "TESTNET_NETWORK"}, "runtime_status": {"const": "RUNTIME_OBSERVED"}, "ready_to_act": {"const": true}}}},
+        {"if": {"properties": {"rail_type": {"const": "PAPER_RAIL"}}, "required": ["rail_type"]}, "then": {"properties": {"domain": {"const": "SETTLEMENT_RAIL"}, "economic_value_verified": {"const": false}, "finality_verified": {"const": false}}}}
       ]
     }
   }

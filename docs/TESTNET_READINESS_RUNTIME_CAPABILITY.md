@@ -50,7 +50,18 @@ economic and finality evidence exists.
 Critical domains are explicit and cannot be omitted. An empty definition set or
 a missing critical domain is `INVALID_CONFIGURATION`, never vacuously ready.
 Action dependency graphs are fixed: Faucet, inference, settlement, and general
-testnet review consume only their declared domain dependencies. Identity backup
+testnet review consume only their declared domain dependencies. The canonical
+dependency matrix labels every domain `REQUIRED` or `NOT_APPLICABLE`:
+
+| Action | Required domains |
+|---|---|
+| `GENERAL_TESTNET` | Identity, Technocore, Export, Faucet, Testnet Network, Inference, Settlement Rail, Evidence Durability, Replay Safety |
+| `FAUCET_CLAIM` | Identity, Technocore, Faucet, Testnet Network, Evidence Durability, Replay Safety |
+| `INFERENCE_REQUEST` | Identity, Testnet Network, Inference, Evidence Durability |
+| `SETTLEMENT` | Identity, Settlement Rail, Evidence Durability, Replay Safety |
+
+Settlement does not require Testnet Network in this generic rail model; a future
+network-specific rail must add that dependency through reviewed policy. Identity backup
 and recovery, inference schema/auth/spend review, rail finality/economic value,
 and evidence durability are canonical blockers rather than dashboard-only text.
 
@@ -68,7 +79,7 @@ network/genesis identities independently. Any mismatch is
   estimated 131,072-token ceiling. Remote/tool output is `UNTRUSTED_CONTENT`;
   discovered URLs and actions remain inert.
 - Replay ledger and side-effect journal are unimplemented readiness interfaces
-  and blockers for future claims and payments.
+  and first-class required dependencies/blockers for Faucet claims and settlement.
 - Agreement, TransferAttempt, and RailObservation are
   `GENERIC_MODEL_READY`; this does not claim tclk/2 is finalized.
 - PTLC remains `EXPERIMENTAL_UNEXERCISED`; owned-room metadata is
@@ -79,6 +90,26 @@ network/genesis identities independently. Any mismatch is
 live documentation, and runtime observations remain independent. Mutable
 capacity, timing, quota, and rate-limit values are documented/observed/stale/
 conflicting values, never permanent protocol constants.
+
+The canonical manifest contains separate records for `stillborn_seconds`,
+`idle_seconds`, `room_capacity`, `note_capacity`, `rate_limit`, and `quota`.
+Each retains documented and observed values, source, observation hash, freshness,
+and status independently. Checked-in values are `NOT_OBSERVED`; no current
+deployment number is encoded as protocol truth.
+
+## Canonical validation
+
+The JSON Schema validates structure and local invariants. The sealed semantic
+validator enforces cross-domain rules that JSON Schema cannot reliably express:
+all required dependencies must exist and match the action graph; required child
+capabilities must be ready and blocker-free before `ACTION_READY` or `AUTHORIZED`;
+Replay Safety must be implemented for side-effecting actions; and mutable-value
+conflicts cannot be labeled ready. `AUTHORIZED` additionally requires independent
+authorization, while a consistent `ACTION_READY` manifest remains unauthorized.
+
+PaperRail fields are canonical: protocol validity is independent from crypto
+verification, economic value, and finality. `PAPER_RAIL` may be protocol-valid,
+but `economic_value_verified` and `finality_verified` must both remain false.
 
 ## Captured dependency inventory
 

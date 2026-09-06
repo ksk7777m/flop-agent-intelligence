@@ -32,8 +32,14 @@ def ready_definitions():
         rc.CapabilityDefinition("faucet.runtime", domain.FAUCET, offline, documented, source.FLOP_FINANCE_TEASER, True, True, ()),
         rc.CapabilityDefinition("network.identity", domain.TESTNET_NETWORK, offline, documented, source.FLOP_FINANCE_TEASER, True, True, (), "fixture-chain-a", "fixture-rpc-a", "fixture-genesis-a"),
         rc.CapabilityDefinition("inference.runtime", domain.INFERENCE, offline, documented, source.FLOP_FINANCE_TEASER, True, True, ()),
-        rc.CapabilityDefinition("rail.runtime", domain.SETTLEMENT_RAIL, offline, documented, source.FLOP_FINANCE_TEASER, True, True, ()),
+        rc.CapabilityDefinition("rail.runtime", domain.SETTLEMENT_RAIL, offline, documented, source.FLOP_FINANCE_TEASER, True, True, (), rail_type="VERIFIED_TEST_RAIL", protocol_valid=True, rail_crypto_verified=True, economic_value_verified=True, finality_verified=True),
         rc.CapabilityDefinition("durability.readback", domain.EVIDENCE_DURABILITY, offline, documented, source.TECHNOCORE_ROOMS_JSON, True, True, ()),
+        rc.CapabilityDefinition("delegation.verification", domain.DELEGATION_VERIFICATION, offline, documented, source.TECHNOCORE_SECURITY, False, False, ()),
+        rc.CapabilityDefinition("tool.output_budget", domain.TOOL_OUTPUT_BUDGET, offline, state.REVIEW_REQUIRED, None, False, False, ()),
+        rc.CapabilityDefinition("replay.safety", domain.REPLAY_SAFETY, offline, state.REVIEW_REQUIRED, None, False, False, (), replay_ledger_implemented=True, side_effect_journal_implemented=True),
+        rc.CapabilityDefinition("activity.quality", domain.ACTIVITY_QUALITY, offline, state.REVIEW_REQUIRED, None, False, False, ()),
+        rc.CapabilityDefinition("protocol.generic_models", domain.PROTOCOL_MODEL, offline, documented, source.TECHNOCORE_SECURITY, False, False, ()),
+        rc.CapabilityDefinition("runtime.drift", domain.RUNTIME_DRIFT, offline, state.RUNTIME_NOT_OBSERVED, source.TECHNOCORE_CONFIG, False, False, ()),
     )
 
 
@@ -41,6 +47,13 @@ def private_service(definitions=None, clock=lambda: NOW, ttl=timedelta(hours=6))
     return rc._build_readiness_service(
         ready_definitions() if definitions is None else definitions,
         rc._resolve_observation, clock, ttl)[0]
+
+
+def private_manifest(action=rc.ReadinessAction.GENERAL_TESTNET):
+    project = rc._build_readiness_service(
+        ready_definitions(), rc._resolve_observation, lambda: NOW,
+        timedelta(hours=6))[1]
+    return project(all_observations(), action)
 
 
 def all_observations(network=rc.ReviewedRuntimeFixtureId.NETWORK_MATCH):
@@ -75,7 +88,9 @@ class RuntimeCapabilityTests(unittest.TestCase):
         self.assertFalse(result["authorized_to_act"])
 
     def test_missing_critical_domain_blocks(self):
-        assess = private_service(definitions=ready_definitions()[:-1])
+        definitions = tuple(item for item in ready_definitions()
+                            if item.domain is not rc.Domain.EVIDENCE_DURABILITY)
+        assess = private_service(definitions=definitions)
         result = assess(all_observations())
         self.assertEqual(result["overall_state"], "INVALID_CONFIGURATION")
         self.assertIn("MISSING_CRITICAL_DOMAIN", result["blocking_reasons"])
@@ -251,7 +266,8 @@ class RuntimeCapabilityTests(unittest.TestCase):
     def test_security_sensitive_callables_have_no_module_global_reads(self):
         functions = (rc.reviewed_runtime_observation, rc._resolve_observation,
                      rc.public_observation, rc.assess_capabilities,
-                     rc.transition_faucet, rc.capability_manifest)
+                     rc.transition_faucet, rc.capability_manifest,
+                     rc.validate_capability_manifest)
         for function in functions:
             self.assertEqual(inspect.getclosurevars(function).globals, {}, function)
 
@@ -274,16 +290,101 @@ class RuntimeCapabilityTests(unittest.TestCase):
             cwd=ROOT, env={"PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1"})
         cli = json.loads(output)
         self.assertEqual(list(validator.iter_errors(cli)), [])
+        self.assertEqual(rc.validate_capability_manifest(cli), ())
 
-    def test_schema_rejects_authorized_without_ready_and_action_ready_blockers(self):
+    def test_consistent_action_ready_manifest_passes_both_layers(self):
+        schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
+        value = private_manifest()
+        Draft202012Validator(schema).validate(value)
+        self.assertEqual(value["overall_state"], "ACTION_READY")
+        self.assertTrue(value["ready_to_act"])
+        self.assertFalse(value["authorized_to_act"])
+        self.assertEqual(rc.validate_capability_manifest(value), ())
+
+    def test_contract_rejects_action_ready_with_required_child_blocker(self):
         schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
         validator = Draft202012Validator(schema)
+        value = private_manifest()
+        child = value["domains"]["IDENTITY"][0]
+        child["ready_to_act"] = False
+        child["blocking_reasons"] = ["BACKUP_DRILL_REQUIRED"]
+        errors = list(validator.iter_errors(value)) + list(rc.validate_capability_manifest(value))
+        self.assertGreater(len(errors), 0)
+
+    def test_schema_rejects_all_inconsistent_authorized_states(self):
+        schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
+        validator = Draft202012Validator(schema)
+        mutations = (
+            {"authorized_to_act": False},
+            {"authorized_to_act": True, "ready_to_act": False},
+            {"authorized_to_act": True, "blocking_reasons": ["HUMAN_APPROVAL_REQUIRED"]},
+        )
+        for mutation in mutations:
+            value = private_manifest()
+            value.update({"overall_state": "AUTHORIZED", "live_runtime_readiness": "AUTHORIZED"})
+            value.update(mutation)
+            errors = list(validator.iter_errors(value)) + list(rc.validate_capability_manifest(value))
+            self.assertGreater(len(errors), 0, mutation)
+
+    def test_contract_rejects_stale_required_child_with_action_ready(self):
+        value = private_manifest()
+        child = value["domains"]["TECHNOCORE"][0]
+        child["runtime_status"], child["ready_to_act"] = "STALE_RUNTIME_OBSERVATION", False
+        self.assertTrue(rc.validate_capability_manifest(value))
+
+    def test_paperrail_cannot_claim_economic_value_or_finality(self):
+        schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
         value = rc.capability_manifest()
-        value["authorized_to_act"], value["ready_to_act"] = True, False
-        self.assertTrue(list(validator.iter_errors(value)))
+        rail = value["domains"]["SETTLEMENT_RAIL"][0]
+        self.assertEqual(rail["rail_type"], "PAPER_RAIL")
+        self.assertTrue(rail["protocol_valid"])
+        self.assertFalse(rail["economic_value_verified"])
+        self.assertFalse(rail["finality_verified"])
+        rail["economic_value_verified"] = True
+        self.assertTrue(list(Draft202012Validator(schema).iter_errors(value)))
+        self.assertIn("PAPER_RAIL_ECONOMIC_VALUE_INVALID",
+                      rc.validate_capability_manifest(value))
+
+    def test_faucet_and_settlement_require_first_class_replay_safety(self):
+        for action in (rc.ReadinessAction.FAUCET_CLAIM, rc.ReadinessAction.SETTLEMENT):
+            value = rc.capability_manifest(action=action)
+            replay = value["domains"]["REPLAY_SAFETY"][0]
+            self.assertTrue(replay["required_for_action"])
+            self.assertFalse(replay["replay_ledger_implemented"])
+            self.assertFalse(replay["side_effect_journal_implemented"])
+            self.assertIn("REPLAY_LEDGER_REQUIRED", replay["blocking_reasons"])
+            self.assertIn("SIDE_EFFECT_JOURNAL_REQUIRED", replay["blocking_reasons"])
+            self.assertFalse(value["ready_to_act"])
+
+    def test_contract_rejects_ready_without_replay_or_required_dependency(self):
+        for action in (rc.ReadinessAction.FAUCET_CLAIM, rc.ReadinessAction.SETTLEMENT):
+            value = private_manifest(action)
+            replay = value["domains"]["REPLAY_SAFETY"][0]
+            replay["replay_ledger_implemented"] = False
+            self.assertIn("REPLAY_LEDGER_NOT_READY", rc.validate_capability_manifest(value))
+            value = private_manifest(action)
+            value["domains"]["REPLAY_SAFETY"] = []
+            self.assertTrue(any("REPLAY_SAFETY" in error
+                                for error in rc.validate_capability_manifest(value)))
+
+    def test_settlement_has_exact_documented_dependency_graph(self):
+        value = rc.capability_manifest(action=rc.ReadinessAction.SETTLEMENT)
+        graph = value["action_dependencies"]["SETTLEMENT"]
+        self.assertEqual({name for name, label in graph.items() if label == "REQUIRED"},
+                         {"IDENTITY", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY", "REPLAY_SAFETY"})
+        self.assertEqual(graph["TESTNET_NETWORK"], "NOT_APPLICABLE")
+
+    def test_runtime_values_are_explicit_and_conflict_cannot_be_ready(self):
         value = rc.capability_manifest()
-        value["overall_state"], value["blocking_reasons"] = "ACTION_READY", ["MISSING_RUNTIME_OBSERVATION"]
-        self.assertTrue(list(validator.iter_errors(value)))
+        self.assertEqual({item["value_id"] for item in value["runtime_values"]},
+            {"stillborn_seconds", "idle_seconds", "room_capacity", "note_capacity", "rate_limit", "quota"})
+        record = value["runtime_values"][0]
+        record.update({"documented_value": 1, "runtime_observed_value": 2,
+                       "status": "RUNTIME_OBSERVED_VALUE", "ready": True,
+                       "observed_at": "2026-09-06T05:00:00+00:00",
+                       "observation_hash": "a" * 64, "freshness": "FRESH"})
+        self.assertIn("RUNTIME_VALUE_CONFLICT_UNMARKED:" + record["value_id"],
+                      rc.validate_capability_manifest(value))
 
 
 if __name__ == "__main__":
