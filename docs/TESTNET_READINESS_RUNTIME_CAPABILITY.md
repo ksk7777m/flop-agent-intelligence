@@ -95,7 +95,10 @@ The canonical manifest contains separate records for `stillborn_seconds`,
 `idle_seconds`, `room_capacity`, `note_capacity`, `rate_limit`, and `quota`.
 Each retains documented and observed values, source, observation hash, freshness,
 and status independently. Checked-in values are `NOT_OBSERVED`; no current
-deployment number is encoded as protocol truth.
+deployment number is encoded as protocol truth. Runtime-value status,
+independently derived age, and freshness labels must agree: observed values are
+fresh, stale values are labeled stale, and documented-only or unobserved values
+carry no runtime observation evidence.
 
 ## Canonical validation
 

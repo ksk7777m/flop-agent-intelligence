@@ -84,7 +84,10 @@
       },
       "allOf": [
         {"if": {"properties": {"status": {"enum": ["STALE_RUNTIME_VALUE", "CONFLICTING_VALUE"]}}, "required": ["status"]}, "then": {"properties": {"ready": {"const": false}}}},
-        {"if": {"properties": {"status": {"const": "RUNTIME_OBSERVED_VALUE"}}, "required": ["status"]}, "then": {"properties": {"runtime_observed_value": {"type": ["string", "number", "integer", "boolean"]}, "observed_at": {"type": "string"}, "observation_hash": {"type": "string"}, "freshness": {"const": "FRESH"}}}}
+        {"if": {"properties": {"status": {"const": "RUNTIME_OBSERVED_VALUE"}}, "required": ["status"]}, "then": {"properties": {"runtime_observed_value": {"type": ["string", "number", "integer", "boolean"]}, "observed_at": {"type": "string"}, "observation_hash": {"type": "string"}, "freshness": {"const": "FRESH"}}}},
+        {"if": {"properties": {"status": {"const": "STALE_RUNTIME_VALUE"}}, "required": ["status"]}, "then": {"properties": {"runtime_observed_value": {"type": ["string", "number", "integer", "boolean"]}, "observed_at": {"type": "string"}, "observation_hash": {"type": "string"}, "freshness": {"const": "STALE"}, "ready": {"const": false}}}},
+        {"if": {"properties": {"status": {"const": "CONFLICTING_VALUE"}}, "required": ["status"]}, "then": {"properties": {"documented_value": {"type": ["string", "number", "integer", "boolean"]}, "runtime_observed_value": {"type": ["string", "number", "integer", "boolean"]}, "observed_at": {"type": "string"}, "observation_hash": {"type": "string"}, "ready": {"const": false}}}},
+        {"if": {"properties": {"status": {"enum": ["NOT_OBSERVED", "DOCUMENTED_ONLY"]}}, "required": ["status"]}, "then": {"properties": {"runtime_observed_value": {"const": null}, "observed_at": {"const": null}, "observation_hash": {"const": null}, "freshness": {"const": "NOT_OBSERVED"}, "ready": {"const": false}}}}
       ]
     },
     "domain": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/capability"}},

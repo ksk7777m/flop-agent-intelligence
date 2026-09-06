@@ -305,7 +305,9 @@ class RuntimeCapabilityTests(unittest.TestCase):
         self.assertEqual(value["overall_state"], "ACTION_READY")
         self.assertTrue(value["ready_to_act"])
         self.assertFalse(value["authorized_to_act"])
-        self.assertEqual(rc.validate_capability_manifest(value), ())
+        validate = private_validator()
+        self.assertEqual(validate(value), ())
+        self.assertEqual(validate(value), ())
 
     def test_contract_rejects_action_ready_with_required_child_blocker(self):
         schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
@@ -452,6 +454,52 @@ class RuntimeCapabilityTests(unittest.TestCase):
                        "status": "RUNTIME_OBSERVED_VALUE", "ready": True})
         self.assertIn("RUNTIME_VALUE_STALE_UNMARKED:" + record["value_id"],
                       validate(value))
+
+    def test_runtime_value_status_freshness_matrix_fails_closed(self):
+        validate = private_validator()
+        base = {"runtime_observed_value": 1, "observed_at": NOW.isoformat(),
+                "observation_hash": "a" * 64, "freshness": "FRESH",
+                "status": "RUNTIME_OBSERVED_VALUE", "ready": True}
+        mutations = (
+            {**base, "status": "STALE_RUNTIME_VALUE", "freshness": "FRESH", "ready": False,
+             "observed_at": (NOW - timedelta(hours=7)).isoformat()},
+            {**base, "freshness": "STALE"},
+            {**base, "observed_at": (NOW - timedelta(hours=7)).isoformat()},
+            {**base, "observed_at": (NOW + timedelta(seconds=1)).isoformat()},
+            {"status": "NOT_OBSERVED", "freshness": "FRESH", "ready": False},
+            {"status": "NOT_OBSERVED", "freshness": "NOT_OBSERVED", "ready": False,
+             "runtime_observed_value": 1},
+            {**base, "status": "CONFLICTING_VALUE", "documented_value": 2, "ready": True},
+        )
+        for mutation in mutations:
+            value = private_manifest()
+            value["runtime_values"][0].update(mutation)
+            self.assertTrue(validate(value), mutation)
+
+    def test_runtime_value_consistent_states_validate(self):
+        validate = private_validator()
+        cases = (
+            {"runtime_observed_value": 1, "observed_at": NOW.isoformat(),
+             "observation_hash": "a" * 64, "freshness": "FRESH",
+             "status": "RUNTIME_OBSERVED_VALUE", "ready": True},
+            {"runtime_observed_value": 1,
+             "observed_at": (NOW - timedelta(hours=7)).isoformat(),
+             "observation_hash": "a" * 64, "freshness": "STALE",
+             "status": "STALE_RUNTIME_VALUE", "ready": False},
+            {"documented_value": 1, "runtime_observed_value": None,
+             "observed_at": None, "observation_hash": None,
+             "freshness": "NOT_OBSERVED", "status": "DOCUMENTED_ONLY", "ready": False},
+            {"documented_value": None, "runtime_observed_value": None,
+             "observed_at": None, "observation_hash": None,
+             "freshness": "NOT_OBSERVED", "status": "NOT_OBSERVED", "ready": False},
+            {"documented_value": 1, "runtime_observed_value": 2,
+             "observed_at": NOW.isoformat(), "observation_hash": "a" * 64,
+             "freshness": "FRESH", "status": "CONFLICTING_VALUE", "ready": False},
+        )
+        for record in cases:
+            value = private_manifest()
+            value["runtime_values"][0].update(record)
+            self.assertEqual(validate(value), (), record)
 
     def test_required_child_implementation_and_documentation_are_derived(self):
         mutations = (("implementation_status", "NOT_IMPLEMENTED",

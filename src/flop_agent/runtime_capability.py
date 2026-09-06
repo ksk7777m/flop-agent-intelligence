@@ -728,10 +728,22 @@ def _build_manifest_validator(
                     errors.append("RUNTIME_VALUE_CONFLICT_UNMARKED:" + str(value_id))
                 if status in {"CONFLICTING_VALUE", "STALE_RUNTIME_VALUE"} and value.get("ready") is not False:
                     errors.append("RUNTIME_VALUE_UNSAFE_READY:" + str(value_id))
+                if status in {"NOT_OBSERVED", "DOCUMENTED_ONLY"}:
+                    if any(value.get(key) is not None for key in
+                           ("runtime_observed_value", "observed_at", "observation_hash")):
+                        errors.append("RUNTIME_VALUE_UNOBSERVED_HAS_EVIDENCE:" + str(value_id))
+                    if value.get("freshness") != "NOT_OBSERVED":
+                        errors.append("RUNTIME_VALUE_UNOBSERVED_FRESHNESS_INVALID:" + str(value_id))
+                    if value.get("ready") is not False:
+                        errors.append("RUNTIME_VALUE_UNOBSERVED_READY:" + str(value_id))
+                if status == "CONFLICTING_VALUE" and (documented is None or observed_value is None
+                        or documented == observed_value or any(value.get(key) is None for key in
+                            ("observed_at", "source_id", "observation_hash"))):
+                    errors.append("RUNTIME_VALUE_CONFLICT_EVIDENCE_INVALID:" + str(value_id))
                 if status == "RUNTIME_OBSERVED_VALUE" and any(value.get(key) is None for key in
                     ("runtime_observed_value", "observed_at", "source_id", "observation_hash")):
                     errors.append("RUNTIME_VALUE_OBSERVATION_INCOMPLETE:" + str(value_id))
-                if status in {"RUNTIME_OBSERVED_VALUE", "STALE_RUNTIME_VALUE"}:
+                if status in {"RUNTIME_OBSERVED_VALUE", "STALE_RUNTIME_VALUE", "CONFLICTING_VALUE"}:
                     age, timestamp_error = timestamp_age(value.get("observed_at"), evaluated_at)
                     if timestamp_error is not None:
                         errors.append("RUNTIME_VALUE_TIMESTAMP_INVALID:" + str(value_id))
@@ -741,6 +753,10 @@ def _build_manifest_validator(
                         errors.append("RUNTIME_VALUE_STALE_UNMARKED:" + str(value_id))
                     elif age is not None and age <= ttl and status == "STALE_RUNTIME_VALUE":
                         errors.append("RUNTIME_VALUE_STALE_MISMATCH:" + str(value_id))
+                    expected_freshness = "STALE" if age is not None and age > ttl else "FRESH"
+                    if timestamp_error is None and age is not None and age >= duration(0) and (
+                            value.get("freshness") != expected_freshness):
+                        errors.append("RUNTIME_VALUE_FRESHNESS_LABEL_INVALID:" + str(value_id))
             if found_ids != runtime_value_ids:
                 errors.append("RUNTIME_VALUE_SET_INCOMPLETE")
         return tuple(dict.fromkeys(errors))
