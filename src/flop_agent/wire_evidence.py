@@ -1109,6 +1109,161 @@ def recompute_agreement_id(offer_id: str, acceptance_bytes: bytes,
         + b"|" + acceptance_bytes + b"|" + signature)
 
 
+def _capture_agreement_policy() -> tuple[Any, ...]:
+    """Build agreement primitives whose dependency graph is construction-sealed."""
+    safe_id_pattern = SAFE_ID_RE
+    hash_pattern = re.compile(r"[0-9a-f]{64}")
+    secret_field_pattern = SECRET_FIELD_RE
+    mapping_type = Mapping
+    rail_aliases = MappingProxyType(dict(RAIL_ALIASES))
+    error_type = WireSafetyError
+    json_dumps = json.dumps
+    b64decode = base64.urlsafe_b64decode
+    b64_error = binascii.Error
+    public_key_type = Ed25519PublicKey
+    invalid_signature = InvalidSignature
+    signature_verified = EvidenceStatus.SIGNED_CONTENT_VERIFIED
+    signature_invalid = EvidenceStatus.SIGNATURE_INVALID
+    sha256 = hashlib.sha256
+
+    def canonical_json(value: Any) -> bytes:
+        try:
+            encoded = json_dumps(
+                value, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError, UnicodeEncodeError):
+            encoded = None
+        if encoded is None:
+            raise error_type(
+                "CANONICALIZATION_INVALID", "payload", value,
+                "canonical JSON construction failed") from None
+        return encoded
+
+    def ensure_secret_safe(value: Any, field: str = "payload") -> None:
+        def walk(candidate: Any) -> None:
+            if isinstance(candidate, mapping_type):
+                for key, child in candidate.items():
+                    key_text = str(key)
+                    if secret_field_pattern.search(key_text):
+                        raise error_type(
+                            "SENSITIVE_FIELD_REJECTED", field, child,
+                            "sensitive field is not accepted")
+                    if (key_text.lower() == "statement" and isinstance(child, str)
+                            and secret_field_pattern.search(child)):
+                        raise error_type(
+                            "SENSITIVE_FIELD_REJECTED", field, child,
+                            "sensitive statement content is not accepted")
+                    walk(child)
+            elif isinstance(candidate, (list, tuple)):
+                for child in candidate:
+                    walk(child)
+        walk(value)
+
+    def canonicalize_rail_sealed(rail_raw: Any) -> tuple[str, str]:
+        if not isinstance(rail_raw, str) or not rail_raw.strip():
+            raise error_type("RAIL_INVALID", "rail", rail_raw, "non-empty rail required")
+        canonical = rail_aliases.get(rail_raw.strip().lower())
+        if canonical is None:
+            raise error_type(
+                "RAIL_UNREVIEWED", "rail", rail_raw,
+                "rail alias is not reviewed")
+        return rail_raw, canonical
+
+    def proposal_bytes(*, protocol: str, proposer_id: str,
+                       counterparty_id: str, terms: Mapping[str, Any],
+                       rail_raw: str, reference: str) -> bytes:
+        for name, value in (("protocol", protocol), ("proposer_id", proposer_id),
+                            ("counterparty_id", counterparty_id),
+                            ("reference", reference)):
+            if not isinstance(value, str) or safe_id_pattern.fullmatch(value) is None:
+                raise error_type(
+                    "AGREEMENT_FIELD_INVALID", name, value,
+                    "safe agreement identifier required")
+        if proposer_id == counterparty_id:
+            raise error_type(
+                "COUNTERPARTY_INVALID", "counterparty_id", counterparty_id,
+                "counterparty must differ from proposer")
+        if not isinstance(terms, mapping_type):
+            raise error_type(
+                "AGREEMENT_TERMS_INVALID", "terms", terms,
+                "structured terms required")
+        ensure_secret_safe(terms, "terms")
+        _, rail_canonical = canonicalize_rail_sealed(rail_raw)
+        return b"FLOP-AGREEMENT-PROPOSAL-V1|" + canonical_json({
+            "protocol": protocol, "proposer_id": proposer_id,
+            "counterparty_id": counterparty_id, "terms": dict(terms),
+            "rail": rail_canonical, "reference": reference,
+        })
+
+    def acceptance_bytes(*, protocol: str, accepter_id: str,
+                         proposer_id: str, offer_id: str,
+                         statement: str) -> bytes:
+        for name, value in (("protocol", protocol), ("accepter_id", accepter_id),
+                            ("proposer_id", proposer_id)):
+            if not isinstance(value, str) or safe_id_pattern.fullmatch(value) is None:
+                raise error_type(
+                    "AGREEMENT_FIELD_INVALID", name, value,
+                    "safe agreement identifier required")
+        if accepter_id == proposer_id:
+            raise error_type(
+                "COUNTERPARTY_INVALID", "accepter_id", accepter_id,
+                "counterparty must differ from proposer")
+        if (not isinstance(offer_id, str)
+                or hash_pattern.fullmatch(offer_id) is None):
+            raise error_type(
+                "OFFER_ID_INVALID", "offer_id", offer_id,
+                "lowercase SHA-256 identifier required")
+        if not isinstance(statement, str) or statement not in {"ACCEPT", "REJECT"}:
+            raise error_type(
+                "AGREEMENT_STATEMENT_INVALID", "statement", statement,
+                "reviewed statement required")
+        ensure_secret_safe({"statement": statement}, "statement")
+        return b"FLOP-AGREEMENT-ACCEPTANCE-V1|" + canonical_json({
+            "protocol": protocol, "accepter_id": accepter_id,
+            "proposer_id": proposer_id, "offer_id": offer_id,
+            "statement": statement,
+        })
+
+    def decode(value: str, field: str, expected_length: int) -> bytes:
+        if not isinstance(value, str):
+            raise error_type(
+                "CRYPTO_FIELD_INVALID", field, value, "base64url string required")
+        try:
+            raw = b64decode(value + "=" * (-len(value) % 4))
+        except (ValueError, b64_error):
+            raw = None
+        if raw is None or len(raw) != expected_length:
+            raise error_type(
+                "CRYPTO_FIELD_INVALID", field, value, "invalid base64url or length")
+        return raw
+
+    def verify_signature(public_key_b64: str, signature_b64: str,
+                         payload: bytes) -> EvidenceStatus:
+        try:
+            public_key = decode(public_key_b64, "public_key", 32)
+            signature = decode(signature_b64, "signature", 64)
+            public_key_type.from_public_bytes(public_key).verify(signature, payload)
+        except (error_type, invalid_signature, ValueError):
+            return signature_invalid
+        return signature_verified
+
+    def offer_id(signing_bytes: bytes, signature_b64: str) -> str:
+        signature = decode(signature_b64, "signature", 64)
+        return sha256(
+            b"FLOP-OFFER-ID-V1|" + signing_bytes + b"|" + signature).hexdigest()
+
+    def agreement_id(offer_id_value: str, acceptance_payload: bytes,
+                     signature_b64: str) -> str:
+        signature = decode(signature_b64, "signature", 64)
+        return sha256(
+            b"FLOP-AGREEMENT-ID-V1|" + offer_id_value.encode("ascii")
+            + b"|" + acceptance_payload + b"|" + signature).hexdigest()
+
+    return (canonical_json, ensure_secret_safe, canonicalize_rail_sealed,
+            proposal_bytes, acceptance_bytes, verify_signature, offer_id,
+            agreement_id)
+
+
 @dataclass(frozen=True)
 class AgreementVerification:
     proposal_signature: EvidenceStatus

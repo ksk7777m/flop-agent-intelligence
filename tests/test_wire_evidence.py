@@ -1,5 +1,6 @@
 import base64, copy, dataclasses, hashlib, inspect, io, json, logging, pickle
 import tempfile, traceback, unittest
+from types import SimpleNamespace
 from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
@@ -223,6 +224,77 @@ class NonceAndSignerTests(unittest.TestCase):
                           context="fixture-post", nonce="7")
         self.assertEqual((result["nonce"], effects),
                          ("7", ["key", "sign", "POST", "GET"]))
+
+    def test_constructed_signers_ignore_nested_text_and_wire_policy_rebinding(self):
+        identity_path = Path("/tmp/nonexistent-fixture-key")
+        context = wire.build_signing_context("lobby", "7", "approved")
+        identity_intent, identity_require = signing_store(
+            policy.LocalActionClass.IDENTITY_SIGN, context,
+            str(identity_path.resolve()), identity.IDENTITY_SIGN_CONTEXT)
+        post_intent, post_require = signing_store(
+            policy.LocalActionClass.SIGNED_ROOM_POST, context,
+            "lobby", "fixture-post")
+        identity_effects, post_effects, attacker_calls = [], [], []
+        _, _, sign = identity._build_local_identity_service(
+            identity_path, identity_require,
+            lambda *_: (identity_effects.append("key") or (object(), "did:key:fixture")),
+            lambda _key, _room, _nonce, text:
+                (identity_effects.append("sign") or ("signature", text)),
+            lambda *_: None)
+
+        def decoder(_url, request):
+            post_effects.append(request.method)
+            if request.method == "GET":
+                return {"messages": [{"from": "did:key:fixture", "nonce": "7",
+                                      "text": "approved", "seq": "1"}]}
+            return {"ok": True}
+
+        _, _, _, post, _ = technocore._build_technocore_client(
+            lambda *_: None, post_require,
+            lambda *_: (post_effects.append("key") or (object(), "did:key:fixture")),
+            lambda _key, _room, _nonce, text:
+                (post_effects.append("sign") or ("signature", text)), decoder)
+
+        def attacker(*_args, **_kwargs):
+            attacker_calls.append("attacker")
+            return context
+
+        hostile_unicode = SimpleNamespace(category=lambda _char: "Cf")
+        patches = (
+            mock.patch.object(identity, "unicodedata", hostile_unicode),
+            mock.patch.object(identity, "INVISIBLE_CATEGORIES", {"X"}),
+            mock.patch.object(identity, "_SEALED_TEXT_SWEEPER", attacker),
+            mock.patch.object(identity, "sweep_text", attacker),
+            mock.patch.object(wire, "_SEALED_CONTEXT_BUILDER", attacker),
+            mock.patch.object(wire, "_SEALED_MATERIAL_BUILDER", attacker),
+            mock.patch.object(wire, "_capture_signing_policy", attacker),
+            mock.patch.object(wire, "SIGNER_TEXT_FRAME_POLICY", object()),
+            mock.patch.object(wire, "MAX_PROTOCOL_NONCE", 0),
+            mock.patch.object(wire, "ROOM_RE", object()),
+            mock.patch.object(wire, "REVISION_RE", object()),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], \
+             patches[10]:
+            with self.assertRaises(PermissionError):
+                sign("lobby", "7", "Xapproved", intent=identity_intent,
+                     revision=REVISION, config_version="fixture-v1")
+            with self.assertRaises(PermissionError):
+                post(Path("fixture"), "lobby", "Xapproved", intent=post_intent,
+                     revision=REVISION, config_version="fixture-v1",
+                     context="fixture-post", nonce="7")
+            self.assertEqual(identity_effects, [])
+            self.assertEqual(post_effects, [])
+            signed = sign("lobby", "7", "approved", intent=identity_intent,
+                          revision=REVISION, config_version="fixture-v1")
+            posted = post(Path("fixture"), "lobby", "approved", intent=post_intent,
+                          revision=REVISION, config_version="fixture-v1",
+                          context="fixture-post", nonce="7")
+        self.assertEqual(signed["text"], "approved")
+        self.assertEqual(posted["text"], "approved")
+        self.assertEqual(identity_effects, ["key", "sign"])
+        self.assertEqual(post_effects, ["key", "sign", "POST", "GET"])
+        self.assertEqual(attacker_calls, [])
 
 class EvidenceAuthorityTests(unittest.TestCase):
     RAW = (b'{"seq":"1","generation":"gen-1"}\n'
@@ -488,6 +560,74 @@ class EvidenceAuthorityTests(unittest.TestCase):
                              "FINALITY_VERIFIED")
         finally:
             for name, value in originals.items(): setattr(authority, name, value)
+
+    def test_production_root_agreement_verifier_ignores_nested_wire_rebinding(self):
+        service = authority.production_evidence_authority
+        proposal, acceptance = agreement_fixture()
+        invalid_proposal = dataclasses.replace(
+            proposal, proposer_public_key_b64=b64(b"\0" * 32))
+        invalid_acceptance = dataclasses.replace(
+            acceptance, accepter_public_key_b64=b64(b"\0" * 32))
+        attacker_calls = []
+
+        def attacker(*_args, **_kwargs):
+            attacker_calls.append("attacker")
+            return wire.EvidenceStatus.SIGNED_CONTENT_VERIFIED
+
+        names = (
+            "_verify_signature", "_proposal_payload", "_acceptance_payload",
+            "agreement_proposal_signing_bytes", "agreement_acceptance_signing_bytes",
+            "recompute_offer_id", "recompute_agreement_id", "transition_agreement",
+            "canonicalize_rail", "_canonical_json", "_sha256",
+            "_capture_agreement_policy",
+        )
+        originals = {name: getattr(wire, name) for name in names}
+        try:
+            for name in names:
+                setattr(wire, name, attacker)
+            self.assertIsNone(service.verify_agreement(
+                invalid_proposal, invalid_acceptance))
+            verified = service.verify_agreement(proposal, acceptance)
+        finally:
+            for name, value in originals.items():
+                setattr(wire, name, value)
+        self.assertIsInstance(verified, authority.VerifiedAgreement)
+        self.assertEqual(attacker_calls, [])
+
+    def test_security_sensitive_constructed_callables_have_no_project_global_reads(self):
+        roots = [
+            identity.sign_with_authorized_identity, technocore.post_signed,
+            authority.production_evidence_authority.acquire_reviewed_export,
+            authority.production_evidence_authority.verify_completeness,
+            authority.production_evidence_authority.verify_agreement,
+            authority.production_evidence_authority.verify_rail,
+            authority.production_evidence_authority.verify_readback,
+            authority.production_evidence_authority.issue_bundle,
+            authority.production_evidence_authority.as_public_evidence,
+        ]
+        seen, dynamic = set(), []
+
+        def visit(candidate, path_name):
+            function = candidate.__func__ if inspect.ismethod(candidate) else candidate
+            if not inspect.isfunction(function) or id(function) in seen:
+                return
+            seen.add(id(function))
+            closure = inspect.getclosurevars(function)
+            for name, value in closure.globals.items():
+                module_name = (value.__name__ if inspect.ismodule(value)
+                               else getattr(value, "__module__", ""))
+                if module_name == "flop_agent" or module_name.startswith("flop_agent."):
+                    dynamic.append(f"{path_name}:{name}")
+            dependencies = list(closure.nonlocals.values())
+            dependencies.extend(function.__defaults__ or ())
+            dependencies.extend((function.__kwdefaults__ or {}).values())
+            for dependency in dependencies:
+                if inspect.isfunction(dependency) or inspect.ismethod(dependency):
+                    visit(dependency, f"{path_name}->{dependency.__name__}")
+
+        for root in roots:
+            visit(root, root.__name__)
+        self.assertEqual(dynamic, [])
 
     def test_all_verified_tokens_reject_reconstruction(self):
         service = self.make_authority(); proposal, acceptance = agreement_fixture()

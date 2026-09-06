@@ -29,45 +29,67 @@ B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 INVISIBLE_CATEGORIES = {"Cc", "Cf", "Cs", "Co", "Zl", "Zp"}
 
 
+def _capture_text_sweeper() -> Any:
+    category = unicodedata.category
+    invisible_categories = frozenset(INVISIBLE_CATEGORIES)
+    character_limit = 4096
+
+    def sealed_sweep(text: str, limit: int = character_limit) -> str:
+        cleaned = "".join(
+            " " if category(char) in invisible_categories else char
+            for char in text).strip()
+        if not cleaned:
+            raise ValueError("text is empty after the Technocore single-line sweep")
+        if len(cleaned) > limit:
+            raise ValueError("text exceeds Technocore's character limit")
+        return cleaned
+
+    return sealed_sweep
+
+
+_SEALED_TEXT_SWEEPER = _capture_text_sweeper()
+
+
 def sweep_text(text: str, limit: int = 4096) -> str:
-    cleaned = "".join(" " if unicodedata.category(c) in INVISIBLE_CATEGORIES else c for c in text).strip()
-    if not cleaned:
-        raise ValueError("text is empty after the Technocore single-line sweep")
-    if len(cleaned) > limit:
-        raise ValueError("text exceeds Technocore's character limit")
-    return cleaned
+    return _SEALED_TEXT_SWEEPER(text, limit)
 
 
-def _b58encode(raw: bytes) -> str:
+def _b58encode(raw: bytes, _alphabet: str = B58) -> str:
     leading = len(raw) - len(raw.lstrip(b"\0"))
     number = int.from_bytes(raw, "big")
     out = ""
     while number:
         number, rem = divmod(number, 58)
-        out = B58[rem] + out
+        out = _alphabet[rem] + out
     return "1" * leading + out
 
 
-def _b58decode(value: str) -> bytes:
+def _b58decode(value: str, _alphabet: str = B58) -> bytes:
     number = 0
     for char in value:
-        number = number * 58 + B58.index(char)
+        number = number * 58 + _alphabet.index(char)
     body = number.to_bytes((number.bit_length() + 7) // 8, "big") if number else b""
     return b"\0" * (len(value) - len(value.lstrip("1"))) + body
 
 
-def did_from_public_key(public_key: bytes) -> str:
+def did_from_public_key(
+    public_key: bytes, _prefix: bytes = MULTICODEC_ED25519,
+    _encoder: Any = _b58encode,
+) -> str:
     if len(public_key) != 32:
         raise ValueError("Ed25519 public key must be 32 bytes")
-    return "did:key:z" + _b58encode(MULTICODEC_ED25519 + public_key)
+    return "did:key:z" + _encoder(_prefix + public_key)
 
 
-def public_key_from_did(did: str) -> bytes:
+def public_key_from_did(
+    did: str, _decoder: Any = _b58decode,
+    _prefix_bytes: bytes = MULTICODEC_ED25519,
+) -> bytes:
     prefix = "did:key:z"
     if not did.startswith(prefix):
         raise ValueError("unsupported DID")
-    decoded = _b58decode(did[len(prefix) :])
-    if decoded[:2] != MULTICODEC_ED25519 or len(decoded) != 34:
+    decoded = _decoder(did[len(prefix) :])
+    if decoded[:2] != _prefix_bytes or len(decoded) != 34:
         raise ValueError("DID is not an Ed25519 did:key")
     return decoded[2:]
 
@@ -94,25 +116,30 @@ def _create_identity(path: Path) -> str:
     return did
 
 
-def _load_identity(path: Path) -> Tuple[Ed25519PrivateKey, str]:
+def _load_identity(
+    path: Path, *, _mode: Any = stat.S_IMODE, _json_loads: Any = json.loads,
+    _b64decode: Any = base64.urlsafe_b64decode,
+    _key_type: Any = Ed25519PrivateKey,
+    _did_builder: Any = did_from_public_key,
+) -> Tuple[Ed25519PrivateKey, str]:
     """Low-level local primitive; production callers use the sealed service below."""
-    mode = stat.S_IMODE(path.stat().st_mode)
+    mode = _mode(path.stat().st_mode)
     if mode & 0o077:
         raise PermissionError(f"identity permissions must be 0600, got {mode:04o}")
-    payload: Dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    payload: Dict[str, Any] = _json_loads(path.read_text(encoding="utf-8"))
     encoded = payload["seed_b64"]
-    seed = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    seed = _b64decode(encoded + "=" * (-len(encoded) % 4))
     if len(seed) != 32:
         raise ValueError("invalid Ed25519 seed")
-    key = Ed25519PrivateKey.from_private_bytes(seed)
-    did = did_from_public_key(key.public_key().public_bytes_raw())
+    key = _key_type.from_private_bytes(seed)
+    did = _did_builder(key.public_key().public_bytes_raw())
     if payload.get("did") != did:
         raise ValueError("stored DID does not match private key")
     return key, did
 
 
 def canonical_message(
-    room: str, nonce: str, text: str, *, _sweeper: Any = sweep_text,
+    room: str, nonce: str, text: str, *, _sweeper: Any = _SEALED_TEXT_SWEEPER,
     _context_builder: Any = _capture_signing_policy()[0],
 ) -> Tuple[str, str]:
     clean = _sweeper(text)
@@ -123,17 +150,25 @@ def canonical_message(
 def _sign_message(
     key: Ed25519PrivateKey, room: str, nonce: str, text: str, *,
     _canonicalizer: Any = canonical_message,
+    _b64encode: Any = base64.urlsafe_b64encode,
 ) -> Tuple[str, str]:
     """Low-level signer retained only for sealed services and offline unit fixtures."""
     canonical, clean = _canonicalizer(room, nonce, text)
-    signature = base64.urlsafe_b64encode(key.sign(canonical.encode("utf-8"))).decode().rstrip("=")
+    signature = _b64encode(key.sign(canonical.encode("utf-8"))).decode().rstrip("=")
     return signature, clean
 
 
-def verify_message(did: str, signature: str, room: str, nonce: str, text: str) -> None:
-    canonical, _ = canonical_message(room, nonce, text)
-    raw_sig = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
-    Ed25519PublicKey.from_public_bytes(public_key_from_did(did)).verify(raw_sig, canonical.encode("utf-8"))
+def verify_message(
+    did: str, signature: str, room: str, nonce: str, text: str, *,
+    _canonicalizer: Any = canonical_message,
+    _b64decode: Any = base64.urlsafe_b64decode,
+    _public_key_type: Any = Ed25519PublicKey,
+    _did_decoder: Any = public_key_from_did,
+) -> None:
+    canonical, _ = _canonicalizer(room, nonce, text)
+    raw_sig = _b64decode(signature + "=" * (-len(signature) % 4))
+    _public_key_type.from_public_bytes(_did_decoder(did)).verify(
+        raw_sig, canonical.encode("utf-8"))
 
 
 IDENTITY_SIGN_CONTEXT = "FLOP-LOCAL-IDENTITY-SIGN-V1"
@@ -147,9 +182,8 @@ def _build_local_identity_service(
     configured_path = identity_path.resolve()
     action = LocalActionClass.IDENTITY_SIGN
     context = IDENTITY_SIGN_CONTEXT
-    text_sweeper = sweep_text
+    text_sweeper = _capture_text_sweeper()
     context_builder, capability_material_builder = _capture_signing_policy()
-    canonicalizer = canonical_message
 
     def get_public_did() -> str:
         _, did = identity_loader(configured_path)
@@ -181,9 +215,9 @@ def _build_local_identity_service(
             consume=True)
         key, did = identity_loader(configured_path)
         signature, signed_clean = message_signer(key, room, nonce, clean)
-        signed_canonical, _ = canonicalizer(room, nonce, signed_clean)
+        signed_context = context_builder(room, nonce, signed_clean)
         if (signed_clean != clean
-                or signed_canonical.encode("utf-8") != signing_context.canonical_bytes):
+                or signed_context.canonical_bytes != signing_context.canonical_bytes):
             raise RuntimeError("local signer canonicalization mismatch")
         return {"did": did, "signature": signature, "text": clean,
                 "nonce": signing_context.nonce.decimal}

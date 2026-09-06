@@ -313,6 +313,112 @@ def _safe_export_assessment(
         tuple(dict.fromkeys(issues)), tuple(venue))
 
 
+def _capture_export_assessor() -> Callable[[bytes, str | None], wire.TranscriptAssessment]:
+    """Build an export assessor with no later wire-module lookups."""
+    max_bytes = wire.MAX_EXPORT_BYTES
+    max_records = wire.MAX_EXPORT_RECORDS
+    error_type = wire.WireSafetyError
+    secret_checker = wire._capture_agreement_policy()[1]
+    max_unix_ms = wire.MAX_UNIX_MS
+    venue_type = wire.VenueMetadataEvidence
+    assessment_type = wire.TranscriptAssessment
+    export_acquired = wire.EvidenceStatus.EXPORT_ACQUIRED
+    venue_observed = wire.EvidenceStatus.VENUE_METADATA_OBSERVED
+    transcript_invalid = wire.EvidenceStatus.TRANSCRIPT_INVALID
+    transcript_valid = wire.EvidenceStatus.TRANSCRIPT_STRUCT_VALID
+    completeness_unverified = wire.EvidenceStatus.TRANSCRIPT_COMPLETENESS_UNVERIFIED
+    json_loads = json.loads
+    json_error = json.JSONDecodeError
+    seq_pattern = re.compile(r"(?:0|[1-9][0-9]*)")
+    safe_id_pattern = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+    def assess(raw: bytes, generation: str | None) -> wire.TranscriptAssessment:
+        if not isinstance(raw, bytes) or len(raw) > max_bytes:
+            raise error_type("EXPORT_SIZE_INVALID", "snapshot", raw)
+        try:
+            text = raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            text = None
+        if text is None:
+            raise error_type(
+                "EXPORT_UTF8_INVALID", "snapshot", raw,
+                "strict UTF-8 required") from None
+        issues: list[str] = []
+        seqs: list[str] = []
+        generations: set[str] = set()
+        venue: list[wire.VenueMetadataEvidence] = []
+        lines = text.splitlines()
+        if len(lines) > max_records:
+            raise error_type("EXPORT_SIZE_INVALID", "snapshot", raw)
+        for line in lines:
+            try:
+                item = json_loads(line)
+            except json_error:
+                item = None
+            if not isinstance(item, dict):
+                issues.append("DECODE_INVALID")
+                continue
+            secret_checker(item, "record")
+            raw_seq = item.get("seq")
+            if not isinstance(raw_seq, str) or seq_pattern.fullmatch(raw_seq) is None:
+                issues.append("SEQ_INVALID")
+                continue
+            seqs.append(raw_seq)
+            item_generation = item.get("generation")
+            if item_generation is not None:
+                if (not isinstance(item_generation, str)
+                        or safe_id_pattern.fullmatch(item_generation) is None):
+                    issues.append("GENERATION_INVALID")
+                    item_generation = None
+                else:
+                    generations.add(item_generation)
+            timestamp = item.get("ts")
+            if timestamp is not None:
+                try:
+                    if (isinstance(timestamp, bool) or not isinstance(timestamp, int)
+                            or timestamp < 0 or timestamp > max_unix_ms):
+                        raise ValueError
+                except ValueError:
+                    timestamp = None
+                    issues.append("TIME_INVALID")
+            venue_item = object.__new__(venue_type)
+            for field, value in (
+                ("seq", raw_seq), ("timestamp_ms", timestamp),
+                ("generation", item_generation), ("provenance", venue_observed),
+                ("signed_metadata", False),
+            ):
+                object.__setattr__(venue_item, field, value)
+            venue.append(venue_item)
+        numeric = [int(item) for item in seqs]
+        if len(numeric) != len(set(numeric)):
+            issues.append("DUPLICATE_SEQUENCE")
+        if any(right < left for left, right in zip(numeric, numeric[1:])):
+            issues.append("SEQUENCE_REVERSAL")
+        if any(right - left > 1 for left, right in zip(numeric, numeric[1:])):
+            issues.append("SEQUENCE_GAP")
+        if (len(generations) > 1
+                or (generation is not None and generations and generations != {generation})):
+            issues.append("GENERATION_INCONSISTENT")
+        invalid = {
+            "DECODE_INVALID", "SEQ_INVALID", "GENERATION_INVALID", "TIME_INVALID",
+            "DUPLICATE_SEQUENCE", "SEQUENCE_REVERSAL", "GENERATION_INCONSISTENT",
+        }
+        structure = transcript_invalid if invalid.intersection(issues) else transcript_valid
+        assessment = object.__new__(assessment_type)
+        for field, value in (
+            ("acquisition_status", export_acquired), ("structure_status", structure),
+            ("completeness_status", completeness_unverified), ("records", len(venue)),
+            ("first_seq", seqs[0] if seqs else None),
+            ("last_seq", seqs[-1] if seqs else None),
+            ("issues", tuple(dict.fromkeys(issues))),
+            ("venue_metadata", tuple(venue)),
+        ):
+            object.__setattr__(assessment, field, value)
+        return assessment
+
+    return assess
+
+
 def observe_third_party_export(raw: bytes, *, source_id: str, acquired_at_ms: int,
                                verifier_revision: str,
                                generation: str | None = None) -> ExportObservation:
@@ -410,12 +516,40 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
     # Capture every authority-relevant global before the production root is
     # created.  Later module-global rebinding cannot replace verification logic,
     # token classes, records, policy version, or canonicalization functions.
-    wire_api = wire
     sha256 = _sha
-    assess_snapshot = _safe_export_assessment
-    rail_observation_digest = _rail_observation_hash
-    proposal_digest = _proposal_raw_hash
-    acceptance_digest = _acceptance_raw_hash
+    (canonical_json, _secret_checker, canonicalize_rail,
+     proposal_signing_bytes, acceptance_signing_bytes, verify_signature,
+     recompute_offer_id, recompute_agreement_id) = wire._capture_agreement_policy()
+    del _secret_checker
+    assess_snapshot = _capture_export_assessor()
+    wire_error = wire.WireSafetyError
+    configured_export_source = wire.ExportSourceKind.CONFIGURED_REVIEWED_EXPORT
+    transcript_struct_valid = wire.EvidenceStatus.TRANSCRIPT_STRUCT_VALID
+    signed_content_verified = wire.EvidenceStatus.SIGNED_CONTENT_VERIFIED
+    agreement_proposed = wire.AgreementState.PROPOSED
+    agreement_offer_verified = wire.AgreementState.OFFER_VERIFIED
+    agreement_acceptance_verified = wire.AgreementState.ACCEPTANCE_VERIFIED
+    agreement_verified = wire.AgreementState.AGREEMENT_VERIFIED
+    agreement_transitions = MappingProxyType({
+        (agreement_proposed, "offer_verified"): agreement_offer_verified,
+        (agreement_offer_verified, "acceptance_verified"): agreement_acceptance_verified,
+        (agreement_acceptance_verified, "agreement_verified"): agreement_verified,
+    })
+    readback_not_started = wire.ReadBackStage.NOT_STARTED
+    readback_write_accepted = wire.ReadBackStage.WRITE_ACCEPTED
+    readback_observed = wire.ReadBackStage.READ_BACK_OBSERVED
+    readback_decode_valid = wire.ReadBackStage.DECODE_VALID
+    readback_signature_valid = wire.ReadBackStage.SIGNATURE_VALID
+    readback_replay_valid = wire.ReadBackStage.STATE_REPLAY_VALID
+    readback_confirmed = wire.ReadBackStage.EVIDENCE_CONFIRMED
+    readback_transitions = MappingProxyType({
+        (readback_not_started, "write_accepted"): readback_write_accepted,
+        (readback_write_accepted, "read_back_observed"): readback_observed,
+        (readback_observed, "decode_valid"): readback_decode_valid,
+        (readback_decode_valid, "signature_valid"): readback_signature_valid,
+        (readback_signature_valid, "state_replay_valid"): readback_replay_valid,
+        (readback_replay_valid, "evidence_confirmed"): readback_confirmed,
+    })
     schema_version = AUTHORITY_SCHEMA_VERSION
     acquisition_token_type = TrustedAcquisitionEvidence
     completeness_token_type = VerifiedTranscriptCompleteness
@@ -435,9 +569,36 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
     weak_key_dictionary = weakref.WeakKeyDictionary
     regex_fullmatch = re.fullmatch
 
+    def proposal_digest(value: wire.AgreementProposal) -> str:
+        return sha256(canonical_json({
+            "protocol": value.protocol, "proposer_id": value.proposer_id,
+            "counterparty_id": value.counterparty_id,
+            "proposer_public_key_b64": value.proposer_public_key_b64,
+            "terms": dict(value.terms), "rail_raw": value.rail_raw,
+            "reference": value.reference, "signature_b64": value.signature_b64,
+            "offer_id": value.offer_id,
+        }))
+
+    def acceptance_digest(value: wire.AgreementAcceptance) -> str:
+        return sha256(canonical_json({
+            "protocol": value.protocol, "accepter_id": value.accepter_id,
+            "proposer_id": value.proposer_id,
+            "accepter_public_key_b64": value.accepter_public_key_b64,
+            "offer_id": value.offer_id, "statement": value.statement,
+            "signature_b64": value.signature_b64,
+            "agreement_id": value.agreement_id,
+        }))
+
+    def rail_observation_digest(value: wire.RailObservation) -> str:
+        return sha256(canonical_json({
+            "rail_raw": value.rail_raw, "rail_canonical": value.rail_canonical,
+            "reference": value.reference, "terminal_state": value.terminal_state,
+            "protocol_valid_observed": value.protocol_valid,
+        }))
+
     fixture_raw = (b'{"seq":"1","generation":"gen-1"}\n'
                    b'{"seq":"2","generation":"gen-1"}')
-    fixture_rail = wire_api.RailObservation.observed(
+    fixture_rail = wire.RailObservation.observed(
         "bitcoin", "ref-1", "COMPLETED", protocol_valid=True)
     fixture_events = ("write_accepted", "read_back_observed", "decode_valid",
                       "signature_valid", "state_replay_valid", "evidence_confirmed")
@@ -460,7 +621,7 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
             key: mapping_proxy(dict(value)) for key, value in readbacks.items()})
         revision = verifier_revision
         clock = clock_ms
-        policy_digest = sha256(wire_api._canonical_json({
+        policy_digest = sha256(canonical_json({
             "acquisitions": {key: dict(value) for key, value in acquisitions.items()},
             "rail_proofs": {key: dict(value) for key, value in rail_proofs.items()},
             "readbacks": {key: dict(value) for key, value in readbacks.items()},
@@ -500,7 +661,7 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
             # validation globals cannot alter the already-constructed root.
             observation = object.__new__(observation_type)
             for field, value in (
-                ("source_kind", wire_api.ExportSourceKind.CONFIGURED_REVIEWED_EXPORT),
+                ("source_kind", configured_export_source),
                 ("source_id", source_id), ("acquired_at_ms", configured["acquired_at_ms"]),
                 ("snapshot_sha256", digest), ("snapshot_length", len(raw)),
                 ("verifier_revision", revision), ("generation", generation),
@@ -530,7 +691,7 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
                     or record.truncation_indicated
                     or record.acquisition_started_at_ms > record.observation.acquired_at_ms
                     or record.observation.acquired_at_ms > record.acquisition_ended_at_ms
-                    or report.structure_status is not wire_api.EvidenceStatus.TRANSCRIPT_STRUCT_VALID
+                    or report.structure_status is not transcript_struct_valid
                     or report.issues or report.records != record.record_count
                     or report.first_seq != record.first_seq or report.last_seq != record.last_seq
                     or record.observation.generation is None):
@@ -545,26 +706,32 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
         def agreement(proposal: wire.AgreementProposal,
                       acceptance: wire.AgreementAcceptance) -> VerifiedAgreement | None:
             try:
-                offer_bytes = proposal.signing_bytes()
-                accept_bytes = acceptance.signing_bytes()
-                offer_sig = wire_api._verify_signature(
+                offer_bytes = proposal_signing_bytes(
+                    protocol=proposal.protocol, proposer_id=proposal.proposer_id,
+                    counterparty_id=proposal.counterparty_id, terms=proposal.terms,
+                    rail_raw=proposal.rail_raw, reference=proposal.reference)
+                accept_bytes = acceptance_signing_bytes(
+                    protocol=acceptance.protocol, accepter_id=acceptance.accepter_id,
+                    proposer_id=acceptance.proposer_id, offer_id=acceptance.offer_id,
+                    statement=acceptance.statement)
+                offer_sig = verify_signature(
                     proposal.proposer_public_key_b64, proposal.signature_b64, offer_bytes)
-                accept_sig = wire_api._verify_signature(
+                accept_sig = verify_signature(
                     acceptance.accepter_public_key_b64, acceptance.signature_b64, accept_bytes)
-                offer_id = wire_api.recompute_offer_id(offer_bytes, proposal.signature_b64)
-                agreement_id = wire_api.recompute_agreement_id(
+                offer_id = recompute_offer_id(offer_bytes, proposal.signature_b64)
+                agreement_id = recompute_agreement_id(
                     acceptance.offer_id, accept_bytes, acceptance.signature_b64)
-                state = wire_api.AgreementState.PROPOSED
-                offer_valid = (offer_sig is wire_api.EvidenceStatus.SIGNED_CONTENT_VERIFIED
+                state = agreement_proposed
+                offer_valid = (offer_sig is signed_content_verified
                                and proposal.offer_id == offer_id
                                and proposal.proposer_id != proposal.counterparty_id
                                and proposal.terms.get("lock_statement") == "LOCKED"
                                and bool(proposal.reference))
                 if not offer_valid:
                     return None
-                state = wire_api.transition_agreement(state, "offer_verified")
+                state = agreement_transitions[(state, "offer_verified")]
                 acceptance_valid = (
-                    accept_sig is wire_api.EvidenceStatus.SIGNED_CONTENT_VERIFIED
+                    accept_sig is signed_content_verified
                     and acceptance.offer_id == offer_id
                     and acceptance.agreement_id == agreement_id
                     and acceptance.accepter_id == proposal.counterparty_id
@@ -573,18 +740,18 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
                     and acceptance.statement == "ACCEPT")
                 if not acceptance_valid:
                     return None
-                state = wire_api.transition_agreement(state, "acceptance_verified")
-                state = wire_api.transition_agreement(state, "agreement_verified")
-            except (wire_api.WireSafetyError, TypeError, ValueError):
+                state = agreement_transitions[(state, "acceptance_verified")]
+                state = agreement_transitions[(state, "agreement_verified")]
+            except (wire_error, KeyError, TypeError, ValueError):
                 return None
-            if state is not wire_api.AgreementState.AGREEMENT_VERIFIED:
+            if state is not agreement_verified:
                 return None
             token = object.__new__(agreement_token_type)
             agreements_issued[token] = agreement_record_type(
                 proposal_digest(proposal), sha256(offer_bytes),
                 acceptance_digest(acceptance), sha256(accept_bytes),
                 offer_id, agreement_id, proposal.proposer_id, acceptance.accepter_id,
-                acceptance.statement, wire_api.canonicalize_rail(proposal.rail_raw)[1],
+                acceptance.statement, canonicalize_rail(proposal.rail_raw)[1],
                 proposal.reference,
                 revision, schema_version, clock())
             return token
@@ -606,8 +773,8 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
                     or proof.get("independent_finality_verified") is not True
                     or proof.get("cryptographic_verification") is not True):
                 return None
-            proof_sha = sha256(wire_api._canonical_json(dict(proof)))
-            artifact_sha = sha256(wire_api._canonical_json({
+            proof_sha = sha256(canonical_json(dict(proof)))
+            artifact_sha = sha256(canonical_json({
                 "agreement_id": agreement_record.agreement_id,
                 "rail": observation.rail_canonical,
                 "reference": observation.reference,
@@ -630,17 +797,17 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
             configured = (readback_policy.get(finality_record.settlement_evidence_sha256)
                           if finality_record is not None else None)
             checked_events = tuple(events)
-            stage = wire_api.ReadBackStage.NOT_STARTED
+            stage = readback_not_started
             try:
                 for event in checked_events:
-                    stage = wire_api.advance_readback(stage, event)
-            except wire_api.WireSafetyError:
+                    stage = readback_transitions[(stage, event)]
+            except KeyError:
                 return None
             if (configured is None or evidence_sha256 != finality_record.artifact_sha256
                     or configured.get("rail") != finality_record.rail
                     or configured.get("reference") != finality_record.reference
                     or tuple(configured.get("events", ())) != checked_events
-                    or stage is not wire_api.ReadBackStage.EVIDENCE_CONFIRMED):
+                    or stage is not readback_confirmed):
                 return None
             token = object.__new__(readback_token_type)
             readbacks_issued[token] = readback_record_type(
@@ -696,7 +863,7 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
                 "finality": "FINALITY_VERIFIED" if f else "FINALITY_UNVERIFIED",
                 "read_back": "EVIDENCE_CONFIRMED" if r else "READBACK_UNVERIFIED",
             }
-            bundle_sha = sha256(wire_api._canonical_json({
+            bundle_sha = sha256(canonical_json({
                 "claims": claims,
                 "completeness_snapshot": c.snapshot_sha256 if c else None,
                 "agreement_id": a.agreement_id if a else None,

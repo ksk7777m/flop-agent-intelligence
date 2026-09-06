@@ -11,7 +11,13 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict
 
-from .identity import _load_identity, _sign_message, canonical_message, sweep_text
+from .identity import (
+    _capture_text_sweeper,
+    _load_identity,
+    _sign_message,
+    canonical_message,
+    sweep_text,
+)
 from .remote_content_policy import (
     DEFAULT_RESPONSE_LIMIT,
     LocalActionClass,
@@ -46,22 +52,23 @@ def _build_response_decoder(open_request: Any = None) -> Any:
     limit = DEFAULT_RESPONSE_LIMIT
     digest = hashlib.sha256
     json_loads = json.loads
+    safe_error = SafeRemoteError
 
     def decode(url: str, request: urllib.request.Request) -> Any:
         try:
             with configured_open(request, timeout=20) as response:
                 if response.geturl() != url:
-                    raise SafeRemoteError("FINAL_ORIGIN_MISMATCH")
+                    raise safe_error("FINAL_ORIGIN_MISMATCH")
                 body_bytes = response.read(limit + 1)
                 if len(body_bytes) > limit:
-                    raise SafeRemoteError(
+                    raise safe_error(
                         "RESPONSE_TOO_LARGE", response_length=len(body_bytes),
                         content_sha256=digest(body_bytes[:limit]).hexdigest(),
                         truncated=True)
                 try:
                     body = body_bytes.decode("utf-8")
                 except UnicodeDecodeError as error:
-                    raise SafeRemoteError(
+                    raise safe_error(
                         "INVALID_UTF8", response_length=len(body_bytes),
                         content_sha256=digest(body_bytes).hexdigest()) from error
                 content_type = response.headers.get("Content-Type", "")
@@ -69,7 +76,7 @@ def _build_response_decoder(open_request: Any = None) -> Any:
         except http_error as error:
             body = error.read(limit + 1)
             bounded = body[:limit]
-            raise SafeRemoteError(
+            raise safe_error(
                 "HTTP_ERROR", status=error.code, response_length=len(body),
                 content_sha256=digest(bounded).hexdigest(),
                 truncated=len(body) > limit) from error
@@ -93,9 +100,8 @@ def _build_technocore_client(
     parse_url, quote_path = urllib.parse.urlparse, urllib.parse.quote
     request_type = urllib.request.Request
     json_dumps, fullmatch = json.dumps, re.fullmatch
-    text_sweeper = sweep_text
+    text_sweeper = _capture_text_sweeper()
     context_builder, capability_material_builder = _capture_signing_policy()
-    message_canonicalizer = canonical_message
     safe_error = SafeRemoteError
     read_action = LocalActionClass.PRESENCE_NOTE_READ
     cas_action = LocalActionClass.DID_NOTE_CAS
@@ -161,9 +167,9 @@ def _build_technocore_client(
             config_version=config_version)
         key, did = identity_loader(identity_path)
         signature, signed_clean = message_signer(key, room, nonce, clean)
-        signed_canonical, _ = message_canonicalizer(room, nonce, signed_clean)
+        signed_context = context_builder(room, nonce, signed_clean)
         if (signed_clean != clean
-                or signed_canonical.encode("utf-8") != signing_context.canonical_bytes):
+                or signed_context.canonical_bytes != signing_context.canonical_bytes):
             raise RuntimeError("local signer canonicalization mismatch")
         payload = {"did": did, "sig": signature,
                    "nonce": signing_context.nonce.decimal, "text": clean}
