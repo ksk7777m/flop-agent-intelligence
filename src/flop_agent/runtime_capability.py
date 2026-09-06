@@ -48,6 +48,7 @@ class CapabilityState(str, Enum):
     IMPLEMENTED_OFFLINE = "IMPLEMENTED_OFFLINE"
     DOCUMENTED_ONLY = "DOCUMENTED_ONLY"
     RUNTIME_NOT_OBSERVED = "RUNTIME_NOT_OBSERVED"
+    NOT_REQUIRED = "NOT_REQUIRED"
     RUNTIME_OBSERVED = "RUNTIME_OBSERVED"
     RUNTIME_UNAVAILABLE = "RUNTIME_UNAVAILABLE"
     STALE_RUNTIME_OBSERVATION = "STALE_RUNTIME_OBSERVATION"
@@ -438,7 +439,7 @@ def _build_readiness_service(
         critical_rows: list[dict[str, Any]] = []
         for definition in definitions:
             record = records.get(definition.capability_id)
-            runtime_status = missing
+            runtime_status = missing if definition.runtime_required else state.NOT_REQUIRED
             observed_at = source_hash = observation_hash = observed_chain = observed_rpc = observed_network = None
             blockers = list(definition.static_blockers)
             if definition.runtime_required:
@@ -572,6 +573,7 @@ def _build_clock(datetime_type: type[datetime], utc: timezone) -> Callable[[], d
 
 def _build_manifest_validator(
     dependencies_input: Mapping[ReadinessAction, frozenset[Domain]],
+    definitions_input: tuple[CapabilityDefinition, ...],
 ) -> Callable[[Mapping[str, Any]], tuple[str, ...]]:
     mapping_type, sequence_type = Mapping, list
     action_names = frozenset(item.value for item in ReadinessAction)
@@ -588,6 +590,11 @@ def _build_manifest_validator(
         "room_capacity", "note_capacity", "rate_limit", "quota"})
     runtime_statuses = frozenset({"DOCUMENTED_ONLY", "RUNTIME_OBSERVED_VALUE",
         "STALE_RUNTIME_VALUE", "CONFLICTING_VALUE", "NOT_OBSERVED"})
+    capability_policy = MappingProxyType({item.capability_id:
+        (item.domain.value, item.runtime_required) for item in definitions_input})
+    observed_runtime, static_runtime = "RUNTIME_OBSERVED", "NOT_REQUIRED"
+    trusted_runtime_provenance = frozenset({"DIRECT_RUNTIME_OBSERVATION",
+                                            "REVIEWED_LOCAL_FIXTURE"})
 
     def validate(manifest: Mapping[str, Any]) -> tuple[str, ...]:
         if not isinstance(manifest, mapping_type):
@@ -641,8 +648,23 @@ def _build_manifest_validator(
             for row in required_rows:
                 if row.get("ready_to_act") is not True or row.get("blocking_reasons") != []:
                     errors.append("REQUIRED_CHILD_NOT_READY:" + str(row.get("capability_id")))
-                if row.get("runtime_status") == "STALE_RUNTIME_OBSERVATION":
-                    errors.append("REQUIRED_CHILD_STALE:" + str(row.get("capability_id")))
+                capability_id = row.get("capability_id")
+                if row.get("implementation_status") != "IMPLEMENTED_OFFLINE":
+                    errors.append("REQUIRED_CHILD_IMPLEMENTATION_INSUFFICIENT:" + str(capability_id))
+                if row.get("documented_status") != "DOCUMENTED_ONLY":
+                    errors.append("REQUIRED_CHILD_DOCUMENTATION_INSUFFICIENT:" + str(capability_id))
+                policy = capability_policy.get(capability_id)
+                if policy is None or policy[0] != row.get("domain"):
+                    errors.append("REQUIRED_CHILD_POLICY_UNKNOWN:" + str(capability_id))
+                else:
+                    runtime_required = policy[1]
+                    expected_status = observed_runtime if runtime_required else static_runtime
+                    if row.get("runtime_status") != expected_status:
+                        errors.append("REQUIRED_CHILD_RUNTIME_NOT_ACTIONABLE:" + str(capability_id))
+                    if runtime_required and (row.get("provenance") not in trusted_runtime_provenance
+                            or any(row.get(key) is None for key in ("resource_id", "observed_at",
+                                                                  "source_hash", "observation_hash"))):
+                        errors.append("REQUIRED_CHILD_RUNTIME_EVIDENCE_INVALID:" + str(capability_id))
         if overall_state == "ACTION_READY" and authorized is not False:
             errors.append("ACTION_READY_AUTHORIZATION_INVALID")
         if overall_state == "AUTHORIZED" and authorized is not True:
@@ -695,7 +717,7 @@ _production_clock = _build_clock(datetime, timezone.utc)
 assess_capabilities, capability_manifest = _build_readiness_service(_production_definitions(), _resolve_observation, _production_clock, DEFAULT_OBSERVATION_TTL)
 transition_faucet = _build_faucet_transition_service()
 validate_capability_manifest = _build_manifest_validator(
-    _action_dependency_policy(Domain, ReadinessAction))
+    _action_dependency_policy(Domain, ReadinessAction), _production_definitions())
 
 
 def _build_static_catalogs() -> tuple[Callable[[], Mapping[str, Any]], Callable[[], tuple[Mapping[str, str], ...]]]:

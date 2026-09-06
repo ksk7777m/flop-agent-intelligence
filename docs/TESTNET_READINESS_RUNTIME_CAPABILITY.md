@@ -106,6 +106,11 @@ capabilities must be ready and blocker-free before `ACTION_READY` or `AUTHORIZED
 Replay Safety must be implemented for side-effecting actions; and mutable-value
 conflicts cannot be labeled ready. `AUTHORIZED` additionally requires independent
 authorization, while a consistent `ACTION_READY` manifest remains unauthorized.
+For every required child, the validator independently requires sufficient
+implementation and documentation state. Runtime-required children must be
+`RUNTIME_OBSERVED` with complete trusted observation evidence; children whose
+reviewed policy requires no runtime observation use the explicit `NOT_REQUIRED`
+runtime state. Every other or future runtime state is denied by default.
 
 PaperRail fields are canonical: protocol validity is independent from crypto
 verification, economic value, and finality. `PAPER_RAIL` may be protocol-valid,

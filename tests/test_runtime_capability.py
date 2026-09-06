@@ -36,7 +36,7 @@ def ready_definitions():
         rc.CapabilityDefinition("durability.readback", domain.EVIDENCE_DURABILITY, offline, documented, source.TECHNOCORE_ROOMS_JSON, True, True, ()),
         rc.CapabilityDefinition("delegation.verification", domain.DELEGATION_VERIFICATION, offline, documented, source.TECHNOCORE_SECURITY, False, False, ()),
         rc.CapabilityDefinition("tool.output_budget", domain.TOOL_OUTPUT_BUDGET, offline, state.REVIEW_REQUIRED, None, False, False, ()),
-        rc.CapabilityDefinition("replay.safety", domain.REPLAY_SAFETY, offline, state.REVIEW_REQUIRED, None, False, False, (), replay_ledger_implemented=True, side_effect_journal_implemented=True),
+        rc.CapabilityDefinition("replay.safety", domain.REPLAY_SAFETY, offline, documented, None, False, False, (), replay_ledger_implemented=True, side_effect_journal_implemented=True),
         rc.CapabilityDefinition("activity.quality", domain.ACTIVITY_QUALITY, offline, state.REVIEW_REQUIRED, None, False, False, ()),
         rc.CapabilityDefinition("protocol.generic_models", domain.PROTOCOL_MODEL, offline, documented, source.TECHNOCORE_SECURITY, False, False, ()),
         rc.CapabilityDefinition("runtime.drift", domain.RUNTIME_DRIFT, offline, state.RUNTIME_NOT_OBSERVED, source.TECHNOCORE_CONFIG, False, False, ()),
@@ -329,8 +329,66 @@ class RuntimeCapabilityTests(unittest.TestCase):
     def test_contract_rejects_stale_required_child_with_action_ready(self):
         value = private_manifest()
         child = value["domains"]["TECHNOCORE"][0]
-        child["runtime_status"], child["ready_to_act"] = "STALE_RUNTIME_OBSERVATION", False
+        child["runtime_status"], child["ready_to_act"] = "STALE_RUNTIME_OBSERVATION", True
+        child["blocking_reasons"] = []
         self.assertTrue(rc.validate_capability_manifest(value))
+
+    def test_all_required_domains_reject_non_actionable_runtime_states(self):
+        actions = (rc.ReadinessAction.GENERAL_TESTNET, rc.ReadinessAction.FAUCET_CLAIM,
+                   rc.ReadinessAction.INFERENCE_REQUEST, rc.ReadinessAction.SETTLEMENT)
+        statuses = ("CONFLICTING_CAPABILITY_EVIDENCE", "RUNTIME_NOT_OBSERVED",
+                    "RUNTIME_UNAVAILABLE", "STALE_RUNTIME_OBSERVATION")
+        covered = set()
+        for action in actions:
+            for domain, rows in private_manifest(action)["domains"].items():
+                if not rows[0]["required_for_action"]:
+                    continue
+                covered.add(domain)
+                for status in statuses:
+                    value = private_manifest(action)
+                    child = value["domains"][domain][0]
+                    child.update({"runtime_status": status, "ready_to_act": True,
+                                  "blocking_reasons": []})
+                    self.assertIn("REQUIRED_CHILD_RUNTIME_NOT_ACTIONABLE:" +
+                                  child["capability_id"],
+                                  rc.validate_capability_manifest(value),
+                                  (action, domain, status))
+        self.assertTrue({"IDENTITY", "TECHNOCORE", "FAUCET", "TESTNET_NETWORK",
+                         "INFERENCE", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY",
+                         "REPLAY_SAFETY"} <= covered)
+
+    def test_authorized_reuses_required_child_runtime_validation(self):
+        for status in ("CONFLICTING_CAPABILITY_EVIDENCE", "RUNTIME_NOT_OBSERVED",
+                       "RUNTIME_UNAVAILABLE"):
+            value = private_manifest()
+            value.update({"overall_state": "AUTHORIZED",
+                          "live_runtime_readiness": "AUTHORIZED",
+                          "authorized_to_act": True})
+            child = value["domains"]["TECHNOCORE"][0]
+            child.update({"runtime_status": status, "ready_to_act": True,
+                          "blocking_reasons": []})
+            self.assertIn("REQUIRED_CHILD_RUNTIME_NOT_ACTIONABLE:" +
+                          child["capability_id"],
+                          rc.validate_capability_manifest(value))
+
+    def test_unknown_required_child_runtime_state_fails_closed(self):
+        schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
+        value = private_manifest()
+        value["domains"]["IDENTITY"][0]["runtime_status"] = "FUTURE_OPTIMISTIC_STATE"
+        self.assertTrue(list(Draft202012Validator(schema).iter_errors(value)))
+        self.assertTrue(rc.validate_capability_manifest(value))
+
+    def test_required_child_implementation_and_documentation_are_derived(self):
+        mutations = (("implementation_status", "NOT_IMPLEMENTED",
+                      "REQUIRED_CHILD_IMPLEMENTATION_INSUFFICIENT"),
+                     ("documented_status", "REVIEW_REQUIRED",
+                      "REQUIRED_CHILD_DOCUMENTATION_INSUFFICIENT"))
+        for field, unsafe, error in mutations:
+            value = private_manifest()
+            child = value["domains"]["IDENTITY"][0]
+            child[field] = unsafe
+            self.assertIn(error + ":" + child["capability_id"],
+                          rc.validate_capability_manifest(value))
 
     def test_paperrail_cannot_claim_economic_value_or_finality(self):
         schema = json.loads((ROOT / "schemas/runtime-capability.v1.json").read_text())
