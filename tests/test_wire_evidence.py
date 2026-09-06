@@ -1,5 +1,6 @@
 import base64, copy, dataclasses, hashlib, inspect, io, json, logging, pickle
 import tempfile, traceback, unittest
+from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
 from cryptography.hazmat.primitives import serialization
@@ -127,6 +128,48 @@ class NonceAndSignerTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "SIGNING_CONTEXT_MISMATCH")
         self.assertEqual(calls, [])
 
+    def test_wrong_text_precedes_identity_key_and_signer_access(self):
+        path = Path("/tmp/nonexistent-fixture-key")
+        context = wire.build_signing_context("lobby", "7", "approved")
+        intent, require = signing_store(
+            policy.LocalActionClass.IDENTITY_SIGN, context, str(path.resolve()),
+            identity.IDENTITY_SIGN_CONTEXT)
+        calls = []
+        _, _, sign = identity._build_local_identity_service(
+            path, require, lambda *_: calls.append("key"),
+            lambda *_: calls.append("sign"), lambda *_: None)
+        with self.assertRaises(PermissionError):
+            sign("lobby", "7", "changed", intent=intent, revision=REVISION,
+                 config_version="fixture-v1")
+        self.assertEqual(calls, [])
+
+    def test_constructed_identity_service_ignores_material_and_canonical_rebinding(self):
+        path = Path("/tmp/nonexistent-fixture-key")
+        context = wire.build_signing_context("lobby", "7", "approved")
+        intent, require = signing_store(
+            policy.LocalActionClass.IDENTITY_SIGN, context, str(path.resolve()),
+            identity.IDENTITY_SIGN_CONTEXT)
+        effects = []
+        _, _, sign = identity._build_local_identity_service(
+            path, require,
+            lambda *_: (effects.append("key") or (object(), "did:key:fixture")),
+            lambda _key, _room, _nonce, text:
+                (effects.append("sign") or ("signature", text)),
+            lambda *_: None)
+        attacker = lambda *_args, **_kwargs: effects.append("attacker")
+        with mock.patch.object(identity, "_capture_signing_policy", attacker), \
+             mock.patch.object(identity, "build_signing_context", attacker), \
+             mock.patch.object(identity, "signing_capability_material", attacker), \
+             mock.patch.object(identity, "canonical_message", attacker), \
+             mock.patch.object(identity, "_load_identity", attacker), \
+             mock.patch.object(identity, "_sign_message", attacker):
+            with self.assertRaises(PermissionError):
+                sign("lobby", "8", "changed", intent=intent, revision=REVISION,
+                     config_version="fixture-v1")
+            result = sign("lobby", "7", "approved", intent=intent, revision=REVISION,
+                          config_version="fixture-v1")
+        self.assertEqual((result["nonce"], effects), ("7", ["key", "sign"]))
+
     def test_production_equivalent_post_binds_nonce_before_key(self):
         context = wire.build_signing_context("lobby", "7", "fixture")
         intent, require = signing_store(policy.LocalActionClass.SIGNED_ROOM_POST,
@@ -146,6 +189,41 @@ class NonceAndSignerTests(unittest.TestCase):
                       external_challenge=context.canonical_bytes)
         self.assertEqual((result["nonce"], calls), ("7", ["POST", "GET"]))
 
+    def test_constructed_post_ignores_rebinding_and_rejects_wrong_text_nonce(self):
+        context = wire.build_signing_context("lobby", "7", "approved")
+        intent, require = signing_store(
+            policy.LocalActionClass.SIGNED_ROOM_POST, context, "lobby", "fixture-post")
+        effects = []
+        attacker = lambda *_args, **_kwargs: effects.append("attacker")
+        def decoder(_url, request):
+            effects.append(request.method)
+            if request.method == "GET":
+                return {"messages": [{"from": "did:key:fixture", "nonce": "7",
+                                      "text": "approved", "seq": "1"}]}
+            return {"ok": True}
+        _, _, _, post, _ = technocore._build_technocore_client(
+            lambda *_: None, require,
+            lambda *_: (effects.append("key") or (object(), "did:key:fixture")),
+            lambda _key, _room, _nonce, text:
+                (effects.append("sign") or ("signature", text)), decoder)
+        with mock.patch.object(technocore, "_capture_signing_policy", attacker), \
+             mock.patch.object(technocore, "build_signing_context", attacker), \
+             mock.patch.object(technocore, "signing_capability_material", attacker), \
+             mock.patch.object(technocore, "canonical_message", attacker), \
+             mock.patch.object(technocore, "_load_identity", attacker), \
+             mock.patch.object(technocore, "_sign_message", attacker), \
+             mock.patch.object(technocore, "_PRODUCTION_RESPONSE_DECODER", attacker):
+            for nonce, text in (("8", "approved"), ("7", "changed")):
+                with self.subTest(nonce=nonce, text=text), self.assertRaises(PermissionError):
+                    post(Path("fixture"), "lobby", text, intent=intent,
+                         revision=REVISION, config_version="fixture-v1",
+                         context="fixture-post", nonce=nonce)
+            result = post(Path("fixture"), "lobby", "approved", intent=intent,
+                          revision=REVISION, config_version="fixture-v1",
+                          context="fixture-post", nonce="7")
+        self.assertEqual((result["nonce"], effects),
+                         ("7", ["key", "sign", "POST", "GET"]))
+
 class EvidenceAuthorityTests(unittest.TestCase):
     RAW = (b'{"seq":"1","generation":"gen-1"}\n'
            b'{"seq":"2","generation":"gen-1"}')
@@ -158,6 +236,15 @@ class EvidenceAuthorityTests(unittest.TestCase):
     def complete(self, service):
         acquisition = service.acquire_reviewed_export("reviewed", self.RAW)
         return acquisition, service.verify_completeness(acquisition)
+
+    def finality(self, service):
+        proposal, acceptance = agreement_fixture()
+        rail = wire.RailObservation.observed(
+            "bitcoin", "ref-1", "COMPLETED", protocol_valid=True)
+        agreement = service.verify_agreement(proposal, acceptance)
+        finality = service.verify_rail(agreement, rail)
+        artifact = service.describe_finality_artifact(finality)
+        return agreement, finality, artifact
 
     def test_opaque_types_block_construction_copy_serialization(self):
         for cls in (authority.TrustedAcquisitionEvidence,
@@ -247,26 +334,38 @@ class EvidenceAuthorityTests(unittest.TestCase):
         self.assertIsNone(service.verify_rail(service.verify_agreement(pp, pa), paper))
 
     def test_timestamp_flip_third_party_never_changes_finality(self):
-        first = b'{"seq":"1","ts":1,"generation":"gen-1"}'
         proposal, acceptance = agreement_fixture(); service = self.make_authority()
         agreement = service.verify_agreement(proposal, acceptance)
         self.assertIsInstance(agreement, authority.VerifiedAgreement)
-        for raw in (first, b'{"seq":"1","ts":999999,"generation":"gen-1"}'):
+        folds = []
+        for raw in (b'{"seq":"1","ts":99,"generation":"gen-1"}',
+                    b'{"seq":"1","ts":101,"generation":"gen-1"}'):
             observation = authority.observe_third_party_export(
                 raw, source_id="third-party", acquired_at_ms=1,
                 verifier_revision=REVISION, generation="gen-1")
+            folds.append(authority.observed_deadline_fold(
+                observation, deadline_ms=100))
             self.assertIsNone(service.verify_completeness(observation))
             bundle = service.issue_bundle(completeness=None, agreement=agreement,
                                           finality=None, readback=None)
             self.assertEqual(service.as_public_evidence(bundle)["finality"],
                              "FINALITY_UNVERIFIED")
+        self.assertEqual(folds, ["PRE_DEADLINE_OBSERVED", "POST_DEADLINE_OBSERVED"])
 
     def test_readback_and_bundle_require_same_registry_issued_tokens(self):
-        one, two, evidence_hash = self.make_authority(), self.make_authority(), "e" * 64
+        one, two = self.make_authority(), self.make_authority()
+        agreement, finality, artifact = self.finality(one)
         self.assertIsNone(one.verify_readback(
-            evidence_hash, ("write_accepted", "evidence_confirmed")))
-        readback = one.verify_readback(evidence_hash, EVENTS)
+            finality, artifact["artifact_sha256"],
+            ("write_accepted", "evidence_confirmed")))
+        self.assertIsNone(one.verify_readback(finality, "e" * 64, EVENTS))
+        readback = one.verify_readback(
+            finality, artifact["artifact_sha256"], EVENTS)
         self.assertIsInstance(readback, authority.VerifiedReadBackEvidence)
+        with self.assertRaises(PermissionError):
+            one.issue_bundle(completeness=None, agreement=agreement,
+                             finality=finality,
+                             readback=object.__new__(authority.VerifiedReadBackEvidence))
         with self.assertRaises(PermissionError):
             two.issue_bundle(completeness=None, agreement=None,
                              finality=None, readback=readback)
@@ -278,6 +377,25 @@ class EvidenceAuthorityTests(unittest.TestCase):
                 wire.EvidenceStatus.RAIL_CRYPTO_VERIFIED,
                 wire.EvidenceStatus.FINALITY_VERIFIED)
 
+    def test_readback_finality_artifacts_cannot_be_mixed(self):
+        service = self.make_authority()
+        agreement_a, finality_a, artifact_a = self.finality(service)
+        agreement_b, finality_b, artifact_b = self.finality(service)
+        self.assertNotEqual(artifact_a["artifact_sha256"], artifact_b["artifact_sha256"])
+        self.assertIsNone(service.verify_readback(
+            finality_a, artifact_b["artifact_sha256"], EVENTS))
+        readback_a = service.verify_readback(
+            finality_a, artifact_a["artifact_sha256"], EVENTS)
+        with self.assertRaises(PermissionError):
+            service.issue_bundle(completeness=None, agreement=agreement_b,
+                                 finality=finality_b, readback=readback_a)
+        bundle = service.issue_bundle(
+            completeness=None, agreement=agreement_a,
+            finality=finality_a, readback=readback_a)
+        projected = service.as_public_evidence(bundle)
+        self.assertEqual((projected["finality"], projected["read_back"]),
+                         ("FINALITY_VERIFIED", "EVIDENCE_CONFIRMED"))
+
     def test_full_production_equivalent_bundle_and_cross_authority_matrix(self):
         one, two = self.make_authority(), self.make_authority()
         proposal, acceptance = agreement_fixture()
@@ -286,13 +404,21 @@ class EvidenceAuthorityTests(unittest.TestCase):
         acquisition, complete = self.complete(one)
         agreement = one.verify_agreement(proposal, acceptance)
         finality = one.verify_rail(agreement, rail)
-        readback = one.verify_readback("e" * 64, EVENTS)
+        artifact = one.describe_finality_artifact(finality)
+        readback = one.verify_readback(finality, artifact["artifact_sha256"], EVENTS)
         bundle = one.issue_bundle(completeness=complete, agreement=agreement,
                                   finality=finality, readback=readback)
-        self.assertEqual(dict(one.as_public_evidence(bundle)), {
+        projected = dict(one.as_public_evidence(bundle))
+        self.assertEqual({key: projected[key] for key in (
+            "transcript", "agreement", "settlement", "finality", "read_back")}, {
             "transcript": "TRANSCRIPT_COMPLETENESS_VERIFIED",
             "agreement": "AGREEMENT_VERIFIED", "settlement": "RAIL_CRYPTO_VERIFIED",
             "finality": "FINALITY_VERIFIED", "read_back": "EVIDENCE_CONFIRMED"})
+        self.assertEqual(projected["projection_schema"],
+                         "flop-public-evidence-projection-v1")
+        self.assertEqual(projected["authority_provenance"],
+                         "OFFLINE_PRODUCTION_EQUIVALENT")
+        self.assertEqual(projected["serialized_authority"], "DESCRIPTIVE_ONLY")
         with self.assertRaises(PermissionError): two.describe_acquisition(acquisition)
         self.assertIsNone(two.verify_completeness(acquisition))
         self.assertIsNone(two.verify_rail(agreement, rail))
@@ -325,11 +451,11 @@ class EvidenceAuthorityTests(unittest.TestCase):
                 completeness=None, agreement=None, finality=forged_finality, readback=None)
         with self.assertRaises(PermissionError):
             authority.production_evidence_authority.as_public_evidence(forged_bundle)
-        helper = tuple.__new__(authority._SealedEvidenceService,
-                               (lambda *_: None,) * 7 + (lambda _bundle: {
-                                   "finality": "FINALITY_VERIFIED"},))
-        self.assertEqual(helper.as_public_evidence(forged_bundle)["finality"],
-                         "FINALITY_VERIFIED")
+        with self.assertRaises(TypeError):
+            tuple.__new__(type(authority.production_evidence_authority), ())
+        helper = object.__new__(type(authority.production_evidence_authority))
+        with self.assertRaises(PermissionError):
+            helper.as_public_evidence(forged_bundle)
         with self.assertRaises(PermissionError):
             authority.production_evidence_authority.as_public_evidence(forged_bundle)
 
@@ -341,7 +467,9 @@ class EvidenceAuthorityTests(unittest.TestCase):
         names = ("wire", "_sha", "_safe_export_assessment", "_rail_observation_hash",
                  "AUTHORITY_SCHEMA_VERSION", "MappingProxyType", "ExportObservation",
                  "TrustedAcquisitionEvidence", "VerifiedAgreement",
-                 "VerifiedRailFinality", "VerifiedEvidenceBundle")
+                 "VerifiedRailFinality", "VerifiedReadBackEvidence",
+                 "VerifiedEvidenceBundle", "_RailRecord", "_ReadBackRecord",
+                 "_BundleRecord", "_SealedEvidenceService")
         originals = {name: getattr(authority, name) for name in names}
         try:
             for name in names:
@@ -350,7 +478,9 @@ class EvidenceAuthorityTests(unittest.TestCase):
             complete = service.verify_completeness(acquisition)
             agreement = service.verify_agreement(proposal, acceptance)
             finality = service.verify_rail(agreement, rail)
-            readback = service.verify_readback("e" * 64, EVENTS)
+            artifact = service.describe_finality_artifact(finality)
+            readback = service.verify_readback(
+                finality, artifact["artifact_sha256"], EVENTS)
             bundle = service.issue_bundle(
                 completeness=complete, agreement=agreement,
                 finality=finality, readback=readback)
@@ -366,7 +496,8 @@ class EvidenceAuthorityTests(unittest.TestCase):
         acquisition, complete = self.complete(service)
         agreement = service.verify_agreement(proposal, acceptance)
         finality = service.verify_rail(agreement, rail)
-        readback = service.verify_readback("e" * 64, EVENTS)
+        artifact = service.describe_finality_artifact(finality)
+        readback = service.verify_readback(finality, artifact["artifact_sha256"], EVENTS)
         bundle = service.issue_bundle(completeness=complete, agreement=agreement,
                                       finality=finality, readback=readback)
         for token in (acquisition, complete, agreement, finality, readback, bundle):
@@ -374,12 +505,34 @@ class EvidenceAuthorityTests(unittest.TestCase):
                 for operation in (copy.copy, copy.deepcopy, pickle.dumps):
                     with self.assertRaises(TypeError): operation(token)
                 with self.assertRaises(TypeError): dataclasses.replace(token)
+                with self.assertRaises(TypeError): json.dumps(token)
                 forged = object.__new__(type(token))
                 with self.assertRaises(AttributeError): setattr(forged, "authority", True)
-                self.assertIsInstance(json.loads("{}"), dict)
+                reconstructed = json.loads(json.dumps({
+                    "token_type": type(token).__name__, "verified": True}))
+                self.assertIsInstance(reconstructed, dict)
                 with self.assertRaises(SyntaxError): eval(repr(token), {})
         forged_agreement = object.__new__(authority.VerifiedAgreement)
         self.assertIsNone(service.verify_rail(forged_agreement, rail))
+
+    def test_serialized_public_projection_never_regains_in_process_authority(self):
+        service = self.make_authority()
+        agreement, finality, artifact = self.finality(service)
+        readback = service.verify_readback(finality, artifact["artifact_sha256"], EVENTS)
+        bundle = service.issue_bundle(
+            completeness=None, agreement=agreement, finality=finality, readback=readback)
+        reconstructed = json.loads(json.dumps(dict(service.as_public_evidence(bundle))))
+        self.assertEqual(reconstructed["serialized_authority"], "DESCRIPTIVE_ONLY")
+        operations = (
+            lambda: authority.production_evidence_authority.as_public_evidence(reconstructed),
+            lambda: service.as_public_evidence(reconstructed),
+            lambda: service.verify_rail(reconstructed, wire.RailObservation.observed(
+                "bitcoin", "ref-1", "COMPLETED", protocol_valid=True)),
+            lambda: service.issue_bundle(completeness=None, agreement=reconstructed,
+                                         finality=None, readback=None),
+        )
+        for operation in operations:
+            with self.assertRaises((PermissionError, TypeError)): operation()
 
     def test_public_verified_field_forgery_is_rejected(self):
         with self.assertRaises(PermissionError):
@@ -408,6 +561,7 @@ class RedactionAndSurfaceTests(unittest.TestCase):
             try: operation()
             except wire.WireSafetyError as error:
                 rendered = (str(error) + repr(error) + repr(error.__dict__)
+                            + repr(error.as_evidence())
                             + "".join(traceback.format_exception(
                                 type(error), error, error.__traceback__)))
                 self.assertIsNone(error.__cause__); self.assertIsNone(error.__context__)
@@ -423,6 +577,15 @@ class RedactionAndSurfaceTests(unittest.TestCase):
         secret = "SECRET_BYTES_8123"
         self.assert_safe_error(lambda: wire.decode_tclk_alpha_json_frame(
             secret.encode() + b"\xff"), secret)
+
+    def test_secret_field_matrix_is_absent_from_every_error_surface(self):
+        for field in ("secret", "preimage", "witness", "presig.s", "paymentKey",
+                      "private_key", "seed", "mnemonic"):
+            secret = "raw-fixture-" + field + "-918273"
+            raw = json.dumps({field: secret}).encode()
+            with self.subTest(field=field):
+                self.assert_safe_error(
+                    lambda raw=raw: wire.decode_tclk_alpha_json_frame(raw), secret)
 
     def test_public_surface_has_no_effect_injection(self):
         forbidden = {"path", "transport", "fetcher", "writer", "callback", "executor", "signer", "adapter"}

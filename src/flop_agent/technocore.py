@@ -22,7 +22,11 @@ from .remote_content_policy import (
     require_local_intent,
     resolve_reviewed_source,
 )
-from .wire_evidence import build_signing_context, signing_capability_material
+from .wire_evidence import (
+    _capture_signing_policy,
+    build_signing_context,
+    signing_capability_material,
+)
 
 BASE_URL = "https://technocore.chat"
 OFFICIAL_READ_SOURCES = frozenset({
@@ -89,6 +93,8 @@ def _build_technocore_client(
     parse_url, quote_path = urllib.parse.urlparse, urllib.parse.quote
     request_type = urllib.request.Request
     json_dumps, fullmatch = json.dumps, re.fullmatch
+    text_sweeper = sweep_text
+    context_builder, capability_material_builder = _capture_signing_policy()
     message_canonicalizer = canonical_message
     safe_error = SafeRemoteError
     read_action = LocalActionClass.PRESENCE_NOTE_READ
@@ -143,10 +149,10 @@ def _build_technocore_client(
     def post(identity_path: Path, room: str, text: str, *, intent: ReviewedLocalIntent,
              revision: str, config_version: str, context: str,
              nonce: str, external_challenge: bytes | None = None) -> Dict[str, Any]:
-        clean = sweep_text(text)
-        signing_context = build_signing_context(
+        clean = text_sweeper(text)
+        signing_context = context_builder(
             room, nonce, clean, external_challenge=external_challenge)
-        material = signing_capability_material(
+        material = capability_material_builder(
             signing_context, action_class=post_action.value, target=room,
             revision=revision, config_version=config_version, purpose=context)
         capability_validator(

@@ -388,25 +388,91 @@ def signing_capability_material(
     })
 
 
+def _capture_signing_policy() -> tuple[Any, Any]:
+    """Return context/material builders with every policy dependency frozen."""
+    room_pattern = ROOM_RE
+    nonce_pattern = re.compile(r"[1-9][0-9]*")
+    revision_pattern = REVISION_RE
+    nonce_limit = MAX_PROTOCOL_NONCE
+    text_policy = SIGNER_TEXT_FRAME_POLICY
+    error_type = WireSafetyError
+    nonce_type = NonceLexeme
+    context_type = SigningContext
+    mapping_proxy = MappingProxyType
+    json_dumps = json.dumps
+    sha256 = hashlib.sha256
+
+    def context_builder(room: Any, nonce: Any, text: Any, *,
+                        external_challenge: bytes | None = None) -> SigningContext:
+        if (not isinstance(room, str) or room_pattern.fullmatch(room) is None
+                or room.startswith(("p-", "mb-")) or "-p-" in room):
+            raise error_type("ROOM_INVALID", "room", room, "reviewed public room required")
+        if (not isinstance(nonce, str)
+                or nonce_pattern.fullmatch(nonce) is None
+                or int(nonce) > nonce_limit):
+            raise error_type(
+                "NONCE_INVALID", "nonce", nonce,
+                "nonce must remain an exact in-range decimal string")
+        if not isinstance(text, str):
+            raise error_type("TEXT_INVALID", "text", text, "text must be a string")
+        try:
+            encoded = text.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise error_type(
+                "FRAME_UTF8_INVALID", "text", text, "strict UTF-8 required") from None
+        if len(encoded) > text_policy.byte_limit or len(text) > text_policy.character_limit:
+            raise error_type("FRAME_TOO_LARGE", "text", text, "signer text limit exceeded")
+        if text_policy.single_line and ("\n" in text or "\r" in text):
+            raise error_type("FRAME_MULTILINE", "text", text, "exactly one line required")
+        if not text:
+            raise error_type("FRAME_SYNTAX_INVALID", "text", text, "empty frame")
+        canonical = f"{room}|{nonce}|{text}".encode("utf-8")
+        if external_challenge is not None:
+            if not isinstance(external_challenge, bytes) or external_challenge != canonical:
+                raise error_type(
+                    "SIGNING_CONTEXT_MISMATCH", "external_challenge",
+                    external_challenge, "local reconstruction does not match")
+        checked_nonce = object.__new__(nonce_type)
+        object.__setattr__(checked_nonce, "decimal", nonce)
+        return context_type(
+            room, checked_nonce, text, canonical,
+            sha256(encoded).hexdigest(), sha256(canonical).hexdigest())
+
+    def material_builder(context: SigningContext, *, action_class: str, target: str,
+                         revision: str, config_version: str,
+                         purpose: str) -> Mapping[str, str]:
+        if action_class not in {"IDENTITY_SIGN", "RECEIPT_SIGN", "SIGNED_ROOM_POST"}:
+            raise error_type("ACTION_INVALID", "action_class", action_class,
+                             "signing action is not reviewed")
+        if revision_pattern.fullmatch(revision) is None:
+            raise error_type("REVISION_INVALID", "revision", revision,
+                             "exact lowercase Git revision required")
+        if not target or not config_version or not isinstance(purpose, str) or not purpose:
+            raise error_type("BINDING_INVALID", "binding")
+        binding = {
+            "room": context.room, "nonce": context.nonce.decimal,
+            "text_sha256": context.text_sha256,
+            "canonical_sha256": context.canonical_sha256,
+            "action_class": action_class, "target": target,
+            "revision": revision, "config_version": config_version,
+        }
+        subject = json_dumps(
+            binding, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return mapping_proxy({
+            "subject": subject, "target": target,
+            "payload": context.canonical_bytes.decode("utf-8"), "context": purpose,
+        })
+
+    return context_builder, material_builder
+
+
+_SEALED_CONTEXT_BUILDER, _SEALED_MATERIAL_BUILDER = _capture_signing_policy()
+
+
 def build_signing_context(room: Any, nonce: Any, text: Any, *,
                           external_challenge: bytes | None = None) -> SigningContext:
-    # Validation order is security relevant: target before nonce before content.
-    checked_room = validate_room(room)
-    checked_nonce = parse_nonce(nonce)
-    if not isinstance(text, str):
-        raise WireSafetyError(
-            "TEXT_INVALID", "text", text, "text must be a string")
-    encoded = text.encode("utf-8", errors="strict")
-    _gate_raw_frame(encoded, SIGNER_TEXT_FRAME_POLICY)
-    canonical = f"{checked_room}|{checked_nonce.decimal}|{text}".encode("utf-8")
-    if external_challenge is not None:
-        if not isinstance(external_challenge, bytes) or external_challenge != canonical:
-            raise WireSafetyError(
-                "SIGNING_CONTEXT_MISMATCH", "external_challenge",
-                external_challenge, "local reconstruction does not match")
-    return SigningContext(
-        checked_room, checked_nonce, text, canonical,
-        _sha256(encoded), _sha256(canonical))
+    return _SEALED_CONTEXT_BUILDER(
+        room, nonce, text, external_challenge=external_challenge)
 
 
 @dataclass(frozen=True)

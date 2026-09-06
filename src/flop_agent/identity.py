@@ -18,7 +18,11 @@ from .remote_content_policy import (
     ReviewedLocalIntent,
     require_local_intent,
 )
-from .wire_evidence import build_signing_context, signing_capability_material
+from .wire_evidence import (
+    _capture_signing_policy,
+    build_signing_context,
+    signing_capability_material,
+)
 
 MULTICODEC_ED25519 = b"\xed\x01"
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -107,15 +111,21 @@ def _load_identity(path: Path) -> Tuple[Ed25519PrivateKey, str]:
     return key, did
 
 
-def canonical_message(room: str, nonce: str, text: str) -> Tuple[str, str]:
-    clean = sweep_text(text)
-    context = build_signing_context(room, nonce, clean)
+def canonical_message(
+    room: str, nonce: str, text: str, *, _sweeper: Any = sweep_text,
+    _context_builder: Any = _capture_signing_policy()[0],
+) -> Tuple[str, str]:
+    clean = _sweeper(text)
+    context = _context_builder(room, nonce, clean)
     return context.canonical_bytes.decode("utf-8"), clean
 
 
-def _sign_message(key: Ed25519PrivateKey, room: str, nonce: str, text: str) -> Tuple[str, str]:
+def _sign_message(
+    key: Ed25519PrivateKey, room: str, nonce: str, text: str, *,
+    _canonicalizer: Any = canonical_message,
+) -> Tuple[str, str]:
     """Low-level signer retained only for sealed services and offline unit fixtures."""
-    canonical, clean = canonical_message(room, nonce, text)
+    canonical, clean = _canonicalizer(room, nonce, text)
     signature = base64.urlsafe_b64encode(key.sign(canonical.encode("utf-8"))).decode().rstrip("=")
     return signature, clean
 
@@ -137,6 +147,8 @@ def _build_local_identity_service(
     configured_path = identity_path.resolve()
     action = LocalActionClass.IDENTITY_SIGN
     context = IDENTITY_SIGN_CONTEXT
+    text_sweeper = sweep_text
+    context_builder, capability_material_builder = _capture_signing_policy()
     canonicalizer = canonical_message
 
     def get_public_did() -> str:
@@ -155,10 +167,10 @@ def _build_local_identity_service(
         revision: str, config_version: str,
         external_challenge: bytes | None = None,
     ) -> Dict[str, str]:
-        clean = sweep_text(text)
-        signing_context = build_signing_context(
+        clean = text_sweeper(text)
+        signing_context = context_builder(
             room, nonce, clean, external_challenge=external_challenge)
-        material = signing_capability_material(
+        material = capability_material_builder(
             signing_context, action_class=action.value,
             target=str(configured_path), revision=revision,
             config_version=config_version, purpose=context)

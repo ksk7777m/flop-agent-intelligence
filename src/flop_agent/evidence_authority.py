@@ -168,7 +168,9 @@ class _RailRecord:
     rail: str
     reference: str
     terminal_state: str
-    evidence_sha256: str
+    settlement_evidence_sha256: str
+    independent_proof_sha256: str
+    artifact_sha256: str
     verifier_revision: str
     policy_version: str
     verified_at_ms: int
@@ -176,7 +178,10 @@ class _RailRecord:
 
 @dataclass(frozen=True)
 class _ReadBackRecord:
-    evidence_sha256: str
+    artifact_sha256: str
+    agreement_id: str
+    rail: str
+    reference: str
     events_sha256: str
     verifier_revision: str
     policy_version: str
@@ -186,6 +191,7 @@ class _ReadBackRecord:
 @dataclass(frozen=True)
 class _BundleRecord:
     public: Mapping[str, str]
+    bundle_sha256: str
     verifier_revision: str
     policy_version: str
     verified_at_ms: int
@@ -316,49 +322,80 @@ def observe_third_party_export(raw: bytes, *, source_id: str, acquired_at_ms: in
         _sha(raw), len(raw), verifier_revision, generation, assessment)
 
 
-class _SealedEvidenceService(tuple):
-    """Immutable facade whose mutable issuance state lives only in closures."""
+def observed_deadline_fold(observation: ExportObservation, *, deadline_ms: int) -> str:
+    """Fold unsigned venue timestamps for descriptive display only."""
+    wire.validate_unix_ms(deadline_ms, field="deadline_ms")
+    timestamps = tuple(
+        item.timestamp_ms for item in observation.assessment.venue_metadata
+        if item.timestamp_ms is not None)
+    if not timestamps:
+        return "DEADLINE_UNKNOWN"
+    return ("PRE_DEADLINE_OBSERVED" if max(timestamps) <= deadline_ms
+            else "POST_DEADLINE_OBSERVED")
+
+
+class _SealedEvidenceService:
+    """Base for an identity-bound facade whose issuance state lives in closures."""
 
     __slots__ = ()
 
     def __new__(cls, *_args: Any, **_kwargs: Any) -> "_SealedEvidenceService":
         raise PermissionError("evidence services are created only by the sealed root")
 
+    @staticmethod
+    def _reject() -> Any:
+        raise PermissionError("evidence service instance was not issued by the sealed root")
+
     def acquire_reviewed_export(self, source_id: str, raw: bytes) -> TrustedAcquisitionEvidence:
-        return self[0](source_id, raw)
+        del source_id, raw
+        return self._reject()
 
     def describe_acquisition(self, evidence: TrustedAcquisitionEvidence) -> ExportObservation:
-        return self[1](evidence)
+        del evidence
+        return self._reject()
 
     def verify_completeness(
         self, evidence: TrustedAcquisitionEvidence,
     ) -> VerifiedTranscriptCompleteness | None:
-        return self[2](evidence)
+        del evidence
+        return self._reject()
 
     def verify_agreement(
         self, proposal: wire.AgreementProposal, acceptance: wire.AgreementAcceptance,
     ) -> VerifiedAgreement | None:
-        return self[3](proposal, acceptance)
+        del proposal, acceptance
+        return self._reject()
 
     def verify_rail(
         self, agreement: VerifiedAgreement, observation: wire.RailObservation,
     ) -> VerifiedRailFinality | None:
-        return self[4](agreement, observation)
+        del agreement, observation
+        return self._reject()
+
+    def describe_finality_artifact(
+        self, finality: VerifiedRailFinality,
+    ) -> Mapping[str, str]:
+        del finality
+        return self._reject()
 
     def verify_readback(
-        self, evidence_sha256: str, events: Sequence[str],
+        self, finality: VerifiedRailFinality, evidence_sha256: str,
+        events: Sequence[str],
     ) -> VerifiedReadBackEvidence | None:
-        return self[5](evidence_sha256, events)
+        del finality, evidence_sha256, events
+        return self._reject()
 
     def issue_bundle(
         self, *, completeness: VerifiedTranscriptCompleteness | None,
         agreement: VerifiedAgreement | None, finality: VerifiedRailFinality | None,
         readback: VerifiedReadBackEvidence | None,
     ) -> VerifiedEvidenceBundle:
-        return self[6](completeness, agreement, finality, readback)
+        del completeness, agreement, finality, readback
+        return self._reject()
 
     def as_public_evidence(self, bundle: VerifiedEvidenceBundle) -> Mapping[str, str]:
-        return self[7](bundle)
+        del bundle
+        return self._reject()
 
 
 def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[], _SealedEvidenceService]]:
@@ -411,6 +448,7 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
         readbacks: Mapping[str, Mapping[str, Any]],
         verifier_revision: str,
         clock_ms: Callable[[], int],
+        projection_scope: str,
     ) -> _SealedEvidenceService:
         if regex_fullmatch(r"[0-9a-f]{40}", verifier_revision) is None:
             raise ValueError("exact verifier revision required")
@@ -422,6 +460,15 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
             key: mapping_proxy(dict(value)) for key, value in readbacks.items()})
         revision = verifier_revision
         clock = clock_ms
+        policy_digest = sha256(wire_api._canonical_json({
+            "acquisitions": {key: dict(value) for key, value in acquisitions.items()},
+            "rail_proofs": {key: dict(value) for key, value in rail_proofs.items()},
+            "readbacks": {key: dict(value) for key, value in readbacks.items()},
+            "schema": schema_version,
+        }))
+        provenance_marker = sha256(
+            (schema_version + "|" + revision + "|" + policy_digest
+             + "|" + projection_scope).encode())
 
         acquisitions_issued: weakref.WeakKeyDictionary[
             TrustedAcquisitionEvidence, _TrustedAcquisitionRecord] = weak_key_dictionary()
@@ -559,16 +606,29 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
                     or proof.get("independent_finality_verified") is not True
                     or proof.get("cryptographic_verification") is not True):
                 return None
+            proof_sha = sha256(wire_api._canonical_json(dict(proof)))
+            artifact_sha = sha256(wire_api._canonical_json({
+                "agreement_id": agreement_record.agreement_id,
+                "rail": observation.rail_canonical,
+                "reference": observation.reference,
+                "terminal_state": observation.terminal_state,
+                "independent_proof_sha256": proof_sha,
+                "settlement_evidence_sha256": evidence_sha,
+                "verifier_revision": revision,
+                "policy_version": schema_version,
+            }))
             token = object.__new__(finality_token_type)
             finality_issued[token] = rail_record_type(
                 agreement_record.agreement_id, observation.rail_canonical,
                 observation.reference, observation.terminal_state, evidence_sha,
-                revision, schema_version, clock())
+                proof_sha, artifact_sha, revision, schema_version, clock())
             return token
 
-        def readback(evidence_sha256: str,
+        def readback(finality_token: VerifiedRailFinality, evidence_sha256: str,
                      events: Sequence[str]) -> VerifiedReadBackEvidence | None:
-            configured = readback_policy.get(evidence_sha256)
+            finality_record = finality_issued.get(finality_token)
+            configured = (readback_policy.get(finality_record.settlement_evidence_sha256)
+                          if finality_record is not None else None)
             checked_events = tuple(events)
             stage = wire_api.ReadBackStage.NOT_STARTED
             try:
@@ -576,14 +636,36 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
                     stage = wire_api.advance_readback(stage, event)
             except wire_api.WireSafetyError:
                 return None
-            if (configured is None or tuple(configured.get("events", ())) != checked_events
+            if (configured is None or evidence_sha256 != finality_record.artifact_sha256
+                    or configured.get("rail") != finality_record.rail
+                    or configured.get("reference") != finality_record.reference
+                    or tuple(configured.get("events", ())) != checked_events
                     or stage is not wire_api.ReadBackStage.EVIDENCE_CONFIRMED):
                 return None
             token = object.__new__(readback_token_type)
             readbacks_issued[token] = readback_record_type(
-                evidence_sha256, sha256("\0".join(checked_events).encode()),
+                finality_record.artifact_sha256, finality_record.agreement_id,
+                finality_record.rail, finality_record.reference,
+                sha256("\0".join(checked_events).encode()),
                 revision, schema_version, clock())
             return token
+
+        def describe_finality(finality_token: VerifiedRailFinality) -> Mapping[str, str]:
+            record = finality_issued.get(finality_token)
+            if record is None:
+                raise PermissionError("finality evidence was not issued by this authority")
+            return mapping_proxy({
+                "agreement_id": record.agreement_id,
+                "rail": record.rail,
+                "reference": record.reference,
+                "terminal_state": record.terminal_state,
+                "independent_proof_sha256": record.independent_proof_sha256,
+                "settlement_evidence_sha256": record.settlement_evidence_sha256,
+                "artifact_sha256": record.artifact_sha256,
+                "verifier_revision": record.verifier_revision,
+                "policy_version": record.policy_version,
+                "authority": "DESCRIPTIVE_ONLY",
+            })
 
         def bundle(completeness_token: VerifiedTranscriptCompleteness | None,
                    agreement_token: VerifiedAgreement | None,
@@ -597,19 +679,45 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
                     or (agreement_token is not None and a is None)
                     or (finality_token is not None and f is None)
                     or (readback_token is not None and r is None)
-                    or (f is not None and (a is None or f.agreement_id != a.agreement_id))):
+                    or (f is not None and (a is None or f.agreement_id != a.agreement_id))
+                    or (r is not None and (f is None
+                                           or r.artifact_sha256 != f.artifact_sha256
+                                           or r.agreement_id != f.agreement_id
+                                           or r.rail != f.rail
+                                           or r.reference != f.reference
+                                           or r.verifier_revision != f.verifier_revision
+                                           or r.policy_version != f.policy_version))):
                 raise PermissionError("bundle contains evidence not issued by this authority")
-            public = mapping_proxy({
+            claims = {
                 "transcript": ("TRANSCRIPT_COMPLETENESS_VERIFIED" if c else
                                "TRANSCRIPT_COMPLETENESS_UNVERIFIED"),
                 "agreement": "AGREEMENT_VERIFIED" if a else "AGREEMENT_UNVERIFIED",
                 "settlement": "RAIL_CRYPTO_VERIFIED" if f else "RAIL_UNVERIFIED",
                 "finality": "FINALITY_VERIFIED" if f else "FINALITY_UNVERIFIED",
                 "read_back": "EVIDENCE_CONFIRMED" if r else "READBACK_UNVERIFIED",
+            }
+            bundle_sha = sha256(wire_api._canonical_json({
+                "claims": claims,
+                "completeness_snapshot": c.snapshot_sha256 if c else None,
+                "agreement_id": a.agreement_id if a else None,
+                "finality_artifact_sha256": f.artifact_sha256 if f else None,
+                "readback_artifact_sha256": r.artifact_sha256 if r else None,
+                "verifier_revision": revision,
+                "policy_version": schema_version,
+            }))
+            public = mapping_proxy({
+                **claims,
+                "projection_schema": "flop-public-evidence-projection-v1",
+                "verifier_revision": revision,
+                "policy_digest": policy_digest,
+                "evidence_bundle_digest": bundle_sha,
+                "authority_provenance": projection_scope,
+                "authority_provenance_sha256": provenance_marker,
+                "serialized_authority": "DESCRIPTIVE_ONLY",
             })
             token = object.__new__(bundle_token_type)
             bundles_issued[token] = bundle_record_type(
-                public, revision, schema_version, clock())
+                public, bundle_sha, revision, schema_version, clock())
             return token
 
         def project(bundle_token: VerifiedEvidenceBundle) -> Mapping[str, str]:
@@ -618,15 +726,66 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
                 raise PermissionError("verified bundle was not issued by this authority")
             return record.public
 
-        return tuple.__new__(service_type, (
-            acquire, describe, completeness, agreement, rail, readback, bundle, project))
+        service: _SealedEvidenceService | None = None
+
+        def require_bound(candidate: _SealedEvidenceService) -> None:
+            if candidate is not service:
+                raise PermissionError("evidence service instance was not issued by this authority")
+
+        class BoundEvidenceService(service_type):
+            __slots__ = ()
+
+            def acquire_reviewed_export(self, source_id: str, raw: bytes) -> TrustedAcquisitionEvidence:
+                require_bound(self)
+                return acquire(source_id, raw)
+
+            def describe_acquisition(self, evidence: TrustedAcquisitionEvidence) -> ExportObservation:
+                require_bound(self)
+                return describe(evidence)
+
+            def verify_completeness(self, evidence: TrustedAcquisitionEvidence) -> VerifiedTranscriptCompleteness | None:
+                require_bound(self)
+                return completeness(evidence)
+
+            def verify_agreement(self, proposal: wire.AgreementProposal, acceptance: wire.AgreementAcceptance) -> VerifiedAgreement | None:
+                require_bound(self)
+                return agreement(proposal, acceptance)
+
+            def verify_rail(self, agreement_token: VerifiedAgreement, observation: wire.RailObservation) -> VerifiedRailFinality | None:
+                require_bound(self)
+                return rail(agreement_token, observation)
+
+            def describe_finality_artifact(self, finality_token: VerifiedRailFinality) -> Mapping[str, str]:
+                require_bound(self)
+                return describe_finality(finality_token)
+
+            def verify_readback(self, finality_token: VerifiedRailFinality,
+                                evidence_sha256: str,
+                                events: Sequence[str]) -> VerifiedReadBackEvidence | None:
+                require_bound(self)
+                return readback(finality_token, evidence_sha256, events)
+
+            def issue_bundle(self, *, completeness: VerifiedTranscriptCompleteness | None,
+                             agreement: VerifiedAgreement | None,
+                             finality: VerifiedRailFinality | None,
+                             readback: VerifiedReadBackEvidence | None) -> VerifiedEvidenceBundle:
+                require_bound(self)
+                return bundle(completeness, agreement, finality, readback)
+
+            def as_public_evidence(self, bundle_token: VerifiedEvidenceBundle) -> Mapping[str, str]:
+                require_bound(self)
+                return project(bundle_token)
+
+        service = object.__new__(BoundEvidenceService)
+        return service
 
     # A Git commit cannot truthfully embed its own hash.  This descriptive
     # revision instead binds the repository-controlled schema and sealed root
     # policy.  It is recorded for audit context and is never a trust primitive.
     production_revision = sha256(
         (schema_version + "|production-root|fail-closed-v1").encode())[:40]
-    production = build_service({}, {}, {}, production_revision, lambda: 0)
+    production = build_service(
+        {}, {}, {}, production_revision, lambda: 0, "SEALED_PRODUCTION_AUTHORITY")
 
     fixed_acquisitions = {
         "reviewed": {
@@ -668,11 +827,16 @@ def _bootstrap_evidence_services() -> tuple[_SealedEvidenceService, Callable[[],
         "protocol_valid": True, "independent_finality_verified": True,
         "cryptographic_verification": True,
     }}
-    fixed_readbacks = {"e" * 64: {"events": fixture_events}}
+    fixed_readbacks = {rail_observation_digest(fixture_rail): {
+        "rail": fixture_rail.rail_canonical,
+        "reference": fixture_rail.reference,
+        "events": fixture_events,
+    }}
 
     def build_fixed_test_service() -> _SealedEvidenceService:
         return build_service(fixed_acquisitions, fixed_rails, fixed_readbacks,
-                             "a" * 40, lambda: 1_800_000_000_000)
+                             "a" * 40, lambda: 1_800_000_000_000,
+                             "OFFLINE_PRODUCTION_EQUIVALENT")
 
     return production, build_fixed_test_service
 
