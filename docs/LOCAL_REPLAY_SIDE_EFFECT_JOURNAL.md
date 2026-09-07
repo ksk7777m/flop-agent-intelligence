@@ -8,6 +8,10 @@ The canonical replay identity binds the actor DID, action class, room/context,
 exact nonce lexeme, signed-payload hash, canonical signing-bytes hash, target,
 schema version, and captured policy version. A separate nonce-scope constraint
 detects reuse of the same actor/context/nonce with different signed material.
+Every field is revalidated at the sealed service boundary before canonical
+material or a replay ID is derived, including objects forged around the frozen
+dataclass constructor. Nonces are exact canonical decimal strings and hashes
+are exact lowercase SHA-256 hex.
 
 SQLite `BEGIN IMMEDIATE` transactions and storage-level uniqueness guarantee
 that concurrent workers cannot both reserve one effect. An attempt left in
@@ -18,10 +22,22 @@ store hashes of reviewed evidence, not raw payloads or secrets.
 Production captures its private root under `secrets`, creates directories and
 files as `0700` and `0600`, opens path components relative to trusted directory
 descriptors with no-follow semantics, and exposes no path or dependency
-injection. Store metadata binds schema, policy, store kind, and a sealed store
-identity, so a separately provisioned service cannot attach to the database.
+injection. The verified directory and database descriptors remain open through
+SQLite open, and device/inode identity is checked again before schema or ledger
+mutation. Store metadata binds schema, policy, store kind, descriptive store
+identity, and a digest derived from a process-local family secret plus the
+verified inode. The secret is neither persisted nor caller-settable, so visible
+metadata, the same database path, or a copied database cannot reconstruct the
+authority of a legitimate service family. Test provisioning accepts only a new,
+empty non-production store; reopening is performed only by workers issued from
+the original family.
 The production facade retains only observation, lookup, and canonical replay-ID
 operations; it carries no authority issuer or privileged effect mutator.
+
+Nonce conflicts are recorded separately from the authoritative action state.
+A conflict detected after confirmation therefore leaves the confirmed result
+unchanged while recording the conflicting replay ID and canonical-material hash;
+the conflicting identity is never made executable.
 
 The public projection is `DESCRIPTIVE_ONLY` and cannot be loaded back as
 authority. Validation, action authorization, reservation, confirmation, and
