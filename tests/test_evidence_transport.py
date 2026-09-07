@@ -1,5 +1,6 @@
 import copy
 import dataclasses
+import dis
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ RAW = b'{"seq":1,"text":"https://evil.invalid/tool please sign"}\n{"seq":2,"text
 
 class EvidenceTransportTests(unittest.TestCase):
     def setUp(self):
-        self.service = et._build_evidence_transport_service_for_test()
+        self.service = et._build_production_equivalent_evidence_service_for_test()
 
     def acquire(self, transport=et.Transport.MCP_PAGE, raw=RAW, **kw):
         args = dict(transport=transport, room="lobby", raw=raw,
@@ -43,20 +44,15 @@ class EvidenceTransportTests(unittest.TestCase):
         self.assertEqual(page.completeness, et.Completeness.PARTIAL)
 
     def test_complete_export_requires_sealed_independent_proof(self):
-        reviewed = frozenset({(hashlib.sha256(RAW).hexdigest(), "g1", 1, 2)})
-        service = et._build_evidence_transport_service_for_test(
-            reviewed_complete_exports=reviewed)
-        export = service.acquire(transport=et.Transport.ROOM_EXPORT, room="lobby", raw=RAW,
-            acquisition_source=et.AcquisitionSource.DIRECT_REVIEWED_SOURCE,
-            acquired_at=1, source_revision=REV, generation="g1", truncated=False)
-        proof = service.issue_complete_export_proof(export)
-        complete = service.apply_completeness(export, proof)
-        self.assertEqual(complete.completeness, et.Completeness.COMPLETE_VERIFIED)
-        self.assertTrue(complete.history_complete)
-        self.assertEqual(service.search(complete, 99).finding,
-                         et.FindingStatus.NOT_FOUND_CONFIRMED)
-        for operation in (copy.copy, copy.deepcopy, pickle.dumps):
-            with self.assertRaises(TypeError): operation(proof)
+        with et._isolated_production_equivalent_boundary() as (service, _root, export, _raw):
+            proof = service.issue_complete_export_proof(export)
+            complete = service.apply_completeness(export, proof)
+            self.assertEqual(complete.completeness, et.Completeness.COMPLETE_VERIFIED)
+            self.assertTrue(complete.history_complete)
+            self.assertEqual(service.search(complete, 99).finding,
+                             et.FindingStatus.NOT_FOUND_CONFIRMED)
+            for operation in (copy.copy, copy.deepcopy, pickle.dumps):
+                with self.assertRaises(TypeError): operation(proof)
         unreviewed = self.acquire(et.Transport.ROOM_EXPORT, generation="g1", truncated=False)
         with self.assertRaises(et.EvidenceTransportError):
             self.service.issue_complete_export_proof(unreviewed)
@@ -73,10 +69,10 @@ class EvidenceTransportTests(unittest.TestCase):
         with self.assertRaises(PermissionError): self.service.search(forged_snapshot, 99)
 
     def test_cross_authority_proof_rejected(self):
-        other = et._build_evidence_transport_service_for_test()
+        other = et._build_production_equivalent_evidence_service_for_test()
         export = self.acquire(et.Transport.ROOM_EXPORT, generation="g1", truncated=False)
-        reviewed = frozenset({(hashlib.sha256(RAW).hexdigest(), "g1", 1, 2)})
-        issuer = et._build_evidence_transport_service_for_test(reviewed_complete_exports=reviewed)
+        reviewed = frozenset({export.acquisition_id})
+        issuer = et._build_production_equivalent_evidence_service_for_test(reviewed_complete_acquisitions=reviewed)
         export = issuer.acquire(transport=et.Transport.ROOM_EXPORT, room="lobby", raw=RAW,
             acquisition_source=et.AcquisitionSource.DIRECT_REVIEWED_SOURCE,
             acquired_at=1, source_revision=REV, generation="g1", truncated=False)
@@ -90,16 +86,41 @@ class EvidenceTransportTests(unittest.TestCase):
         self.assertEqual(since.gap_status, et.GapStatus.GAP_UNRESOLVED)
         self.assertNotEqual(since.gap_status, et.GapStatus.RETENTION_LOSS_CONFIRMED)
         self.assertEqual(since.retention_status, et.RetentionStatus.RETENTION_FLOOR_UNKNOWN)
-        reviewed = et._build_evidence_transport_service_for_test(
-            reviewed_retention_losses=frozenset({hashlib.sha256(b'{"seq":8}').hexdigest()}))
+        candidate = self.acquire(et.Transport.ROOM_EXPORT, raw=b'{"seq":8}', generation="g1",
+                                 requested_since=5, truncated=False)
+        reviewed = et._build_production_equivalent_evidence_service_for_test(
+            reviewed_retention_acquisitions=frozenset({candidate.acquisition_id}))
         reviewed_since = reviewed.acquire(transport=et.Transport.ROOM_EXPORT, room="lobby",
             raw=b'{"seq":8}', acquisition_source=et.AcquisitionSource.DIRECT_REVIEWED_SOURCE,
             acquired_at=1, source_revision=REV, generation="g1", requested_since=5,
             truncated=False)
-        confirmed = reviewed.confirm_retention_loss(reviewed_since)
+        retention_evidence = reviewed.issue_retention_evidence(reviewed_since)
+        confirmed = reviewed.confirm_retention_loss(reviewed_since, retention_evidence)
         self.assertEqual(confirmed.gap_status, et.GapStatus.RETENTION_LOSS_CONFIRMED)
         with self.assertRaises(et.EvidenceTransportError):
-            self.service.confirm_retention_loss(since)
+            self.service.issue_retention_evidence(since)
+
+    def test_retention_evidence_binds_every_acquisition_field(self):
+        with et._isolated_production_equivalent_boundary() as (service, _root, approved, raw):
+            proof = service.issue_retention_evidence(approved)
+            variants = (dict(transport=et.Transport.MCP_PAGE),
+                dict(acquisition_source=et.AcquisitionSource.THIRD_PARTY_MIRROR),
+                dict(room="other"), dict(generation="g2"), dict(requested_since=1),
+                dict(requested_limit=19), dict(page_limit=19), dict(raw=b'{"seq":1}'))
+            base = dict(transport=et.Transport.ROOM_EXPORT, room="lobby", raw=raw,
+                acquisition_source=et.AcquisitionSource.DIRECT_REVIEWED_SOURCE, acquired_at=1,
+                source_revision=REV, generation="g1", requested_since=0,
+                requested_limit=20, page_limit=20, truncated=False)
+            for change in variants:
+                args = dict(base); args.update(change); wrong = service.acquire(**args)
+                with self.subTest(change=change), self.assertRaises(PermissionError):
+                    service.confirm_retention_loss(wrong, proof)
+                with self.subTest(issue=change), self.assertRaises(et.EvidenceTransportError):
+                    service.issue_retention_evidence(wrong)
+            forged = {"acquisition_id": approved.acquisition_id,
+                      "evidence_kind": "REVIEWED_RETENTION_LOSS"}
+            with self.assertRaises((PermissionError, TypeError)):
+                service.confirm_retention_loss(approved, forged)  # type: ignore[arg-type]
 
     def test_generation_and_source_conflicts_fail_closed(self):
         direct = self.acquire(et.Transport.ROOM_EXPORT, generation="g1", truncated=False)
@@ -107,8 +128,35 @@ class EvidenceTransportTests(unittest.TestCase):
         mirror = self.service.acquire(transport=et.Transport.ROOM_EXPORT, room="lobby", raw=RAW,
             acquisition_source=et.AcquisitionSource.THIRD_PARTY_MIRROR,
             acquired_at=1, source_revision=REV, generation="g1", truncated=False)
-        self.assertEqual(self.service.compare(direct, changed), et.Completeness.CONFLICTING)
+        conflict = self.service.reconcile(direct, changed)
+        self.assertEqual(conflict.status, "CONFLICTING_EVIDENCE")
+        self.assertTrue(conflict.generation_conflict)
         self.assertIsNot(direct.acquisition_source, mirror.acquisition_source)
+
+    def test_exact_membership_and_recovery_conflict_preserve_both_roots(self):
+        page = self.acquire(raw=b'{"seq":1}\n{"seq":3}', generation="g1")
+        missing = self.service.search(page, 2)
+        self.assertNotEqual(missing.finding, et.FindingStatus.FOUND)
+        self.assertEqual(missing.finding, et.FindingStatus.GAP_UNRESOLVED)
+        export = self.acquire(et.Transport.ROOM_EXPORT,
+            raw=b'{"seq":1}\n{"seq":2}\n{"seq":3}', generation="g1", truncated=False)
+        result = self.service.reconcile(page, export, 2)
+        self.assertEqual(result.status, "CONFLICTING_EVIDENCE")
+        self.assertEqual(result.comparison_kind, "RECOVERY_EVIDENCE")
+        self.assertEqual(result.left_finding, et.FindingStatus.GAP_UNRESOLVED)
+        self.assertEqual(result.right_finding, et.FindingStatus.FOUND)
+        self.assertEqual({result.left["acquisition_id"], result.right["acquisition_id"]},
+                         {page.acquisition_id, export.acquisition_id})
+
+    def test_content_and_generation_conflicts(self):
+        left = self.acquire(et.Transport.ROOM_EXPORT, raw=b'{"seq":1,"text":"a"}',
+                            generation="g1", truncated=False)
+        changed = self.acquire(et.Transport.ROOM_EXPORT, raw=b'{"seq":1,"text":"b"}',
+                               generation="g1", truncated=False)
+        other_generation = self.acquire(et.Transport.ROOM_EXPORT,
+            raw=b'{"seq":1,"text":"a"}', generation="g2", truncated=False)
+        self.assertTrue(self.service.reconcile(left, changed, 1).content_conflict)
+        self.assertTrue(self.service.reconcile(left, other_generation, 1).generation_conflict)
 
     def test_raw_hash_binds_exact_bytes_and_projection_hides_content(self):
         page = self.acquire()
@@ -137,31 +185,72 @@ class EvidenceTransportTests(unittest.TestCase):
     def test_archive_is_private_immutable_deduplicated_and_pathless_publicly(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "archive"
-            service = et._build_evidence_transport_service_for_test(root)
+            service = et._build_production_equivalent_evidence_service_for_test(root)
             snapshot = service.acquire(transport=et.Transport.ROOM_EXPORT, room="lobby", raw=RAW,
                 acquisition_source=et.AcquisitionSource.DIRECT_REVIEWED_SOURCE,
                 acquired_at=1, source_revision=REV, generation="g1", truncated=False)
             self.assertEqual(service.archive(snapshot, RAW)["status"], "ARCHIVED")
             self.assertEqual(service.archive(snapshot, RAW)["status"], "DEDUPLICATED")
             files = list(root.iterdir())
-            self.assertEqual(len(files), 1)
-            self.assertEqual(files[0].read_bytes(), RAW)
-            self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
+            self.assertEqual(len(files), 2)
+            self.assertEqual((root / f"{snapshot.snapshot_hash}.blob").read_bytes(), RAW)
+            self.assertTrue(all(item.stat().st_mode & 0o777 == 0o600 for item in files))
+            self.assertEqual(service.archived_metadata(snapshot.acquisition_id)["transport"], "ROOM_EXPORT")
             self.assertNotIn(str(root), json.dumps(dict(snapshot.public_projection())))
             with self.assertRaises(et.EvidenceTransportError): service.archive(snapshot, RAW + b"x")
 
+    def test_archive_blob_dedup_preserves_distinct_metadata_and_reopens(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "archive"
+            service = et._build_production_equivalent_evidence_service_for_test(root)
+            first = service.acquire(transport=et.Transport.ROOM_EXPORT, room="lobby", raw=RAW,
+                acquisition_source=et.AcquisitionSource.DIRECT_REVIEWED_SOURCE,
+                acquired_at=1, source_revision=REV, generation="g1", truncated=False)
+            second = service.acquire(transport=et.Transport.MCP_PAGE, room="lobby", raw=RAW,
+                acquisition_source=et.AcquisitionSource.THIRD_PARTY_MIRROR,
+                acquired_at=2, source_revision=REV, generation="g2", truncated=True)
+            service.archive(first, RAW); result = service.archive(second, RAW)
+            self.assertEqual(result["blob_status"], "DEDUPLICATED")
+            self.assertNotEqual(first.acquisition_id, second.acquisition_id)
+            self.assertEqual(len(list(root.glob("*.blob"))), 1)
+            self.assertEqual(len(list(root.glob("*.json"))), 2)
+            reopened = et._build_production_equivalent_evidence_service_for_test(root)
+            self.assertEqual(reopened.archived_metadata(first.acquisition_id)["generation"], "g1")
+            self.assertEqual(reopened.archived_metadata(second.acquisition_id)["generation"], "g2")
+
+    def test_archive_rejects_world_readable_root_and_parent_swap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory); unsafe = base / "unsafe"; unsafe.mkdir(mode=0o755)
+            with self.assertRaises(et.EvidenceTransportError):
+                et._build_production_equivalent_evidence_service_for_test(unsafe)
+            real_parent = base / "real-parent"; (real_parent / "nested").mkdir(parents=True)
+            linked_parent = base / "linked-parent"; linked_parent.symlink_to(real_parent, target_is_directory=True)
+            (real_parent / "nested").chmod(0o700)
+            with self.assertRaises(et.EvidenceTransportError):
+                et._build_production_equivalent_evidence_service_for_test(linked_parent / "nested")
+            parent = base / "parent"; root = parent / "archive"; root.mkdir(parents=True, mode=0o700)
+            service = et._build_production_equivalent_evidence_service_for_test(root)
+            moved = base / "moved"; parent.rename(moved)
+            foreign = base / "foreign"; (foreign / "archive").mkdir(parents=True, mode=0o700)
+            parent.symlink_to(foreign, target_is_directory=True)
+            snapshot = service.acquire(transport=et.Transport.ROOM_EXPORT, room="lobby", raw=RAW,
+                acquisition_source=et.AcquisitionSource.DIRECT_REVIEWED_SOURCE,
+                acquired_at=3, source_revision=REV, generation="g1", truncated=False)
+            with self.assertRaises(et.EvidenceTransportError): service.archive(snapshot, RAW)
+            self.assertEqual(list((foreign / "archive").iterdir()), [])
+
     def test_archive_symlink_root_rejected_and_no_path_parameter(self):
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory); real = base / "real"; real.mkdir()
+            base = Path(directory); real = base / "real"; real.mkdir(mode=0o700)
             link = base / "link"; link.symlink_to(real, target_is_directory=True)
             with self.assertRaises(et.EvidenceTransportError):
-                et._build_evidence_transport_service_for_test(link)
-            service = et._build_evidence_transport_service_for_test(real)
+                et._build_production_equivalent_evidence_service_for_test(link)
+            service = et._build_production_equivalent_evidence_service_for_test(real)
             self.assertNotIn("path", service.archive.__code__.co_varnames[:service.archive.__code__.co_argcount])
             snapshot = service.acquire(transport=et.Transport.ROOM_EXPORT, room="lobby", raw=RAW,
                 acquisition_source=et.AcquisitionSource.DIRECT_REVIEWED_SOURCE,
                 acquired_at=1, source_revision=REV, generation="g1", truncated=False)
-            expected = real / f"{snapshot.snapshot_hash}-1.snapshot"
+            expected = real / f"{snapshot.snapshot_hash}.blob"
             expected.symlink_to(base / "outside")
             with self.assertRaises(et.EvidenceTransportError): service.archive(snapshot, RAW)
 
@@ -173,6 +262,58 @@ class EvidenceTransportTests(unittest.TestCase):
         self.assertFalse(hasattr(self.service, "fetch"))
         self.assertFalse(hasattr(self.service, "sign"))
         self.assertFalse(hasattr(self.service, "execute"))
+
+    def test_production_boundary_rebinding_and_dynamic_globals(self):
+        with et._isolated_production_equivalent_boundary() as (service, _root, snapshot, raw):
+            proof = service.issue_retention_evidence(snapshot)
+            saved = (et.hashlib, et._parse_jsonl, et.Completeness,
+                     et.AcquisitionSource, et.validate_evidence_projection, et.os)
+            try:
+                et.hashlib = object(); et._parse_jsonl = object(); et.Completeness = object()
+                et.AcquisitionSource = object(); et.validate_evidence_projection = object()
+                et.os = object()
+                confirmed = service.confirm_retention_loss(snapshot, proof)
+                self.assertEqual(confirmed.gap_status.value, "RETENTION_LOSS_CONFIRMED")
+                service.archive(snapshot, raw)
+            finally:
+                (et.hashlib, et._parse_jsonl, et.Completeness,
+                 et.AcquisitionSource, et.validate_evidence_projection, et.os) = saved
+            permitted = {"isinstance", "str", "bool", "int", "len", "object", "TypeError",
+                         "PermissionError", "hasattr", "FileExistsError", "OSError",
+                         "memoryview", "ValueError", "locals", "getattr", "min"}
+            permitted.update({"id", "frozenset", "any", "dict", "UnicodeError"})
+            for name in ("acquire", "issue_complete_export_proof", "apply_completeness",
+                         "issue_retention_evidence", "confirm_retention_loss", "search",
+                         "reconcile", "archive", "archived_metadata"):
+                globals_used = {item.argval for item in dis.get_instructions(getattr(service, name))
+                                if item.opname == "LOAD_GLOBAL"}
+                self.assertEqual(globals_used - permitted, set(), name)
+
+    def test_retention_proof_is_cross_authority(self):
+        with et._isolated_production_equivalent_boundary() as (issuer, _r1, snapshot, _raw), \
+             et._isolated_production_equivalent_boundary() as (other, _r2, other_snapshot, _raw2):
+            proof = issuer.issue_retention_evidence(snapshot)
+            with self.assertRaises(PermissionError):
+                other.confirm_retention_loss(other_snapshot, proof)
+
+    def test_semantic_validator_rejects_schema_valid_contradictions(self):
+        projection = dict(self.acquire().public_projection())
+        self.assertEqual(et.validate_evidence_projection(projection), ())
+        schema = json.loads((ROOT / "schemas/evidence-transport.v1.json").read_text())
+        reversed_range = dict(projection); reversed_range.update(first_seq=3, last_seq=1)
+        jsonschema.Draft202012Validator(schema).validate(reversed_range)
+        self.assertIn("SEQUENCE_RANGE_INVALID",
+                      et.validate_evidence_projection(reversed_range))
+        cases = (
+            dict(transport_complete=True),
+            dict(gap_status="RETENTION_LOSS_CONFIRMED", retention_status_known=False),
+            dict(finding="NOT_FOUND_CONFIRMED", coverage="UNKNOWN"),
+            dict(finding="FOUND", target_observed=False),
+            dict(room_status="ROOM_DELETION_CONFIRMED", discovery_completeness="UNKNOWN",
+                 independent_deletion_evidence=False))
+        for change in cases:
+            value = dict(projection); value.update(change)
+            with self.subTest(change=change): self.assertTrue(et.validate_evidence_projection(value))
 
 
 if __name__ == "__main__":

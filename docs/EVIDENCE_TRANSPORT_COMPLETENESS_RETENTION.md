@@ -18,6 +18,12 @@ floor are independently supplied to the sealed authority can receive an opaque
 same-authority completeness proof. Serialized projections are always
 `DESCRIPTIVE_ONLY` and cannot reconstruct that proof.
 
+Reviewed retention evidence is also opaque and same-authority. It binds the
+complete acquisition identity: room, transport, source class, generation, raw
+hash, sequence and request bounds, truncation and completeness states, revision,
+schema, policy, and reviewed determination. A hash or source label alone has no
+retention authority.
+
 An absent record in a bounded view is `NOT_IN_VISIBLE_PAGE`, paired with its
 coverage status. Sequence discontinuity is `HISTORY_GAP`; a first sequence
 after `requested_since + 1` is `GAP_UNRESOLVED`, never automatic retention
@@ -35,11 +41,19 @@ sequence checks before normalization. SHA-256 binds the exact acquired bytes.
 All success, error, conflict, and caller-reflected bodies are untrusted; their
 text and URLs are neither exposed in projections nor fetched or executed.
 
-Optional local archives are private `0600`, immutable, hash-addressed snapshots
-under a construction-time captured root. The archive rejects a symlink root,
-uses exclusive no-follow creation, never accepts a caller path, and preserves
-provenance by including acquisition time in the filename. Identical acquisition
-identity deduplicates safely. Archive paths and raw room text are never public.
+Optional local archives separate deduplicated, exact-hash raw blobs from an
+immutable `0600` metadata record for every distinct acquisition identity. The
+captured root must be owned and `0700`; creation and reads use a stable directory
+descriptor plus no-follow children, and a replaced parent path fails closed.
+Archive methods accept no caller path. Metadata survives service restart while
+archive paths and raw room text are never public.
+
+Search uses exact observed sequence membership, never range inclusion. Recovery
+and conflict results preserve both acquisition IDs and provenance roots,
+including MCP-absent/export-present, content, completeness, and generation
+conflicts. The JSON Schema validates the public shape; the deterministic semantic
+validator separately rejects contradictory completeness, retention, search, and
+discovery combinations without granting authority.
 
 This layer makes no claim about FLOP eligibility, airdrops, reputation, rewards,
 generation signatures, agreements, rail cryptography, finality, or readiness to
