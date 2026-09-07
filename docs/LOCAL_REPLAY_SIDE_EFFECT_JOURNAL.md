@@ -10,8 +10,12 @@ schema version, and captured policy version. A separate nonce-scope constraint
 detects reuse of the same actor/context/nonce with different signed material.
 Every field is revalidated at the sealed service boundary before canonical
 material or a replay ID is derived, including objects forged around the frozen
-dataclass constructor. Nonces are exact canonical decimal strings and hashes
-are exact lowercase SHA-256 hex.
+dataclass constructor. Actor identities must use the reviewed Ed25519
+`did:key:z...` grammar, contexts use the bounded local room grammar, targets
+must have the prefix reviewed for their action class, and the action schema is
+exactly `replay-action-v1`. Nonces are exact canonical decimal strings and
+hashes are exact lowercase SHA-256 hex. Policy version is captured internally;
+an injected policy field makes the action shape invalid.
 
 SQLite `BEGIN IMMEDIATE` transactions and storage-level uniqueness guarantee
 that concurrent workers cannot both reserve one effect. An attempt left in
@@ -22,15 +26,28 @@ store hashes of reviewed evidence, not raw payloads or secrets.
 Production captures its private root under `secrets`, creates directories and
 files as `0700` and `0600`, opens path components relative to trusted directory
 descriptors with no-follow semantics, and exposes no path or dependency
-injection. The verified directory and database descriptors remain open through
-SQLite open, and device/inode identity is checked again before schema or ledger
-mutation. Store metadata binds schema, policy, store kind, descriptive store
-identity, and a digest derived from a process-local family secret plus the
-verified inode. The secret is neither persisted nor caller-settable, so visible
-metadata, the same database path, or a copied database cannot reconstruct the
-authority of a legitimate service family. Test provisioning accepts only a new,
-empty non-production store; reopening is performed only by workers issued from
-the original family.
+injection. Every trusted-root component is walked from `/` using directory file
+descriptors and no-follow semantics, so root, parent, nested, journal-directory,
+and final-file symlinks fail closed. The verified directory and database
+descriptors remain open through SQLite open, and device/inode identity is
+checked again before schema or ledger mutation.
+
+Trusted provisioning creates `store.credential` beside the database with mode
+`0600` under the `0700` journal directory. It is read transiently through the
+verified directory descriptor and is never retained in a public projection,
+function default, closure, or module global. Its HMAC binds store ID and kind,
+schema and policy versions, and the verified root, journal-directory, and
+database device/inode identities. This makes legitimate process restarts
+durable while visible metadata or a copied database alone remains insufficient.
+Test provisioning accepts only a new, empty non-production store; reopening
+inside one test service is performed only by workers issued from that family.
+
+This protects against ordinary API misuse and database/path reconstruction. It
+does not claim protection after arbitrary access to private local files,
+debugger or process-memory access, or deliberate in-process Python tampering.
+Copying both the database and credential is outside that boundary; inode/root
+binding still fails closed for an ordinary copy, but a full local compromise is
+not treated as a cryptographic security boundary.
 The production facade retains only observation, lookup, and canonical replay-ID
 operations; it carries no authority issuer or privileged effect mutator.
 

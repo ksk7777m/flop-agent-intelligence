@@ -17,7 +17,11 @@ VERIFIER_REVISION="replay-evidence-verifier-v1"
 HEX64=re.compile(r"^[0-9a-f]{64}$")
 SAFE_TEXT=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}$")
 DECIMAL=re.compile(r"^(?:0|[1-9][0-9]*)$")
+DID_KEY=re.compile(r"^did:key:z[1-9A-HJ-NP-Za-km-z]{7,127}$")
+CONTEXT=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+ACTION_SCHEMA_VERSION="replay-action-v1"
 ACTION_CLASSES=frozenset({"SIGNED_ACTION","SIGNED_TEST_ACTION","FAUCET_CLAIM","INFERENCE_SPEND","PAYMENT","AGENT_TASK","REPUTATION_CREDIT"})
+TARGET_PREFIXES=MappingProxyType({"SIGNED_ACTION":"resource:","SIGNED_TEST_ACTION":"resource:","FAUCET_CLAIM":"faucet:","INFERENCE_SPEND":"model:","PAYMENT":"rail:","AGENT_TASK":"job:","REPUTATION_CREDIT":"rep:"})
 
 class ReplaySafetyError(ValueError):
     def __init__(self,code:str,field:str,reason:str):
@@ -82,16 +86,17 @@ class _Evidence:
     related_identity:str; verifier_revision:str; policy_version:str
     result:Any=None
 
-def _build_service_family(trusted_root:Path,store_kind:str,clock:Callable[[],datetime],store_id:str,family_secret:bytes)->SimpleNamespace:
-    sha,digest,jsonm,sql,osm,stm,closer=hashlib.sha256,hmac.compare_digest,json,sqlite3,os,stat_module,closing
-    safe,hex64,decimal=SAFE_TEXT.fullmatch,HEX64.fullmatch,DECIMAL.fullmatch
+def _build_service_family(trusted_root:Path,store_kind:str,clock:Callable[[],datetime],store_id:str)->SimpleNamespace:
+    sha,mac,digest,jsonm,sql,osm,stm,closer=hashlib.sha256,hmac.new,hmac.compare_digest,json,sqlite3,os,stat_module,closing
+    safe,hex64,decimal,did_key,context_match=SAFE_TEXT.fullmatch,HEX64.fullmatch,DECIMAL.fullmatch,DID_KEY.fullmatch,CONTEXT.fullmatch
     dt,utc=datetime,timezone.utc; action_t,state_t,effect_t=CanonicalAction,ReplayState,EffectClass
     retry_t,error_t,proxy,namespace=RetryClassification,ReplaySafetyError,MappingProxyType,SimpleNamespace
     validation_t,authority_t,reservation_t=ValidationAuthority,EffectAuthority,Reservation
     confirmation_t,reconciliation_t=VerifiedEffectConfirmation,VerifiedReconciliation
     fixture_t,kind_t,result_t=ReviewedEvidenceFixture,ConfirmationEvidenceType,ReconciliationResult
     binding_t,evidence_t=_Binding,_Evidence; policy,schema,verifier=POLICY_VERSION,SCHEMA_VERSION,VERIFIER_REVISION
-    allowed_actions=ACTION_CLASSES
+    allowed_actions,target_prefixes,action_schema=ACTION_CLASSES,TARGET_PREFIXES,ACTION_SCHEMA_VERSION
+    action_fields=frozenset({"actor_did","action_class","context","nonce","signed_payload_sha256","signing_bytes_sha256","target","schema_version"});attributes=vars
     root=Path(trusted_root).absolute(); dirname,filename="replay-safety","ledger.sqlite3"; db=root/dirname/filename
     mutex=threading.RLock(); validations=weakref.WeakKeyDictionary(); authorities=weakref.WeakKeyDictionary()
     reservations=weakref.WeakKeyDictionary(); confirmations=weakref.WeakKeyDictionary(); reconciliations=weakref.WeakKeyDictionary()
@@ -106,10 +111,12 @@ def _build_service_family(trusted_root:Path,store_kind:str,clock:Callable[[],dat
         return value.astimezone(utc).isoformat()
     def validate_action(a:CanonicalAction)->None:
         if type(a) is not action_t: raise error_t("ACTION_INVALID","action","exact canonical action required")
-        for field in ("actor_did","context","target","schema_version"):
-            value=getattr(a,field,None)
-            if type(value) is not str or safe(value) is None: raise error_t("IDENTIFIER_INVALID",field,"bounded exact text required")
+        if frozenset(attributes(a))!=action_fields:raise error_t("ACTION_FIELDS_INVALID","action","exact canonical action fields required")
+        if type(a.actor_did) is not str or did_key(a.actor_did) is None: raise error_t("ACTOR_DID_INVALID","actor_did","reviewed Ed25519 did:key required")
+        if type(a.context) is not str or context_match(a.context) is None: raise error_t("CONTEXT_INVALID","context","canonical local room/context required")
         if type(a.action_class) is not str or a.action_class not in allowed_actions: raise error_t("ACTION_CLASS_INVALID","action_class","reviewed action class required")
+        if type(a.target) is not str or safe(a.target) is None or not a.target.startswith(target_prefixes[a.action_class]) or len(a.target)==len(target_prefixes[a.action_class]): raise error_t("TARGET_INVALID","target","canonical target for action class required")
+        if type(a.schema_version) is not str or not digest(a.schema_version,action_schema): raise error_t("SCHEMA_VERSION_INVALID","schema_version","exact reviewed action schema required")
         if type(a.nonce) is not str or decimal(a.nonce) is None: raise error_t("NONCE_INVALID","nonce","exact canonical decimal string required")
         for field in ("signed_payload_sha256","signing_bytes_sha256"):
             value=getattr(a,field,None)
@@ -120,31 +127,53 @@ def _build_service_family(trusted_root:Path,store_kind:str,clock:Callable[[],dat
     def replay_id(a:CanonicalAction)->str: return sha(b"FLOP-REPLAY-ID\0"+material(a)).hexdigest()
     def nonce_scope(a:CanonicalAction)->str:
         value=jsonm.dumps({"actor_did":a.actor_did,"context":a.context,"nonce":a.nonce,"schema_version":a.schema_version},sort_keys=True,separators=(",",":")).encode(); return sha(b"FLOP-NONCE-SCOPE\0"+value).hexdigest()
-    def secure_file()->tuple[int,int,int,int,int]:
-        info=osm.lstat(root)
-        if not stm.S_ISDIR(info.st_mode) or stm.S_ISLNK(info.st_mode) or info.st_uid!=osm.getuid() or info.st_mode&0o022: raise error_t("STORAGE_ROOT_UNSAFE","storage","owned non-writable real directory required")
-        dflags=osm.O_RDONLY|getattr(osm,"O_DIRECTORY",0)|getattr(osm,"O_NOFOLLOW",0); rfd=osm.open(root,dflags)
+    def open_root()->int:
+        if not root.is_absolute() or any(part in {"",".",".."} for part in root.parts[1:]):raise error_t("STORAGE_ROOT_UNSAFE","storage","absolute canonical root required")
+        dflags=osm.O_RDONLY|getattr(osm,"O_DIRECTORY",0)|getattr(osm,"O_NOFOLLOW",0);current=osm.open("/",dflags)
+        try:
+            for part in root.parts[1:]:
+                following=osm.open(part,dflags,dir_fd=current);osm.close(current);current=following
+            info=osm.fstat(current)
+            if not stm.S_ISDIR(info.st_mode) or info.st_uid!=osm.getuid() or info.st_mode&0o777!=0o700:raise error_t("STORAGE_ROOT_UNSAFE","storage","owned 0700 real directory required")
+            return current
+        except Exception:
+            osm.close(current);raise
+    def secure_file()->tuple[int,int,int,int,int,int,int,bool]:
+        dflags=osm.O_RDONLY|getattr(osm,"O_DIRECTORY",0)|getattr(osm,"O_NOFOLLOW",0);rfd=open_root();ri=osm.fstat(rfd)
         try:
             try: osm.mkdir(dirname,0o700,dir_fd=rfd)
             except FileExistsError: pass
             cfd=osm.open(dirname,dflags,dir_fd=rfd)
             try:
                 ci=osm.fstat(cfd)
-                if not stm.S_ISDIR(ci.st_mode) or ci.st_uid!=osm.getuid() or ci.st_mode&0o077: raise error_t("STORAGE_DIRECTORY_UNSAFE","storage","private owned directory required")
-                fd=osm.open(filename,osm.O_RDWR|osm.O_CREAT|getattr(osm,"O_NOFOLLOW",0),0o600,dir_fd=cfd)
+                if not stm.S_ISDIR(ci.st_mode) or ci.st_uid!=osm.getuid() or ci.st_mode&0o777!=0o700: raise error_t("STORAGE_DIRECTORY_UNSAFE","storage","private owned 0700 directory required")
+                try:fd=osm.open(filename,osm.O_RDWR|getattr(osm,"O_NOFOLLOW",0),dir_fd=cfd);created=False
+                except FileNotFoundError:fd=osm.open(filename,osm.O_RDWR|osm.O_CREAT|osm.O_EXCL|getattr(osm,"O_NOFOLLOW",0),0o600,dir_fd=cfd);created=True
                 try:
                     osm.fchmod(fd,0o600); fi=osm.fstat(fd); pi=osm.stat(filename,dir_fd=cfd,follow_symlinks=False)
                     if not stm.S_ISREG(fi.st_mode) or fi.st_uid!=osm.getuid() or (fi.st_dev,fi.st_ino)!=(pi.st_dev,pi.st_ino): raise error_t("STORAGE_FILE_UNSAFE","storage","owned regular file required")
                 except Exception:
                     osm.close(fd); raise
-                return rfd,cfd,fd,fi.st_dev,fi.st_ino
+                return rfd,cfd,fd,ri.st_dev,ri.st_ino,ci.st_dev,ci.st_ino,created
             except Exception:
                 osm.close(cfd); raise
         except Exception:
             osm.close(rfd); raise
     def connect()->sqlite3.Connection:
-        rfd,cfd,fd,device,inode=secure_file()
+        rfd,cfd,fd,root_device,root_inode,dir_device,dir_inode,created=secure_file();fi=osm.fstat(fd);device,inode=fi.st_dev,fi.st_ino
         try:
+            credential_name="store.credential";cflags=osm.O_RDONLY|getattr(osm,"O_NOFOLLOW",0)
+            try:credential_fd=osm.open(credential_name,cflags,dir_fd=cfd)
+            except FileNotFoundError:
+                if not created or fi.st_size:raise error_t("STORE_CREDENTIAL_MISSING","storage","existing store requires its private credential")
+                credential_fd=osm.open(credential_name,osm.O_RDWR|osm.O_CREAT|osm.O_EXCL|getattr(osm,"O_NOFOLLOW",0),0o600,dir_fd=cfd)
+                credential=osm.urandom(32);osm.write(credential_fd,credential);osm.fsync(credential_fd);osm.fsync(cfd);osm.lseek(credential_fd,0,osm.SEEK_SET)
+            credential_info=osm.fstat(credential_fd)
+            try:
+                if not stm.S_ISREG(credential_info.st_mode) or credential_info.st_uid!=osm.getuid() or credential_info.st_mode&0o777!=0o600:raise error_t("STORE_CREDENTIAL_UNSAFE","storage","private owned 0600 credential required")
+                credential=osm.read(credential_fd,33)
+                if len(credential)!=32:raise error_t("STORE_CREDENTIAL_INVALID","storage","exact local credential required")
+            finally:osm.close(credential_fd)
             con=sql.connect(str(db),timeout=10,isolation_level=None)
             opened=osm.stat(filename,dir_fd=cfd,follow_symlinks=False)
             held=osm.fstat(fd)
@@ -152,7 +181,8 @@ def _build_service_family(trusted_root:Path,store_kind:str,clock:Callable[[],dat
                 con.close(); raise error_t("STORAGE_PATH_CHANGED","storage","validated database path changed before SQLite open")
             con.execute("PRAGMA foreign_keys=ON")
             con.executescript("""CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),store_id TEXT NOT NULL,store_kind TEXT NOT NULL,schema_version TEXT NOT NULL,policy_version TEXT NOT NULL,authority_digest TEXT NOT NULL);CREATE TABLE IF NOT EXISTS replay_records(replay_id TEXT PRIMARY KEY,nonce_scope TEXT NOT NULL UNIQUE,actor_did TEXT NOT NULL,action_class TEXT NOT NULL,context TEXT NOT NULL,nonce TEXT NOT NULL,payload_hash TEXT NOT NULL,signing_hash TEXT NOT NULL,target TEXT NOT NULL,schema_version TEXT NOT NULL,state TEXT NOT NULL,observation_count INTEGER NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS replay_events(event_id INTEGER PRIMARY KEY AUTOINCREMENT,replay_id TEXT NOT NULL,from_state TEXT,to_state TEXT NOT NULL,occurred_at TEXT NOT NULL,event_hash TEXT NOT NULL UNIQUE,FOREIGN KEY(replay_id) REFERENCES replay_records(replay_id));CREATE TABLE IF NOT EXISTS replay_conflicts(conflict_id TEXT PRIMARY KEY,nonce_scope TEXT NOT NULL,authoritative_replay_id TEXT NOT NULL,conflicting_replay_id TEXT NOT NULL,conflicting_material_hash TEXT NOT NULL,observed_at TEXT NOT NULL,UNIQUE(authoritative_replay_id,conflicting_replay_id),FOREIGN KEY(authoritative_replay_id) REFERENCES replay_records(replay_id));CREATE TABLE IF NOT EXISTS effects(reservation_id TEXT PRIMARY KEY,replay_id TEXT NOT NULL,effect_identity TEXT NOT NULL,authority_ref_hash TEXT NOT NULL,effect_class TEXT NOT NULL,target TEXT NOT NULL,request_hash TEXT NOT NULL,attempt_number TEXT NOT NULL,started_at TEXT,result_state TEXT NOT NULL,confirmation_evidence_type TEXT,confirmation_evidence_hash TEXT,related_evidence_identity TEXT,verifier_revision TEXT,UNIQUE(replay_id,attempt_number),FOREIGN KEY(replay_id) REFERENCES replay_records(replay_id));""")
-            authority_digest=sha(b"FLOP-STORE-FAMILY\0"+family_secret+store_id.encode()+str(device).encode()+b":"+str(inode).encode()).hexdigest()
+            binding=b"|".join(value.encode() for value in (store_id,store_kind,schema,policy,str(root_device),str(root_inode),str(dir_device),str(dir_inode),str(device),str(inode)))
+            authority_digest=mac(credential,b"FLOP-STORE-FAMILY\0"+binding,sha).hexdigest();credential=b""
             con.execute("BEGIN IMMEDIATE"); row=con.execute("SELECT store_id,store_kind,schema_version,policy_version,authority_digest FROM store_metadata WHERE singleton=1").fetchone(); expected=(store_id,store_kind,schema,policy,authority_digest)
             if row is None: con.execute("INSERT INTO store_metadata VALUES(1,?,?,?,?,?)",expected)
             elif not all(digest(str(left),str(right)) for left,right in zip(row,expected)): con.rollback(); con.close(); raise error_t("STORE_AUTHORITY_MISMATCH","storage","sealed store family provenance does not match")
@@ -262,25 +292,26 @@ _PRODUCTION_ROOT=Path(__file__).resolve().parents[2]/"secrets"
 def _production_clock(_dt:type[datetime]=datetime,_utc:timezone=timezone.utc)->datetime:return _dt.now(_utc)
 def _production_facade()->tuple[Callable[...,Any],...]:
     store_id=hashlib.sha256(b"FLOP-PRODUCTION-REPLAY-STORE-v1").hexdigest()
-    family=_build_service_family(_PRODUCTION_ROOT,"PRODUCTION",_production_clock,store_id,secrets.token_bytes(32));worker=family.worker();return worker.observe,worker.inspect,worker.replay_id
+    family=_build_service_family(_PRODUCTION_ROOT,"PRODUCTION",_production_clock,store_id);worker=family.worker();return worker.observe,worker.inspect,worker.replay_id
 observe_action,inspect_action,canonical_replay_id=_production_facade()
 del _build_service_family
 del _production_facade
 
 def _new_test_family(root:Path,clock:Callable[[],datetime])->SimpleNamespace:
-    sha,digest,jsonm,sql,osm,stm,closer=hashlib.sha256,hmac.compare_digest,json,sqlite3,os,stat_module,closing
+    sha,mac,digest,jsonm,sql,osm,stm,closer=hashlib.sha256,hmac.new,hmac.compare_digest,json,sqlite3,os,stat_module,closing
     selected=Path(root).absolute();forbidden=_PRODUCTION_ROOT
     if selected==forbidden or forbidden in selected.parents:raise ReplaySafetyError("PRODUCTION_STORE_FORBIDDEN","storage","test family cannot attach to production root")
     if (selected/"replay-safety").exists() or (selected/"replay-safety").is_symlink():raise ReplaySafetyError("EXISTING_STORE_FORBIDDEN","storage","test provisioning requires a new empty store")
-    trusted_root,store_kind,store_id,family_secret=selected,"TEST",secrets.token_hex(32),secrets.token_bytes(32)
-    safe,hex64,decimal=SAFE_TEXT.fullmatch,HEX64.fullmatch,DECIMAL.fullmatch
+    trusted_root,store_kind,store_id=selected,"TEST",secrets.token_hex(32)
+    safe,hex64,decimal,did_key,context_match=SAFE_TEXT.fullmatch,HEX64.fullmatch,DECIMAL.fullmatch,DID_KEY.fullmatch,CONTEXT.fullmatch
     dt,utc=datetime,timezone.utc; action_t,state_t,effect_t=CanonicalAction,ReplayState,EffectClass
     retry_t,error_t,proxy,namespace=RetryClassification,ReplaySafetyError,MappingProxyType,SimpleNamespace
     validation_t,authority_t,reservation_t=ValidationAuthority,EffectAuthority,Reservation
     confirmation_t,reconciliation_t=VerifiedEffectConfirmation,VerifiedReconciliation
     fixture_t,kind_t,result_t=ReviewedEvidenceFixture,ConfirmationEvidenceType,ReconciliationResult
     binding_t,evidence_t=_Binding,_Evidence; policy,schema,verifier=POLICY_VERSION,SCHEMA_VERSION,VERIFIER_REVISION
-    allowed_actions=ACTION_CLASSES
+    allowed_actions,target_prefixes,action_schema=ACTION_CLASSES,TARGET_PREFIXES,ACTION_SCHEMA_VERSION
+    action_fields=frozenset({"actor_did","action_class","context","nonce","signed_payload_sha256","signing_bytes_sha256","target","schema_version"});attributes=vars
     root=Path(trusted_root).absolute(); dirname,filename="replay-safety","ledger.sqlite3"; db=root/dirname/filename
     mutex=threading.RLock(); validations=weakref.WeakKeyDictionary(); authorities=weakref.WeakKeyDictionary()
     reservations=weakref.WeakKeyDictionary(); confirmations=weakref.WeakKeyDictionary(); reconciliations=weakref.WeakKeyDictionary()
@@ -295,10 +326,12 @@ def _new_test_family(root:Path,clock:Callable[[],datetime])->SimpleNamespace:
         return value.astimezone(utc).isoformat()
     def validate_action(a:CanonicalAction)->None:
         if type(a) is not action_t: raise error_t("ACTION_INVALID","action","exact canonical action required")
-        for field in ("actor_did","context","target","schema_version"):
-            value=getattr(a,field,None)
-            if type(value) is not str or safe(value) is None: raise error_t("IDENTIFIER_INVALID",field,"bounded exact text required")
+        if frozenset(attributes(a))!=action_fields:raise error_t("ACTION_FIELDS_INVALID","action","exact canonical action fields required")
+        if type(a.actor_did) is not str or did_key(a.actor_did) is None: raise error_t("ACTOR_DID_INVALID","actor_did","reviewed Ed25519 did:key required")
+        if type(a.context) is not str or context_match(a.context) is None: raise error_t("CONTEXT_INVALID","context","canonical local room/context required")
         if type(a.action_class) is not str or a.action_class not in allowed_actions: raise error_t("ACTION_CLASS_INVALID","action_class","reviewed action class required")
+        if type(a.target) is not str or safe(a.target) is None or not a.target.startswith(target_prefixes[a.action_class]) or len(a.target)==len(target_prefixes[a.action_class]): raise error_t("TARGET_INVALID","target","canonical target for action class required")
+        if type(a.schema_version) is not str or not digest(a.schema_version,action_schema): raise error_t("SCHEMA_VERSION_INVALID","schema_version","exact reviewed action schema required")
         if type(a.nonce) is not str or decimal(a.nonce) is None: raise error_t("NONCE_INVALID","nonce","exact canonical decimal string required")
         for field in ("signed_payload_sha256","signing_bytes_sha256"):
             value=getattr(a,field,None)
@@ -309,31 +342,53 @@ def _new_test_family(root:Path,clock:Callable[[],datetime])->SimpleNamespace:
     def replay_id(a:CanonicalAction)->str: return sha(b"FLOP-REPLAY-ID\0"+material(a)).hexdigest()
     def nonce_scope(a:CanonicalAction)->str:
         value=jsonm.dumps({"actor_did":a.actor_did,"context":a.context,"nonce":a.nonce,"schema_version":a.schema_version},sort_keys=True,separators=(",",":")).encode(); return sha(b"FLOP-NONCE-SCOPE\0"+value).hexdigest()
-    def secure_file()->tuple[int,int,int,int,int]:
-        info=osm.lstat(root)
-        if not stm.S_ISDIR(info.st_mode) or stm.S_ISLNK(info.st_mode) or info.st_uid!=osm.getuid() or info.st_mode&0o022: raise error_t("STORAGE_ROOT_UNSAFE","storage","owned non-writable real directory required")
-        dflags=osm.O_RDONLY|getattr(osm,"O_DIRECTORY",0)|getattr(osm,"O_NOFOLLOW",0); rfd=osm.open(root,dflags)
+    def open_root()->int:
+        if not root.is_absolute() or any(part in {"",".",".."} for part in root.parts[1:]):raise error_t("STORAGE_ROOT_UNSAFE","storage","absolute canonical root required")
+        dflags=osm.O_RDONLY|getattr(osm,"O_DIRECTORY",0)|getattr(osm,"O_NOFOLLOW",0);current=osm.open("/",dflags)
+        try:
+            for part in root.parts[1:]:
+                following=osm.open(part,dflags,dir_fd=current);osm.close(current);current=following
+            info=osm.fstat(current)
+            if not stm.S_ISDIR(info.st_mode) or info.st_uid!=osm.getuid() or info.st_mode&0o777!=0o700:raise error_t("STORAGE_ROOT_UNSAFE","storage","owned 0700 real directory required")
+            return current
+        except Exception:
+            osm.close(current);raise
+    def secure_file()->tuple[int,int,int,int,int,int,int,bool]:
+        dflags=osm.O_RDONLY|getattr(osm,"O_DIRECTORY",0)|getattr(osm,"O_NOFOLLOW",0);rfd=open_root();ri=osm.fstat(rfd)
         try:
             try: osm.mkdir(dirname,0o700,dir_fd=rfd)
             except FileExistsError: pass
             cfd=osm.open(dirname,dflags,dir_fd=rfd)
             try:
                 ci=osm.fstat(cfd)
-                if not stm.S_ISDIR(ci.st_mode) or ci.st_uid!=osm.getuid() or ci.st_mode&0o077: raise error_t("STORAGE_DIRECTORY_UNSAFE","storage","private owned directory required")
-                fd=osm.open(filename,osm.O_RDWR|osm.O_CREAT|getattr(osm,"O_NOFOLLOW",0),0o600,dir_fd=cfd)
+                if not stm.S_ISDIR(ci.st_mode) or ci.st_uid!=osm.getuid() or ci.st_mode&0o777!=0o700: raise error_t("STORAGE_DIRECTORY_UNSAFE","storage","private owned 0700 directory required")
+                try:fd=osm.open(filename,osm.O_RDWR|getattr(osm,"O_NOFOLLOW",0),dir_fd=cfd);created=False
+                except FileNotFoundError:fd=osm.open(filename,osm.O_RDWR|osm.O_CREAT|osm.O_EXCL|getattr(osm,"O_NOFOLLOW",0),0o600,dir_fd=cfd);created=True
                 try:
                     osm.fchmod(fd,0o600); fi=osm.fstat(fd); pi=osm.stat(filename,dir_fd=cfd,follow_symlinks=False)
                     if not stm.S_ISREG(fi.st_mode) or fi.st_uid!=osm.getuid() or (fi.st_dev,fi.st_ino)!=(pi.st_dev,pi.st_ino): raise error_t("STORAGE_FILE_UNSAFE","storage","owned regular file required")
                 except Exception:
                     osm.close(fd); raise
-                return rfd,cfd,fd,fi.st_dev,fi.st_ino
+                return rfd,cfd,fd,ri.st_dev,ri.st_ino,ci.st_dev,ci.st_ino,created
             except Exception:
                 osm.close(cfd); raise
         except Exception:
             osm.close(rfd); raise
     def connect()->sqlite3.Connection:
-        rfd,cfd,fd,device,inode=secure_file()
+        rfd,cfd,fd,root_device,root_inode,dir_device,dir_inode,created=secure_file();fi=osm.fstat(fd);device,inode=fi.st_dev,fi.st_ino
         try:
+            credential_name="store.credential";cflags=osm.O_RDONLY|getattr(osm,"O_NOFOLLOW",0)
+            try:credential_fd=osm.open(credential_name,cflags,dir_fd=cfd)
+            except FileNotFoundError:
+                if not created or fi.st_size:raise error_t("STORE_CREDENTIAL_MISSING","storage","existing store requires its private credential")
+                credential_fd=osm.open(credential_name,osm.O_RDWR|osm.O_CREAT|osm.O_EXCL|getattr(osm,"O_NOFOLLOW",0),0o600,dir_fd=cfd)
+                credential=osm.urandom(32);osm.write(credential_fd,credential);osm.fsync(credential_fd);osm.fsync(cfd);osm.lseek(credential_fd,0,osm.SEEK_SET)
+            credential_info=osm.fstat(credential_fd)
+            try:
+                if not stm.S_ISREG(credential_info.st_mode) or credential_info.st_uid!=osm.getuid() or credential_info.st_mode&0o777!=0o600:raise error_t("STORE_CREDENTIAL_UNSAFE","storage","private owned 0600 credential required")
+                credential=osm.read(credential_fd,33)
+                if len(credential)!=32:raise error_t("STORE_CREDENTIAL_INVALID","storage","exact local credential required")
+            finally:osm.close(credential_fd)
             con=sql.connect(str(db),timeout=10,isolation_level=None)
             opened=osm.stat(filename,dir_fd=cfd,follow_symlinks=False)
             held=osm.fstat(fd)
@@ -341,7 +396,8 @@ def _new_test_family(root:Path,clock:Callable[[],datetime])->SimpleNamespace:
                 con.close(); raise error_t("STORAGE_PATH_CHANGED","storage","validated database path changed before SQLite open")
             con.execute("PRAGMA foreign_keys=ON")
             con.executescript("""CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),store_id TEXT NOT NULL,store_kind TEXT NOT NULL,schema_version TEXT NOT NULL,policy_version TEXT NOT NULL,authority_digest TEXT NOT NULL);CREATE TABLE IF NOT EXISTS replay_records(replay_id TEXT PRIMARY KEY,nonce_scope TEXT NOT NULL UNIQUE,actor_did TEXT NOT NULL,action_class TEXT NOT NULL,context TEXT NOT NULL,nonce TEXT NOT NULL,payload_hash TEXT NOT NULL,signing_hash TEXT NOT NULL,target TEXT NOT NULL,schema_version TEXT NOT NULL,state TEXT NOT NULL,observation_count INTEGER NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS replay_events(event_id INTEGER PRIMARY KEY AUTOINCREMENT,replay_id TEXT NOT NULL,from_state TEXT,to_state TEXT NOT NULL,occurred_at TEXT NOT NULL,event_hash TEXT NOT NULL UNIQUE,FOREIGN KEY(replay_id) REFERENCES replay_records(replay_id));CREATE TABLE IF NOT EXISTS replay_conflicts(conflict_id TEXT PRIMARY KEY,nonce_scope TEXT NOT NULL,authoritative_replay_id TEXT NOT NULL,conflicting_replay_id TEXT NOT NULL,conflicting_material_hash TEXT NOT NULL,observed_at TEXT NOT NULL,UNIQUE(authoritative_replay_id,conflicting_replay_id),FOREIGN KEY(authoritative_replay_id) REFERENCES replay_records(replay_id));CREATE TABLE IF NOT EXISTS effects(reservation_id TEXT PRIMARY KEY,replay_id TEXT NOT NULL,effect_identity TEXT NOT NULL,authority_ref_hash TEXT NOT NULL,effect_class TEXT NOT NULL,target TEXT NOT NULL,request_hash TEXT NOT NULL,attempt_number TEXT NOT NULL,started_at TEXT,result_state TEXT NOT NULL,confirmation_evidence_type TEXT,confirmation_evidence_hash TEXT,related_evidence_identity TEXT,verifier_revision TEXT,UNIQUE(replay_id,attempt_number),FOREIGN KEY(replay_id) REFERENCES replay_records(replay_id));""")
-            authority_digest=sha(b"FLOP-STORE-FAMILY\0"+family_secret+store_id.encode()+str(device).encode()+b":"+str(inode).encode()).hexdigest()
+            binding=b"|".join(value.encode() for value in (store_id,store_kind,schema,policy,str(root_device),str(root_inode),str(dir_device),str(dir_inode),str(device),str(inode)))
+            authority_digest=mac(credential,b"FLOP-STORE-FAMILY\0"+binding,sha).hexdigest();credential=b""
             con.execute("BEGIN IMMEDIATE"); row=con.execute("SELECT store_id,store_kind,schema_version,policy_version,authority_digest FROM store_metadata WHERE singleton=1").fetchone(); expected=(store_id,store_kind,schema,policy,authority_digest)
             if row is None: con.execute("INSERT INTO store_metadata VALUES(1,?,?,?,?,?)",expected)
             elif not all(digest(str(left),str(right)) for left,right in zip(row,expected)): con.rollback(); con.close(); raise error_t("STORE_AUTHORITY_MISMATCH","storage","sealed store family provenance does not match")

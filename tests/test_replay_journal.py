@@ -1,4 +1,4 @@
-import inspect,json,os,pickle,shutil,sqlite3,tempfile,threading,unittest
+import inspect,json,os,pickle,shutil,sqlite3,subprocess,sys,tempfile,threading,types,unittest
 from decimal import Decimal
 from datetime import datetime,timezone
 from pathlib import Path
@@ -8,8 +8,8 @@ from flop_agent import replay_journal as j
 
 NOW=datetime(2026,9,7,tzinfo=timezone.utc); A="a"*64;B="b"*64;C="c"*64
 def action(nonce="900719925474099312345678901234567890",payload=A,target="resource:fixture"):
-    return j.CanonicalAction("did:key:zFixture","SIGNED_TEST_ACTION","lobby",nonce,payload,B,target,"fixture-schema-v1")
-def family(root):return j._new_test_family(root,lambda _now=NOW:_now)
+    return j.CanonicalAction("did:key:zFixture","SIGNED_TEST_ACTION","lobby",nonce,payload,B,target,"replay-action-v1")
+def family(root):return j._new_test_family(root.resolve(),lambda _now=NOW:_now)
 def ready(fam,item,effect=j.EffectClass.PAYMENT,target="rail:1"):
     worker=fam.worker();worker.observe(item);worker.validate(item,fam.issue_validation(item));auth=fam.issue_effect_authority(item,"reviewed:authority");reservation=worker.reserve(item,auth,effect,target,C);return worker,reservation
 
@@ -94,6 +94,65 @@ class ReplayJournalTests(unittest.TestCase):
                 with self.assertRaises(j.ReplaySafetyError):w.replay_id(forged)
             self.assertEqual(sqlite3.connect(path).execute("SELECT COUNT(*) FROM replay_records").fetchone()[0],0)
 
+    def test_forged_semantic_actor_schema_policy_context_and_target_are_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            fam=family(Path(d));w=fam.worker();path=Path(d).resolve()/"replay-safety"/"ledger.sqlite3"
+            for field,value in (("actor_did","x"),("actor_did","did:web:example.test"),("schema_version","attacker-schema"),("context","room/name"),("target","rail:wrong-class")):
+                forged=object.__new__(j.CanonicalAction)
+                for name,original in action().__dict__.items():object.__setattr__(forged,name,original)
+                object.__setattr__(forged,field,value)
+                with self.assertRaises(j.ReplaySafetyError):w.observe(forged)
+            forged=object.__new__(j.CanonicalAction)
+            for name,original in action().__dict__.items():object.__setattr__(forged,name,original)
+            object.__setattr__(forged,"policy_version","attacker-policy")
+            with self.assertRaises(j.ReplaySafetyError):w.replay_id(forged)
+            con=sqlite3.connect(path);self.assertEqual(con.execute("SELECT COUNT(*) FROM replay_records").fetchone()[0],0);con.close()
+
+    def test_public_production_facade_reopens_across_fresh_module_instances(self):
+        source=Path(j.__file__).read_text()
+        with tempfile.TemporaryDirectory() as d:
+            fake=Path(d).resolve()/"pkg"/"src"/"flop_agent"/"replay_journal.py";root=fake.parents[2]/"secrets";root.mkdir(parents=True,mode=0o700)
+            def load(name):
+                module=types.ModuleType(name);module.__file__=str(fake);module.__package__="flop_agent";sys.modules[name]=module;exec(compile(source,str(fake),"exec"),module.__dict__);return module
+            one=load("replay_restart_one");a=one.CanonicalAction("did:key:zFixture","SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1");one.observe_action(a)
+            two=load("replay_restart_two");b=two.CanonicalAction("did:key:zFixture","SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
+            self.assertEqual(two.inspect_action(b)["state"],"OBSERVED");self.assertEqual(two.observe_action(b)["decision"],"DUPLICATE_OBSERVATION")
+            credential=root/"replay-safety"/"store.credential";self.assertEqual(os.stat(credential).st_mode&0o777,0o600)
+            db_only=Path(d).resolve()/"db-only"/"src"/"flop_agent"/"replay_journal.py";db_only_root=db_only.parents[2]/"secrets"/"replay-safety";db_only_root.mkdir(parents=True,mode=0o700);shutil.copy2(root/"replay-safety"/"ledger.sqlite3",db_only_root/"ledger.sqlite3")
+            fake=db_only;three=load("replay_restart_db_only");c=three.CanonicalAction("did:key:zFixture","SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
+            with self.assertRaises(three.ReplaySafetyError):three.inspect_action(c)
+            full=Path(d).resolve()/"full-copy"/"src"/"flop_agent"/"replay_journal.py";full_root=full.parents[2]/"secrets";full_root.mkdir(parents=True,mode=0o700);shutil.copytree(root/"replay-safety",full_root/"replay-safety")
+            fake=full;four=load("replay_restart_full_copy");e=four.CanonicalAction("did:key:zFixture","SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
+            with self.assertRaises(four.ReplaySafetyError):four.inspect_action(e)
+            for name in ("replay_restart_one","replay_restart_two","replay_restart_db_only","replay_restart_full_copy"):sys.modules.pop(name,None)
+
+    def test_public_production_facade_reopens_in_a_new_process(self):
+        script="""from pathlib import Path
+import sys,types
+source=Path(sys.argv[1]).read_text();fake=Path(sys.argv[2]);name='replay_process_'+sys.argv[3];module=types.ModuleType(name);module.__file__=str(fake);module.__package__='flop_agent';sys.modules[name]=module;exec(compile(source,str(fake),'exec'),module.__dict__)
+a=module.CanonicalAction('did:key:zFixture','SIGNED_ACTION','lobby','1','a'*64,'b'*64,'resource:fixture','replay-action-v1')
+print(module.observe_action(a)['decision'] if sys.argv[3]=='one' else module.inspect_action(a)['state'])"""
+        with tempfile.TemporaryDirectory() as d:
+            fake=Path(d).resolve()/"pkg"/"src"/"flop_agent"/"replay_journal.py";root=fake.parents[2]/"secrets";root.mkdir(parents=True,mode=0o700);env={"PYTHONDONTWRITEBYTECODE":"1"}
+            first=subprocess.run([sys.executable,"-c",script,j.__file__,str(fake),"one"],check=True,capture_output=True,text=True,env=env)
+            second=subprocess.run([sys.executable,"-c",script,j.__file__,str(fake),"two"],check=True,capture_output=True,text=True,env=env)
+            self.assertEqual(first.stdout.strip(),"FIRST_OBSERVATION");self.assertEqual(second.stdout.strip(),"OBSERVED")
+
+    def test_public_facade_closure_does_not_reveal_store_credential(self):
+        seen=set();secret_like=[]
+        def walk(value):
+            if id(value) in seen:return
+            seen.add(id(value))
+            if isinstance(value,bytes) and len(value)==32:secret_like.append(value);return
+            if inspect.isfunction(value):
+                for cell in value.__closure__ or ():
+                    try:walk(cell.cell_contents)
+                    except ValueError:pass
+                for item in value.__defaults__ or ():walk(item)
+                for item in (value.__kwdefaults__ or {}).values():walk(item)
+        for fn in (j.observe_action,j.inspect_action,j.canonical_replay_id):walk(fn)
+        self.assertEqual(secret_like,[]);self.assertNotIn("family_secret",Path(j.__file__).read_text())
+
     def test_terminal_nonce_conflict_is_recorded_without_changing_authoritative_result(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);fam=family(root);item=action();w,res=ready(fam,item);w.attempted(res);w.confirm(res,fam.issue_confirmation(res,j.ReviewedEvidenceFixture.PAYMENT_FINAL))
@@ -126,6 +185,18 @@ class ReplayJournalTests(unittest.TestCase):
             with self.assertRaises((OSError,j.ReplaySafetyError)):family(root2).worker().observe(action())
             with self.assertRaises(j.ReplaySafetyError):j._new_test_family(j._PRODUCTION_ROOT,lambda:NOW)
 
+    def test_root_intermediate_and_nested_parent_symlinks_are_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d).resolve();outside=base/"outside";outside.mkdir(mode=0o700);(outside/"root").mkdir(mode=0o700)
+            direct=base/"linked-parent";direct.symlink_to(outside,target_is_directory=True)
+            with self.assertRaises((OSError,j.ReplaySafetyError)):j._new_test_family(direct/"root",lambda:NOW)
+            self.assertFalse((outside/"root"/"replay-safety").exists())
+            real=base/"real";real.mkdir(mode=0o700);nested=real/"nested";nested.symlink_to(outside,target_is_directory=True)
+            with self.assertRaises((OSError,j.ReplaySafetyError)):j._new_test_family(nested/"root",lambda:NOW)
+            self.assertFalse((outside/"root"/"replay-safety").exists())
+            root_link=base/"root-link";root_link.symlink_to(outside/"root",target_is_directory=True)
+            with self.assertRaises((OSError,j.ReplaySafetyError)):j._new_test_family(root_link,lambda:NOW)
+
     def test_permissions_transaction_rollback_and_reopen(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);fam=family(root);item=action();w=fam.worker();w.observe(item);w.validate(item,fam.issue_validation(item));path=root/"replay-safety"/"ledger.sqlite3"
@@ -150,6 +221,11 @@ class ReplayJournalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);fam=family(root);item=action();w,res=ready(fam,item);w.attempted(res);w.recover();proof=fam.issue_reconciliation(item,j.ReviewedEvidenceFixture.READBACK_PROVES_ABSENCE);path=root/"replay-safety"/"ledger.sqlite3";before=counts(path)
             con=sqlite3.connect(path);con.execute("CREATE TRIGGER deny_reconcile BEFORE UPDATE OF result_state ON effects WHEN NEW.result_state='EFFECT_FAILED_SAFE' BEGIN SELECT RAISE(ABORT,'fixture'); END");con.commit();con.close()
+            with self.assertRaises(sqlite3.DatabaseError):w.reconcile(item,proof)
+            self.assertEqual(counts(path),before)
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fam=family(root);item=action();w,res=ready(fam,item);w.attempted(res);w.recover();proof=fam.issue_reconciliation(item,j.ReviewedEvidenceFixture.READBACK_PROVES_EFFECT);path=root/"replay-safety"/"ledger.sqlite3";before=counts(path)
+            con=sqlite3.connect(path);con.execute("CREATE TRIGGER deny_reconcile_confirmed BEFORE UPDATE OF result_state ON effects WHEN NEW.result_state='EFFECT_CONFIRMED' BEGIN SELECT RAISE(ABORT,'fixture'); END");con.commit();con.close()
             with self.assertRaises(sqlite3.DatabaseError):w.reconcile(item,proof)
             self.assertEqual(counts(path),before)
         with tempfile.TemporaryDirectory() as d:
