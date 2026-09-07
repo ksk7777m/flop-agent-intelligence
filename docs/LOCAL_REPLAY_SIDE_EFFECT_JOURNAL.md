@@ -10,8 +10,10 @@ schema version, and captured policy version. A separate nonce-scope constraint
 detects reuse of the same actor/context/nonce with different signed material.
 Every field is revalidated at the sealed service boundary before canonical
 material or a replay ID is derived, including objects forged around the frozen
-dataclass constructor. Actor identities must use the reviewed Ed25519
-`did:key:z...` grammar, contexts use the bounded local room grammar, targets
+dataclass constructor. Actor identities must be canonical base58btc `did:key`
+values whose decoded bytes are exactly the Ed25519 `0xed 0x01` multicodec
+prefix followed by a 32-byte public key; decoding and canonical re-encoding are
+checked rather than relying on textual shape alone. Contexts use the bounded local room grammar, targets
 must have the prefix reviewed for their action class, and the action schema is
 exactly `replay-action-v1`. Nonces are exact canonical decimal strings and
 hashes are exact lowercase SHA-256 hex. Policy version is captured internally;
@@ -49,7 +51,12 @@ Copying both the database and credential is outside that boundary; inode/root
 binding still fails closed for an ordinary copy, but a full local compromise is
 not treated as a cryptographic security boundary.
 The production facade retains only observation, lookup, and canonical replay-ID
-operations; it carries no authority issuer or privileged effect mutator.
+operations; it carries no authority issuer or privileged effect mutator. Its
+reachable closure graph contains a high-level dispatcher limited to those three
+validated operations. SQLite open, credential authentication, SQL execution,
+and connection close occur within the dispatcher invocation; no reachable
+helper returns a connection, file descriptor, transaction, session, callback
+sink, or general store factory.
 
 Nonce conflicts are recorded separately from the authoritative action state.
 A conflict detected after confirmation therefore leaves the confirmed result

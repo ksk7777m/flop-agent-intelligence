@@ -6,9 +6,9 @@ from types import SimpleNamespace
 from unittest import mock
 from flop_agent import replay_journal as j
 
-NOW=datetime(2026,9,7,tzinfo=timezone.utc); A="a"*64;B="b"*64;C="c"*64
+NOW=datetime(2026,9,7,tzinfo=timezone.utc); A="a"*64;B="b"*64;C="c"*64;DID="did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c"
 def action(nonce="900719925474099312345678901234567890",payload=A,target="resource:fixture"):
-    return j.CanonicalAction("did:key:zFixture","SIGNED_TEST_ACTION","lobby",nonce,payload,B,target,"replay-action-v1")
+    return j.CanonicalAction(DID,"SIGNED_TEST_ACTION","lobby",nonce,payload,B,target,"replay-action-v1")
 def family(root):return j._new_test_family(root.resolve(),lambda _now=NOW:_now)
 def ready(fam,item,effect=j.EffectClass.PAYMENT,target="rail:1"):
     worker=fam.worker();worker.observe(item);worker.validate(item,fam.issue_validation(item));auth=fam.issue_effect_authority(item,"reviewed:authority");reservation=worker.reserve(item,auth,effect,target,C);return worker,reservation
@@ -108,21 +108,38 @@ class ReplayJournalTests(unittest.TestCase):
             with self.assertRaises(j.ReplaySafetyError):w.replay_id(forged)
             con=sqlite3.connect(path);self.assertEqual(con.execute("SELECT COUNT(*) FROM replay_records").fetchone()[0],0);con.close()
 
+    def test_ed25519_did_key_decoding_codec_length_and_canonical_form(self):
+        alphabet="123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+        def b58(raw):
+            leading=len(raw)-len(raw.lstrip(b"\0"));number=int.from_bytes(raw,"big");out=""
+            while number:number,remainder=divmod(number,58);out=alphabet[remainder]+out
+            return "1"*leading+out
+        invalid=(""," did:key:z1","did:web:example.test","did:key:abc","did:key:z0","did:key:z"+b58(b"\xec\x01"+bytes(32)),"did:key:z"+b58(b"\xed\x01"+bytes(31)),"did:key:z"+b58(b"\xed\x01"+bytes(33)),"did:key:z"+b58(b"\xed\x01"+bytes(32)+b"x"))
+        with tempfile.TemporaryDirectory() as d:
+            fam=family(Path(d));w=fam.worker();path=Path(d).resolve()/"replay-safety"/"ledger.sqlite3"
+            for actor in invalid:
+                forged=object.__new__(j.CanonicalAction)
+                for name,value in action().__dict__.items():object.__setattr__(forged,name,value)
+                object.__setattr__(forged,"actor_did",actor)
+                with self.assertRaises(j.ReplaySafetyError):w.replay_id(forged)
+            self.assertEqual(w.observe(action())["state"],"OBSERVED")
+            con=sqlite3.connect(path);self.assertEqual(con.execute("SELECT COUNT(*) FROM replay_records").fetchone()[0],1);con.close()
+
     def test_public_production_facade_reopens_across_fresh_module_instances(self):
         source=Path(j.__file__).read_text()
         with tempfile.TemporaryDirectory() as d:
             fake=Path(d).resolve()/"pkg"/"src"/"flop_agent"/"replay_journal.py";root=fake.parents[2]/"secrets";root.mkdir(parents=True,mode=0o700)
             def load(name):
                 module=types.ModuleType(name);module.__file__=str(fake);module.__package__="flop_agent";sys.modules[name]=module;exec(compile(source,str(fake),"exec"),module.__dict__);return module
-            one=load("replay_restart_one");a=one.CanonicalAction("did:key:zFixture","SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1");one.observe_action(a)
-            two=load("replay_restart_two");b=two.CanonicalAction("did:key:zFixture","SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
+            one=load("replay_restart_one");a=one.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1");one.observe_action(a)
+            two=load("replay_restart_two");b=two.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
             self.assertEqual(two.inspect_action(b)["state"],"OBSERVED");self.assertEqual(two.observe_action(b)["decision"],"DUPLICATE_OBSERVATION")
             credential=root/"replay-safety"/"store.credential";self.assertEqual(os.stat(credential).st_mode&0o777,0o600)
             db_only=Path(d).resolve()/"db-only"/"src"/"flop_agent"/"replay_journal.py";db_only_root=db_only.parents[2]/"secrets"/"replay-safety";db_only_root.mkdir(parents=True,mode=0o700);shutil.copy2(root/"replay-safety"/"ledger.sqlite3",db_only_root/"ledger.sqlite3")
-            fake=db_only;three=load("replay_restart_db_only");c=three.CanonicalAction("did:key:zFixture","SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
+            fake=db_only;three=load("replay_restart_db_only");c=three.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
             with self.assertRaises(three.ReplaySafetyError):three.inspect_action(c)
             full=Path(d).resolve()/"full-copy"/"src"/"flop_agent"/"replay_journal.py";full_root=full.parents[2]/"secrets";full_root.mkdir(parents=True,mode=0o700);shutil.copytree(root/"replay-safety",full_root/"replay-safety")
-            fake=full;four=load("replay_restart_full_copy");e=four.CanonicalAction("did:key:zFixture","SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
+            fake=full;four=load("replay_restart_full_copy");e=four.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
             with self.assertRaises(four.ReplaySafetyError):four.inspect_action(e)
             for name in ("replay_restart_one","replay_restart_two","replay_restart_db_only","replay_restart_full_copy"):sys.modules.pop(name,None)
 
@@ -130,7 +147,7 @@ class ReplayJournalTests(unittest.TestCase):
         script="""from pathlib import Path
 import sys,types
 source=Path(sys.argv[1]).read_text();fake=Path(sys.argv[2]);name='replay_process_'+sys.argv[3];module=types.ModuleType(name);module.__file__=str(fake);module.__package__='flop_agent';sys.modules[name]=module;exec(compile(source,str(fake),'exec'),module.__dict__)
-a=module.CanonicalAction('did:key:zFixture','SIGNED_ACTION','lobby','1','a'*64,'b'*64,'resource:fixture','replay-action-v1')
+a=module.CanonicalAction('did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c','SIGNED_ACTION','lobby','1','a'*64,'b'*64,'resource:fixture','replay-action-v1')
 print(module.observe_action(a)['decision'] if sys.argv[3]=='one' else module.inspect_action(a)['state'])"""
         with tempfile.TemporaryDirectory() as d:
             fake=Path(d).resolve()/"pkg"/"src"/"flop_agent"/"replay_journal.py";root=fake.parents[2]/"secrets";root.mkdir(parents=True,mode=0o700);env={"PYTHONDONTWRITEBYTECODE":"1"}
@@ -138,20 +155,25 @@ print(module.observe_action(a)['decision'] if sys.argv[3]=='one' else module.ins
             second=subprocess.run([sys.executable,"-c",script,j.__file__,str(fake),"two"],check=True,capture_output=True,text=True,env=env)
             self.assertEqual(first.stdout.strip(),"FIRST_OBSERVATION");self.assertEqual(second.stdout.strip(),"OBSERVED")
 
-    def test_public_facade_closure_does_not_reveal_store_credential(self):
-        seen=set();secret_like=[]
+    def test_public_facade_closure_exposes_no_credential_connection_or_store_factory(self):
+        seen=set();secret_like=[];connections=[];factories=[];dispatchers=[]
         def walk(value):
             if id(value) in seen:return
             seen.add(id(value))
             if isinstance(value,bytes) and len(value)==32:secret_like.append(value);return
+            if isinstance(value,sqlite3.Connection):connections.append(value);return
             if inspect.isfunction(value):
+                if value.__name__ in {"connect","open_store","get_connection","session","transaction"}:factories.append(value)
+                if value.__name__=="operate":dispatchers.append(value)
                 for cell in value.__closure__ or ():
                     try:walk(cell.cell_contents)
                     except ValueError:pass
                 for item in value.__defaults__ or ():walk(item)
                 for item in (value.__kwdefaults__ or {}).values():walk(item)
         for fn in (j.observe_action,j.inspect_action,j.canonical_replay_id):walk(fn)
-        self.assertEqual(secret_like,[]);self.assertNotIn("family_secret",Path(j.__file__).read_text())
+        self.assertEqual(secret_like,[]);self.assertEqual(connections,[]);self.assertEqual(factories,[]);self.assertEqual(len(dispatchers),1)
+        with self.assertRaises(j.ReplaySafetyError):dispatchers[0]("connect",action())
+        self.assertNotIn("family_secret",Path(j.__file__).read_text())
 
     def test_terminal_nonce_conflict_is_recorded_without_changing_authoritative_result(self):
         with tempfile.TemporaryDirectory() as d:
