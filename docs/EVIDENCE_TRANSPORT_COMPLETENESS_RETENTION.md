@@ -29,6 +29,11 @@ deterministic correlation key. Matching raw bytes and every descriptive field
 still create a distinct untrusted acquisition instance. Completeness and
 retention issuance require a non-copyable, non-serializable, service-local
 `TrustedAcquisitionEvidence` token bound to the exact reviewed object.
+Proof issuance records the exact snapshot object, trusted token, service-local
+registry entry, proof kind, and policy version. Proof consumption revalidates
+those identities; the public acquisition ID is retained only as descriptive
+metadata. A proof may be reapplied idempotently to its original snapshot, but
+never to an equal clone, copied projection, archive reload, or other authority.
 
 An absent record in a bounded view is `NOT_IN_VISIBLE_PAGE`, paired with its
 coverage status. Sequence discontinuity is `HISTORY_GAP`; a first sequence

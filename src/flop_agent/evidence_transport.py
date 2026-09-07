@@ -351,7 +351,10 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
     max_response_bytes = MAX_RESPONSE_BYTES
     mapping_proxy, os_module, stat_module, enum_type = MappingProxyType, os, stat, Enum
     token = object()
-    registry: weakref.WeakKeyDictionary[_CompletenessProof, tuple[object, str, str]] = weakref.WeakKeyDictionary()
+    registry: weakref.WeakKeyDictionary[_CompletenessProof,
+        tuple[object, weakref.ReferenceType[EvidenceSnapshot],
+              weakref.ReferenceType[TrustedAcquisitionEvidence], object,
+              str, str, str]] = weakref.WeakKeyDictionary()
     trusted_registry: weakref.WeakKeyDictionary[TrustedAcquisitionEvidence,
         tuple[object, weakref.ReferenceType[EvidenceSnapshot], str, str]] = weakref.WeakKeyDictionary()
     acquired: dict[int, weakref.ReferenceType[EvidenceSnapshot]] = {}
@@ -417,6 +420,37 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
                 or record[3] != "TRUSTED_REVIEWED_ACQUISITION"):
             raise PermissionError("forged, cloned, or cross-authority trusted acquisition")
 
+    def record_proof(proof: _CompletenessProof, snapshot: EvidenceSnapshot,
+                     acquisition: TrustedAcquisitionEvidence, kind: str) -> None:
+        trusted_record = trusted_registry.get(acquisition)
+        if trusted_record is None:
+            raise PermissionError("trusted acquisition authority is no longer valid")
+        registry[proof] = (token, weakref.ref(snapshot), weakref.ref(acquisition),
+                           trusted_record, kind, policy_version,
+                           snapshot.acquisition_id)
+
+    def require_proof(snapshot: EvidenceSnapshot, proof: _CompletenessProof,
+                      kind: str) -> None:
+        try:
+            record = registry.get(proof)
+        except TypeError:
+            record = None
+        if record is None:
+            raise PermissionError("cross-authority or forged evidence proof")
+        authority, snapshot_ref, acquisition_ref, issuance_record = record[:4]
+        proof_kind, proof_policy, descriptive_id = record[4:]
+        acquisition = acquisition_ref()
+        try:
+            current_trusted_record = trusted_registry.get(acquisition)
+        except TypeError:
+            current_trusted_record = None
+        if (authority is not token or snapshot_ref() is not snapshot
+                or acquisition is None or current_trusted_record is not issuance_record
+                or issuance_record[0] is not token or issuance_record[1]() is not snapshot
+                or proof_kind != kind or proof_policy != policy_version
+                or descriptive_id != snapshot.acquisition_id):
+            raise PermissionError("proof does not authorize this exact trusted acquisition")
+
     class EvidenceTransportService:
         __slots__ = ("__archive_root", "__archive_fd", "__archive_identity")
         def __new__(cls, *_args: Any, **_kwargs: Any) -> Any:
@@ -464,17 +498,12 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
                     or snapshot.acquisition_id not in reviewed_complete_acquisitions):
                 raise error_type("COMPLETENESS_NOT_PROVEN", "snapshot")
             proof = object.__new__(proof_type)
-            registry[proof] = (token, snapshot.acquisition_id, "COMPLETE_EXPORT")
+            record_proof(proof, snapshot, acquisition, "COMPLETE_EXPORT")
             return proof
 
         def apply_completeness(self, snapshot: EvidenceSnapshot, proof: _CompletenessProof) -> EvidenceSnapshot:
             require_snapshot(snapshot)
-            try:
-                record = registry.get(proof)
-            except TypeError:
-                record = None
-            if record != (token, snapshot.acquisition_id, "COMPLETE_EXPORT"):
-                raise PermissionError("cross-authority or forged completeness proof")
+            require_proof(snapshot, proof, "COMPLETE_EXPORT")
             elevated = remember(with_identity(replace_snapshot(snapshot, completeness=completeness_type.COMPLETE_VERIFIED,
                            transport_complete=True, transcript_complete=True,
                            history_complete=True, retention_status_known=True,
@@ -492,18 +521,13 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
                     or snapshot.generation is None or snapshot.truncated is not False):
                 raise error_type("RETENTION_LOSS_NOT_PROVEN", "snapshot")
             proof = object.__new__(retention_proof_type)
-            registry[proof] = (token, snapshot.acquisition_id, "REVIEWED_RETENTION_LOSS")
+            record_proof(proof, snapshot, acquisition, "REVIEWED_RETENTION_LOSS")
             return proof
 
         def confirm_retention_loss(self, snapshot: EvidenceSnapshot,
                                    evidence: VerifiedRetentionEvidence) -> EvidenceSnapshot:
             require_snapshot(snapshot)
-            try:
-                record = registry.get(evidence)
-            except TypeError:
-                record = None
-            if record != (token, snapshot.acquisition_id, "REVIEWED_RETENTION_LOSS"):
-                raise PermissionError("cross-authority, forged, or mismatched retention evidence")
+            require_proof(snapshot, evidence, "REVIEWED_RETENTION_LOSS")
             elevated = remember(with_identity(replace_snapshot(
                 snapshot, gap_status=gap_type.RETENTION_LOSS_CONFIRMED,
                 retention_status=retention_type.RETENTION_FLOOR_OBSERVED,

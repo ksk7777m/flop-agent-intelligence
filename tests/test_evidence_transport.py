@@ -296,12 +296,38 @@ class EvidenceTransportTests(unittest.TestCase):
                 requested_limit=reviewed.requested_limit, truncated=reviewed.truncated)
             self.assertIsNot(clone, reviewed)
             self.assertEqual(clone.acquisition_id, reviewed.acquisition_id)
+            completeness_proof = service.issue_complete_export_proof(reviewed, trusted)
+            retention_proof = service.issue_retention_evidence(reviewed, trusted)
+            with self.assertRaises(PermissionError):
+                service.apply_completeness(clone, completeness_proof)
+            with self.assertRaises(PermissionError):
+                service.confirm_retention_loss(clone, retention_proof)
+            self.assertEqual(service.apply_completeness(reviewed, completeness_proof).completeness,
+                             et.Completeness.COMPLETE_VERIFIED)
+            self.assertEqual(service.apply_completeness(reviewed, completeness_proof).completeness,
+                             et.Completeness.COMPLETE_VERIFIED)
+            self.assertEqual(service.confirm_retention_loss(reviewed, retention_proof).gap_status,
+                             et.GapStatus.RETENTION_LOSS_CONFIRMED)
+            self.assertEqual(service.confirm_retention_loss(reviewed, retention_proof).gap_status,
+                             et.GapStatus.RETENTION_LOSS_CONFIRMED)
             with self.assertRaises(PermissionError):
                 service.issue_retention_evidence(clone, trusted)
             with self.assertRaises(PermissionError):
                 service.issue_complete_export_proof(clone, trusted)
             projection = json.loads(json.dumps(dict(reviewed.public_projection())))
             self.assertEqual(projection["acquisition_id"], clone.acquisition_id)
+            with self.assertRaises((PermissionError, TypeError)):
+                service.apply_completeness(projection, completeness_proof)  # type: ignore[arg-type]
+            copied_snapshots = (copy.copy(reviewed), copy.deepcopy(reviewed),
+                                pickle.loads(pickle.dumps(reviewed)),
+                                dataclasses.replace(reviewed))
+            for copied in copied_snapshots:
+                self.assertEqual(copied, reviewed)
+                self.assertIsNot(copied, reviewed)
+                with self.assertRaises(PermissionError):
+                    service.apply_completeness(copied, completeness_proof)
+                with self.assertRaises(PermissionError):
+                    service.confirm_retention_loss(copied, retention_proof)
             with self.assertRaises((PermissionError, TypeError)):
                 service.issue_retention_evidence(reviewed, projection)  # type: ignore[arg-type]
             for operation in (copy.copy, copy.deepcopy, pickle.dumps):
@@ -312,6 +338,10 @@ class EvidenceTransportTests(unittest.TestCase):
             service.archive(reviewed, raw)
             reopened = et._build_production_equivalent_evidence_service_for_test(_root)
             metadata = reopened.archived_metadata(reviewed.acquisition_id)
+            with self.assertRaises((PermissionError, TypeError)):
+                reopened.apply_completeness(metadata, completeness_proof)  # type: ignore[arg-type]
+            with self.assertRaises((PermissionError, TypeError)):
+                reopened.confirm_retention_loss(metadata, retention_proof)  # type: ignore[arg-type]
             with self.assertRaises((PermissionError, TypeError)):
                 service.issue_complete_export_proof(reviewed, metadata)  # type: ignore[arg-type]
 
