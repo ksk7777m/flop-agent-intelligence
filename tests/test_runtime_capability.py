@@ -191,7 +191,10 @@ class RuntimeCapabilityTests(unittest.TestCase):
 
     def test_faucet_runtime_still_requires_requirements_and_human(self):
         token = issue(rc.ReviewedRuntimeFixtureId.FAUCET_AVAILABLE)
-        item = rc.assess_capabilities((token,), rc.ReadinessAction.FAUCET_CLAIM)["domains"]["FAUCET"][0]
+        assess = rc._build_readiness_service(
+            rc._production_definitions(), rc._resolve_observation,
+            lambda: NOW, timedelta(hours=6))[0]
+        item = assess((token,), rc.ReadinessAction.FAUCET_CLAIM)["domains"]["FAUCET"][0]
         self.assertEqual(item["runtime_status"], "RUNTIME_OBSERVED")
         self.assertIn("CLAIM_REQUIREMENTS_UNVERIFIED", item["blocking_reasons"])
         self.assertIn("HUMAN_APPROVAL_REQUIRED", item["blocking_reasons"])

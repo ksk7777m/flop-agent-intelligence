@@ -15,15 +15,26 @@ that concurrent workers cannot both reserve one effect. An attempt left in
 as failure and never automatically retried. Confirmation and reconciliation
 store hashes of reviewed evidence, not raw payloads or secrets.
 
-Production captures its private path under `secrets/replay-safety`, creates
-directories and files as `0700` and `0600`, rejects symlinks, and exposes no
-path or dependency injection. The public projection is `DESCRIPTIVE_ONLY` and
-cannot be loaded back as authority. Validation, action authorization,
-reservation, and reconciliation use non-serializable service-local opaque
-tokens. There is deliberately no live effect adapter.
+Production captures its private root under `secrets`, creates directories and
+files as `0700` and `0600`, opens path components relative to trusted directory
+descriptors with no-follow semantics, and exposes no path or dependency
+injection. Store metadata binds schema, policy, store kind, and a sealed store
+identity, so a separately provisioned service cannot attach to the database.
+The production facade retains only observation, lookup, and canonical replay-ID
+operations; it carries no authority issuer or privileged effect mutator.
+
+The public projection is `DESCRIPTIVE_ONLY` and cannot be loaded back as
+authority. Validation, action authorization, reservation, confirmation, and
+reconciliation use non-serializable service-local opaque tokens. Confirmation
+and reconciliation evidence binds the replay ID, effect identity, reservation,
+attempt, effect class, target, evidence kind and hash, related evidence
+identity, verifier revision, and policy version. There is deliberately no live
+effect adapter.
 
 Effect retry policy is fail-closed. Confirmed/rejected operations are
 `DO_NOT_RETRY`; attempted or unknown outcomes require reconciliation (or human
 review for effect classes where automated read-back is not sufficient). A
 proved-safe failure may be reserved again, while independent action authority
-is still required.
+is still required. Possession of a reservation alone cannot assert safe
+failure: reserved recovery requires a sealed local no-invocation proof, and an
+attempted or unknown result requires sealed read-back/reconciliation evidence.
