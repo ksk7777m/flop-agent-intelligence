@@ -1,4 +1,5 @@
-"""Sealed offline replay ledger and side-effect journal; no effect adapter."""
+#!/usr/bin/env python3
+"""Privileged standalone Replay Store helper; never import into the client."""
 from __future__ import annotations
 
 import hashlib, hmac, json, os, re, secrets, socket, sqlite3, struct, sys, threading, weakref
@@ -191,7 +192,7 @@ def _build_public_facade(trusted_root:Path,clock:Callable[[],datetime],store_id:
     def replay_id(a:CanonicalAction)->str:return operate("replay_id",a)
     return observe,inspect_action,replay_id
 
-_PRODUCTION_ROOT=Path(__file__).resolve().parents[2]/"secrets"
+_PRODUCTION_ROOT=Path(__file__).resolve().parents[1]/"secrets"
 def _production_clock(_dt:type[datetime]=datetime,_utc:timezone=timezone.utc)->datetime:return _dt.now(_utc)
 def _production_facade()->tuple[Callable[...,Any],...]:
     store_id=hashlib.sha256(b"FLOP-PRODUCTION-REPLAY-STORE-v1").hexdigest()
@@ -446,15 +447,26 @@ def _ipc_safe_error(exc:BaseException)->dict[str,str]:
         return {"code":"IPC_REQUEST_INVALID","field":"request","reason":"canonical bounded request required"}
     return {"code":"IPC_OPERATION_FAILED","field":"operation","reason":"helper rejected operation"}
 
-def _serve_ipc_once(fd:int,expected_auth:str)->int:
+def _reject_duplicate_pairs(pairs:list[tuple[str,Any]])->dict[str,Any]:
+    result={}
+    for key,value in pairs:
+        if key in result:raise ReplaySafetyError("IPC_DUPLICATE_FIELD","request","duplicate JSON fields forbidden")
+        result[key]=value
+    return result
+
+def _serve_ipc_once(fd:int)->int:
     channel=socket.socket(fileno=fd);request_id="INVALID"
     try:
+        channel.settimeout(10)
         if hasattr(channel,"getpeereid"):
             peer_uid,_peer_gid=channel.getpeereid()
             if peer_uid!=os.getuid():raise ReplaySafetyError("IPC_PEER_REJECTED","peer","same local account required")
+        expected_auth=secrets.token_hex(32);channel.sendall(expected_auth.encode("ascii"))
         size=struct.unpack("!I",_ipc_recv_exact(channel,4))[0]
         if size==0 or size>IPC_MAX_REQUEST_BYTES:raise ReplaySafetyError("IPC_REQUEST_TOO_LARGE","request","bounded request required")
-        value=json.loads(_ipc_recv_exact(channel,size).decode("utf-8"))
+        payload=_ipc_recv_exact(channel,size)
+        if channel.recv(1)!=b"":raise ReplaySafetyError("IPC_TRAILING_DATA","request","exactly one framed request required")
+        value=json.loads(payload.decode("utf-8"),object_pairs_hook=_reject_duplicate_pairs)
         if type(value) is not dict or frozenset(value)!=IPC_FIELDS:raise ReplaySafetyError("IPC_SCHEMA_INVALID","request","exact command fields required")
         request_id=value["request_id"]
         if type(request_id) is not str or re.fullmatch(r"[0-9a-f]{32}",request_id) is None:raise ReplaySafetyError("IPC_REQUEST_ID_INVALID","request_id","canonical correlation ID required")
@@ -476,9 +488,9 @@ def _serve_ipc_once(fd:int,expected_auth:str)->int:
     channel.sendall(struct.pack("!I",len(encoded))+encoded);channel.close();return 0
 
 def _main(argv:list[str])->int:
-    if len(argv)!=4 or argv[0]!="--serve-fd" or argv[2]!="--auth" or re.fullmatch(r"[0-9a-f]{64}",argv[3]) is None:return 2
+    if len(argv)!=2 or argv[0]!="--serve-fd":return 2
     try:fd=int(argv[1])
     except ValueError:return 2
-    return _serve_ipc_once(fd,argv[3])
+    return _serve_ipc_once(fd)
 
 if __name__=="__main__":raise SystemExit(_main(sys.argv[1:]))

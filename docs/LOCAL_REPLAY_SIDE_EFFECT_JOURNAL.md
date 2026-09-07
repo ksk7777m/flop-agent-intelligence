@@ -26,16 +26,21 @@ as failure and never automatically retried. Confirmation and reconciliation
 store hashes of reviewed evidence, not raw payloads or secrets.
 
 Production SQLite authority lives in a dedicated local helper process. The
-application facade communicates with a freshly spawned helper over an inherited
-Unix-domain socket pair using bounded, length-prefixed canonical JSON. It never
+application facade communicates with a freshly spawned standalone `libexec`
+helper over an inherited Unix-domain socket pair using bounded, length-prefixed
+canonical JSON. The helper is not an importable `flop_agent` module. Its absolute
+path and SHA-256 artifact identity are captured and checked before launch with
+the captured interpreter in `-I -S` mode, a fixed repository working directory,
+and a minimal explicit environment that excludes `PYTHONPATH`. It never
 imports SQLite, retains no database path, and has no connection, transaction,
 SQL, or state-setting primitive. The inherited connected descriptor, a fresh
-one-request authentication value, and same-account peer validation make the
+helper-generated one-request channel challenge, and same-account peer validation make the
 channel local and non-discoverable; there is no filesystem socket, TCP listener,
 HTTP endpoint, or remotely reachable service. Authentication authorizes only
 the fixed `OBSERVE`, `INSPECT`, and `REPLAY_ID` protocol operations. Unknown
 commands, fields, versions, types, paths, SQL, desired states, malformed frames,
-and oversized messages fail closed. The helper independently reconstructs and
+duplicate JSON fields, trailing bytes, concatenated frames, and oversized
+messages fail closed before mutation. The helper independently reconstructs and
 revalidates every canonical action before deriving identity or touching storage.
 
 The helper captures its private root under `secrets`, creates directories and

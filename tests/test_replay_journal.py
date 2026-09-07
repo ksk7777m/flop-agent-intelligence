@@ -1,11 +1,15 @@
-import inspect,json,os,pickle,shutil,socket,sqlite3,struct,subprocess,sys,tempfile,threading,types,unittest
+import importlib.util,inspect,json,os,pickle,shutil,socket,sqlite3,struct,subprocess,sys,tempfile,threading,types,unittest
+from importlib.machinery import SourceFileLoader
 from decimal import Decimal
 from datetime import datetime,timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from flop_agent import replay_journal as client
-from flop_agent import replay_store_helper as j
+
+HELPER_PATH=Path(__file__).resolve().parents[1]/"libexec"/"flop_replay_store_helper"
+_loader=SourceFileLoader("_replay_store_helper_test_only",str(HELPER_PATH));_spec=importlib.util.spec_from_loader(_loader.name,_loader)
+j=importlib.util.module_from_spec(_spec);sys.modules[_loader.name]=j;_loader.exec_module(j)
 
 NOW=datetime(2026,9,7,tzinfo=timezone.utc); A="a"*64;B="b"*64;C="c"*64;DID="did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c"
 def action(nonce="900719925474099312345678901234567890",payload=A,target="resource:fixture"):
@@ -151,38 +155,48 @@ class ReplayJournalTests(unittest.TestCase):
     def test_process_boundary_restarts_and_replays_safely(self):
         script="""from flop_agent import replay_journal as j
 a=j.CanonicalAction('did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c','SIGNED_ACTION','lobby','1','a'*64,'b'*64,'resource:fixture','replay-action-v1')
-import sys
+import os,sys
+os.environ['PYTHONPATH']=sys.argv[2]
 if sys.argv[1] in ('SET_STATE','EXEC_SQL'):
  try:j.observe_action.__closure__[0].cell_contents(sys.argv[1],a)
  except j.ReplaySafetyError as exc:print(exc.code)
 else:print(j.observe_action(a)['decision'] if sys.argv[1]=='observe' else j.inspect_action(a)['state'])"""
         with tempfile.TemporaryDirectory() as d:
-            base=Path(d).resolve();pkg=base/"src"/"flop_agent";pkg.mkdir(parents=True);(base/"secrets").mkdir(mode=0o700)
-            shutil.copy2(client.__file__,pkg/"replay_journal.py");shutil.copy2(j.__file__,pkg/"replay_store_helper.py");(pkg/"__init__.py").touch()
+            base=Path(d).resolve();pkg=base/"src"/"flop_agent";pkg.mkdir(parents=True);(base/"secrets").mkdir(mode=0o700);(base/"libexec").mkdir()
+            shutil.copy2(client.__file__,pkg/"replay_journal.py");shutil.copy2(HELPER_PATH,base/"libexec"/"flop_replay_store_helper");(pkg/"__init__.py").touch()
+            attack=base/"attack";attack.mkdir();marker=base/"helper-import-hijacked";(attack/"sitecustomize.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
             env={"PYTHONDONTWRITEBYTECODE":"1","PYTHONPATH":str(base/"src")}
-            runs=[subprocess.run([sys.executable,"-c",script,mode],capture_output=True,text=True,env=env) for mode in ("observe","inspect","observe","SET_STATE","EXEC_SQL")]
+            runs=[subprocess.run([sys.executable,"-c",script,mode,str(attack)],capture_output=True,text=True,env=env) for mode in ("observe","inspect","observe","SET_STATE","EXEC_SQL")]
             for run in runs:self.assertEqual(run.returncode,0,run.stderr)
             outputs=[run.stdout.strip() for run in runs]
             self.assertEqual(outputs,["FIRST_OBSERVATION","OBSERVED","DUPLICATE_OBSERVATION","IPC_COMMAND_UNSUPPORTED","IPC_COMMAND_UNSUPPORTED"])
+            self.assertFalse(marker.exists());self.assertIsNone(importlib.util.find_spec("flop_agent.replay_store_helper"))
             self.assertEqual(os.stat(base/"secrets"/"replay-safety"/"store.credential").st_mode&0o777,0o600)
 
     def test_ipc_auth_schema_commands_and_canonical_input_fail_closed(self):
-        source=Path(j.__file__).read_text()
+        source=HELPER_PATH.read_text()
         with tempfile.TemporaryDirectory() as d:
-            fake=Path(d).resolve()/"pkg"/"src"/"flop_agent"/"replay_store_helper.py";fake.parents[2].joinpath("secrets").mkdir(parents=True,mode=0o700)
+            fake=Path(d).resolve()/"libexec"/"flop_replay_store_helper";fake.parent.mkdir();fake.parents[1].joinpath("secrets").mkdir(mode=0o700)
             module=types.ModuleType("replay_ipc_fixture");module.__file__=str(fake);module.__package__="flop_agent";sys.modules[module.__name__]=module;exec(compile(source,str(fake),"exec"),module.__dict__)
-            auth="a"*64;base={"version":"replay-ipc-v1","request_id":"b"*32,"auth":auth,"command":"OBSERVE","policy_version":j.POLICY_VERSION,"action":dict(action().__dict__)}
-            def exchange(value,declared=None):
-                parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_STREAM);worker=threading.Thread(target=module._serve_ipc_once,args=(child.detach(),auth));worker.start()
-                encoded=value if isinstance(value,bytes) else json.dumps(value,separators=(",",":")).encode();parent.sendall(struct.pack("!I",len(encoded) if declared is None else declared)+encoded)
-                if declared is not None and declared>len(encoded):parent.shutdown(socket.SHUT_WR)
+            base={"version":"replay-ipc-v1","request_id":"b"*32,"auth":"0"*64,"command":"OBSERVE","policy_version":j.POLICY_VERSION,"action":dict(action().__dict__)}
+            def exchange(value,declared=None,use_server_auth=True,trailing=b""):
+                parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_STREAM);worker=threading.Thread(target=module._serve_ipc_once,args=(child.detach(),));worker.start();server_auth=parent.recv(64).decode()
+                if callable(value):encoded=value(server_auth)
+                elif isinstance(value,bytes):encoded=value
+                else:
+                    value=json.loads(json.dumps(value))
+                    if use_server_auth:value["auth"]=server_auth
+                    encoded=json.dumps(value,separators=(",",":")).encode()
+                parent.sendall(struct.pack("!I",len(encoded) if declared is None else declared)+encoded+trailing)
+                try:parent.shutdown(socket.SHUT_WR)
+                except OSError:pass
                 header=b""
                 while len(header)<4:header+=parent.recv(4-len(header))
                 size=struct.unpack("!I",header)[0];payload=b""
                 while len(payload)<size:payload+=parent.recv(size-len(payload))
                 response=json.loads(payload);parent.close();worker.join();return response
+            wrong=dict(base);wrong["auth"]="c"*64;self.assertFalse(exchange(wrong,use_server_auth=False)["ok"])
             cases=[]
-            wrong=dict(base);wrong["auth"]="c"*64;cases.append(wrong)
             for command in ("EXEC_SQL","SET_STATE","OPEN_DB"):
                 value=dict(base);value["command"]=command;cases.append(value)
             extra=dict(base);extra["sql"]="UPDATE replay_records";cases.append(extra)
@@ -194,7 +208,13 @@ else:print(j.observe_action(a)['decision'] if sys.argv[1]=='observe' else j.insp
             for value in cases:self.assertFalse(exchange(value)["ok"],value)
             oversized=exchange(b"x",module.IPC_MAX_REQUEST_BYTES+1);self.assertFalse(oversized["ok"])
             truncated=exchange(b"{}",10);self.assertFalse(truncated["ok"])
-            first=exchange(base);self.assertTrue(first["ok"]);self.assertEqual(first["result"]["decision"],"FIRST_OBSERVATION")
+            trailing=exchange(base,trailing=b"hidden");self.assertFalse(trailing["ok"])
+            duplicate=exchange(lambda auth:(json.dumps(base,separators=(",",":"))[:-1]+',"auth":"'+auth+'"}').encode());self.assertFalse(duplicate["ok"])
+            captured=[]
+            def capture(auth):
+                value=json.loads(json.dumps(base));value["auth"]=auth;encoded=json.dumps(value,separators=(",",":")).encode();captured.append(encoded);return encoded
+            first=exchange(capture);self.assertTrue(first["ok"]);self.assertEqual(first["result"]["decision"],"FIRST_OBSERVATION")
+            self.assertFalse(exchange(captured[0])["ok"])
             self.assertEqual(exchange(base)["result"]["decision"],"DUPLICATE_OBSERVATION")
             sys.modules.pop(module.__name__,None)
 
