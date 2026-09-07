@@ -18,6 +18,6 @@
     {"if":{"properties":{"transport_complete":{"const":true}},"required":["transport_complete"]},"then":{"properties":{"completeness":{"const":"COMPLETE_VERIFIED"}}}},
     {"if":{"properties":{"transcript_complete":{"const":true}},"required":["transcript_complete"]},"then":{"properties":{"completeness":{"const":"COMPLETE_VERIFIED"}}}},
     {"if":{"properties":{"history_complete":{"const":true}},"required":["history_complete"]},"then":{"properties":{"completeness":{"const":"COMPLETE_VERIFIED"}}}},
-    {"if":{"properties":{"gap_status":{"const":"RETENTION_LOSS_CONFIRMED"}},"required":["gap_status"]},"then":{"properties":{"retention_status_known":{"const":true}}}}
+    {"if":{"properties":{"gap_status":{"const":"RETENTION_LOSS_CONFIRMED"}},"required":["gap_status"]},"then":{"properties":{"retention_status_known":{"const":true},"retention_status":{"const":"RETENTION_FLOOR_OBSERVED"}}}}
   ]
 }

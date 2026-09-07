@@ -161,11 +161,15 @@ class SearchResult:
     finding: FindingStatus
     coverage: Completeness
     snapshot_hash: str
+    target_observed: bool
+    gap_status: GapStatus
 
     def public_projection(self) -> Mapping[str, Any]:
         return MappingProxyType({"status": "DESCRIPTIVE_ONLY", "finding": self.finding.value,
                                  "coverage": self.coverage.value,
-                                 "snapshot_hash": self.snapshot_hash})
+                                 "snapshot_hash": self.snapshot_hash,
+                                 "target_observed": self.target_observed,
+                                 "gap_status": self.gap_status.value})
 
 
 @dataclass(frozen=True)
@@ -211,6 +215,11 @@ class _CompletenessProof:
 
 
 class VerifiedRetentionEvidence(_CompletenessProof):
+    __slots__ = ()
+
+
+class TrustedAcquisitionEvidence(_CompletenessProof):
+    """Opaque, service-local authority for one exact acquisition instance."""
     __slots__ = ()
 
 
@@ -263,12 +272,31 @@ def validate_evidence_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
         errors.append("TRANSCRIPT_COMPLETE_REQUIRES_COMPLETE_VERIFIED")
     if value.get("history_complete") is True and completeness != "COMPLETE_VERIFIED":
         errors.append("HISTORY_COMPLETE_REQUIRES_COMPLETE_VERIFIED")
+    if completeness == "COMPLETE_VERIFIED":
+        if value.get("transport") not in (None, "ROOM_EXPORT"):
+            errors.append("COMPLETE_VERIFIED_REQUIRES_ROOM_EXPORT")
+        if value.get("transport_complete") is not True:
+            errors.append("COMPLETE_VERIFIED_REQUIRES_TRANSPORT_COMPLETE")
+        if value.get("transcript_complete") is not True:
+            errors.append("COMPLETE_VERIFIED_REQUIRES_TRANSCRIPT_COMPLETE")
+        if value.get("history_complete") is not True:
+            errors.append("COMPLETE_VERIFIED_REQUIRES_HISTORY_COMPLETE")
     if value.get("gap_status") == "RETENTION_LOSS_CONFIRMED" and value.get("retention_status_known") is not True:
         errors.append("RETENTION_LOSS_REQUIRES_KNOWN_RETENTION")
+    if (value.get("gap_status") == "RETENTION_LOSS_CONFIRMED"
+            and value.get("retention_status") != "RETENTION_FLOOR_OBSERVED"):
+        errors.append("RETENTION_LOSS_REQUIRES_OBSERVED_FLOOR")
     if value.get("finding") == "NOT_FOUND_CONFIRMED" and completeness != "COMPLETE_VERIFIED":
         errors.append("CONFIRMED_ABSENCE_REQUIRES_COMPLETE_VERIFIED")
-    if value.get("finding") == "FOUND" and value.get("target_observed") is False:
+    if (value.get("finding") == "NOT_FOUND_CONFIRMED"
+            and value.get("gap_status") in ("GAP_UNRESOLVED", "HISTORY_GAP") ):
+        errors.append("CONFIRMED_ABSENCE_FORBIDS_UNRESOLVED_GAP")
+    if value.get("finding") == "FOUND" and value.get("target_observed") is not True:
         errors.append("FOUND_REQUIRES_EXACT_OBSERVATION")
+    if (value.get("result") == "CONFLICTING_EVIDENCE"
+            and value.get("finding") == "NOT_FOUND_CONFIRMED"
+            and value.get("reviewed_resolution") is not True):
+        errors.append("CONFLICT_REQUIRES_REVIEWED_RESOLUTION")
     if (value.get("room_status") == "ROOM_DELETION_CONFIRMED"
             and value.get("discovery_completeness") in ("UNKNOWN", "PARTIAL")
             and value.get("independent_deletion_evidence") is not True):
@@ -309,12 +337,13 @@ def _open_directory_no_symlinks(path: Path, *, _os: Any = os,
 
 
 def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
-               reviewed_retention_acquisitions: frozenset[str] = frozenset()) -> tuple[Any, Any]:
+               reviewed_retention_acquisitions: frozenset[str] = frozenset()) -> tuple[Any, Any, Any]:
     transport_type, source_type = Transport, AcquisitionSource
     completeness_type, gap_type, retention_type = Completeness, GapStatus, RetentionStatus
     snapshot_type, search_type, finding_type = EvidenceSnapshot, SearchResult, FindingStatus
     conflict_type, error_type = ConflictResult, EvidenceTransportError
     proof_type, retention_proof_type = _CompletenessProof, VerifiedRetentionEvidence
+    trusted_acquisition_type = TrustedAcquisitionEvidence
     room_re, safe_id_re, revision_re = _ROOM, _SAFE_ID, _REVISION
     parse_jsonl, sha256, canonical_json = _parse_jsonl, hashlib.sha256, _canonical_json
     json_loads, fullmatch = json.loads, re.fullmatch
@@ -323,6 +352,8 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
     mapping_proxy, os_module, stat_module, enum_type = MappingProxyType, os, stat, Enum
     token = object()
     registry: weakref.WeakKeyDictionary[_CompletenessProof, tuple[object, str, str]] = weakref.WeakKeyDictionary()
+    trusted_registry: weakref.WeakKeyDictionary[TrustedAcquisitionEvidence,
+        tuple[object, weakref.ReferenceType[EvidenceSnapshot], str, str]] = weakref.WeakKeyDictionary()
     acquired: dict[int, weakref.ReferenceType[EvidenceSnapshot]] = {}
     records: dict[int, tuple[frozenset[int], Mapping[int, str]]] = {}
 
@@ -368,6 +399,24 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
         if reference is None or reference() is not snapshot:
             raise PermissionError("caller-created evidence has no acquisition authority")
 
+    def attest_trusted_acquisition(snapshot: EvidenceSnapshot) -> TrustedAcquisitionEvidence:
+        require_snapshot(snapshot)
+        evidence = object.__new__(trusted_acquisition_type)
+        trusted_registry[evidence] = (token, weakref.ref(snapshot), snapshot.acquisition_id,
+                                      "TRUSTED_REVIEWED_ACQUISITION")
+        return evidence
+
+    def require_trusted(snapshot: EvidenceSnapshot,
+                        evidence: TrustedAcquisitionEvidence) -> None:
+        try:
+            record = trusted_registry.get(evidence)
+        except TypeError:
+            record = None
+        if (record is None or record[0] is not token or record[1]() is not snapshot
+                or record[2] != snapshot.acquisition_id
+                or record[3] != "TRUSTED_REVIEWED_ACQUISITION"):
+            raise PermissionError("forged, cloned, or cross-authority trusted acquisition")
+
     class EvidenceTransportService:
         __slots__ = ("__archive_root", "__archive_fd", "__archive_identity")
         def __new__(cls, *_args: Any, **_kwargs: Any) -> Any:
@@ -404,8 +453,10 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
                                for item in parsed}))
             return snapshot
 
-        def issue_complete_export_proof(self, snapshot: EvidenceSnapshot) -> _CompletenessProof:
+        def issue_complete_export_proof(self, snapshot: EvidenceSnapshot,
+                                        acquisition: TrustedAcquisitionEvidence) -> _CompletenessProof:
             require_snapshot(snapshot)
+            require_trusted(snapshot, acquisition)
             if (snapshot.transport is not transport_type.ROOM_EXPORT or snapshot.truncated is not False
                     or snapshot.acquisition_source is not source_type.DIRECT_REVIEWED_SOURCE
                     or snapshot.generation is None
@@ -431,8 +482,10 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
             records[id(elevated)] = records[id(snapshot)]
             return elevated
 
-        def issue_retention_evidence(self, snapshot: EvidenceSnapshot) -> VerifiedRetentionEvidence:
+        def issue_retention_evidence(self, snapshot: EvidenceSnapshot,
+                                     acquisition: TrustedAcquisitionEvidence) -> VerifiedRetentionEvidence:
             require_snapshot(snapshot)
+            require_trusted(snapshot, acquisition)
             if (snapshot.acquisition_id not in reviewed_retention_acquisitions
                     or snapshot.transport is not transport_type.ROOM_EXPORT
                     or snapshot.acquisition_source is not source_type.DIRECT_REVIEWED_SOURCE
@@ -462,12 +515,15 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
             require_snapshot(snapshot)
             observed, _content = records[id(snapshot)]
             if seq in observed:
-                return search_type(finding_type.FOUND, snapshot.completeness, snapshot.snapshot_hash)
+                return search_type(finding_type.FOUND, snapshot.completeness,
+                                   snapshot.snapshot_hash, True, snapshot.gap_status)
             if snapshot.gap_status in (gap_type.HISTORY_GAP, gap_type.GAP_UNRESOLVED):
-                return search_type(finding_type.GAP_UNRESOLVED, snapshot.completeness, snapshot.snapshot_hash)
+                return search_type(finding_type.GAP_UNRESOLVED, snapshot.completeness,
+                                   snapshot.snapshot_hash, False, snapshot.gap_status)
             finding = (finding_type.NOT_FOUND_CONFIRMED if snapshot.completeness is completeness_type.COMPLETE_VERIFIED
                        else finding_type.NOT_IN_VISIBLE_PAGE)
-            return search_type(finding, snapshot.completeness, snapshot.snapshot_hash)
+            return search_type(finding, snapshot.completeness, snapshot.snapshot_hash,
+                               False, snapshot.gap_status)
 
         def reconcile(self, left: EvidenceSnapshot, right: EvidenceSnapshot,
                       target_seq: int | None = None) -> ConflictResult:
@@ -620,9 +676,11 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
     production._EvidenceTransportService__archive_identity = None
     def build_for_test(archive_root: Path | None = None, *,
                        reviewed_complete_acquisitions: frozenset[str] = frozenset(),
-                       reviewed_retention_acquisitions: frozenset[str] = frozenset()) -> Any:
+                       reviewed_retention_acquisitions: frozenset[str] = frozenset(),
+                       _include_fixture_attester: bool = False) -> Any:
         # Each fixture service gets a distinct process-local authority registry.
-        service, _unused_builder = _bootstrap(reviewed_complete_acquisitions, reviewed_retention_acquisitions)
+        service, _unused_builder, fixture_attest = _bootstrap(
+            reviewed_complete_acquisitions, reviewed_retention_acquisitions)
         service._EvidenceTransportService__archive_root = None
         service._EvidenceTransportService__archive_fd = None
         service._EvidenceTransportService__archive_identity = None
@@ -643,11 +701,14 @@ def _bootstrap(reviewed_complete_acquisitions: frozenset[str] = frozenset(),
             service._EvidenceTransportService__archive_root = archive_root
             service._EvidenceTransportService__archive_fd = root_fd
             service._EvidenceTransportService__archive_identity = (root_info.st_dev, root_info.st_ino)
+        if _include_fixture_attester:
+            return service, fixture_attest
         return service
-    return production, build_for_test
+    return production, build_for_test, attest_trusted_acquisition
 
 
-production_evidence_transport, _build_production_equivalent_evidence_service_for_test = _bootstrap()
+production_evidence_transport, _build_production_equivalent_evidence_service_for_test, _unused_production_attester = _bootstrap()
+del _unused_production_attester
 
 
 @contextmanager
@@ -663,15 +724,17 @@ def _isolated_production_equivalent_boundary():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory) / "authority" / "archive"
         root.mkdir(parents=True, mode=0o700)
-        service = _build_production_equivalent_evidence_service_for_test(
+        service, attest = _build_production_equivalent_evidence_service_for_test(
             root, reviewed_complete_acquisitions=frozenset({candidate.acquisition_id}),
-            reviewed_retention_acquisitions=frozenset({candidate.acquisition_id}))
+            reviewed_retention_acquisitions=frozenset({candidate.acquisition_id}),
+            _include_fixture_attester=True)
         snapshot = service.acquire(transport=Transport.ROOM_EXPORT, room="lobby", raw=raw,
             acquisition_source=AcquisitionSource.DIRECT_REVIEWED_SOURCE, acquired_at=1,
             source_revision=revision, generation="g1", page_limit=20,
             requested_since=0, requested_limit=20, truncated=False)
         try:
-            yield service, root, snapshot, raw
+            trusted = attest(snapshot)
+            yield service, root, snapshot, trusted, raw
         finally:
             descriptor = service._EvidenceTransportService__archive_fd
             service._EvidenceTransportService__archive_fd = None

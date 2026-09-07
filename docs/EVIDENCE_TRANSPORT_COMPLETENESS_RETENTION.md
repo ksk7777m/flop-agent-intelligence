@@ -24,6 +24,12 @@ hash, sequence and request bounds, truncation and completeness states, revision,
 schema, policy, and reviewed determination. A hash or source label alone has no
 retention authority.
 
+`ACQUISITION_ID != TRUSTED_ACQUISITION_AUTHORITY`. The public ID is only a
+deterministic correlation key. Matching raw bytes and every descriptive field
+still create a distinct untrusted acquisition instance. Completeness and
+retention issuance require a non-copyable, non-serializable, service-local
+`TrustedAcquisitionEvidence` token bound to the exact reviewed object.
+
 An absent record in a bounded view is `NOT_IN_VISIBLE_PAGE`, paired with its
 coverage status. Sequence discontinuity is `HISTORY_GAP`; a first sequence
 after `requested_since + 1` is `GAP_UNRESOLVED`, never automatic retention
@@ -47,6 +53,8 @@ captured root must be owned and `0700`; creation and reads use a stable director
 descriptor plus no-follow children, and a replaced parent path fails closed.
 Archive methods accept no caller path. Metadata survives service restart while
 archive paths and raw room text are never public.
+Reloaded archive metadata remains `DESCRIPTIVE_ONLY` and never reconstructs
+trusted acquisition authority; future authority requires explicit re-attestation.
 
 Search uses exact observed sequence membership, never range inclusion. Recovery
 and conflict results preserve both acquisition IDs and provenance roots,
