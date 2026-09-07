@@ -31,10 +31,10 @@ def _build_facade():
     socketpair,af_unix,sock_stream,shutdown_write=socket.socketpair,socket.AF_UNIX,socket.SOCK_STREAM,socket.SHUT_WR
     popen,devnull,timeout_error=subprocess.Popen,subprocess.DEVNULL,subprocess.TimeoutExpired
     executable=str(Path(sys.executable).resolve());repo=Path(__file__).resolve().parents[2];helper=repo/"libexec"/"flop_replay_store_helper"
-    expected="b9bdc2607d1853346f3f0c2b319c016446810b10b5ce493682c8afbdfee0f18c"
+    expected="f11c9acec9c5fd19b9cb6b790dfb6eff4806adcfea6ab4038d4a7f4478cd5ad2"
     if not helper.is_absolute() or not helper.is_file() or helper.is_symlink() or hashlib.sha256(helper.read_bytes()).hexdigest()!=expected:raise ReplaySafetyError("HELPER_PROVENANCE_INVALID","helper","reviewed helper artifact required")
     environment=MappingProxyType({"PATH":"/usr/bin:/bin","PYTHONNOUSERSITE":"1","LC_ALL":"C"})
-    action_type,error_type,proxy=CanonicalAction,ReplaySafetyError,MappingProxyType
+    action_type,effect_type,error_type,proxy=CanonicalAction,EffectClass,ReplaySafetyError,MappingProxyType
     version,policy,max_request,max_response=PROTOCOL_VERSION,POLICY_VERSION,MAX_REQUEST_BYTES,MAX_RESPONSE_BYTES
     to_dict,token_hex=asdict,secrets.token_hex
     def recv_exact(channel:socket.socket,size:int)->bytes:
@@ -44,13 +44,13 @@ def _build_facade():
             if not chunk:raise error_type("IPC_TRUNCATED","response","complete framed response required")
             chunks.append(chunk);remaining-=len(chunk)
         return b"".join(chunks)
-    def invoke(command:str,action:CanonicalAction)->Mapping[str,Any]|str:
+    def invoke(command:str,action:CanonicalAction,parameters:Mapping[str,Any]|None=None)->Mapping[str,Any]|str:
         if type(action) is not action_type:raise error_type("ACTION_INVALID","action","exact canonical action required")
         parent,child=socketpair(af_unix,sock_stream);parent.settimeout(10);request_id=token_hex(16);process=None;return_code=None
         try:
             process=popen([executable,"-I","-S",str(helper),"--serve-fd",str(child.fileno())],pass_fds=(child.fileno(),),stdin=devnull,stdout=devnull,stderr=devnull,close_fds=True,cwd=str(repo),env=dict(environment))
             child.close();auth=recv_exact(parent,64).decode("ascii")
-            request={"version":version,"request_id":request_id,"auth":auth,"command":command,"policy_version":policy,"action":to_dict(action)}
+            request={"version":version,"request_id":request_id,"auth":auth,"command":command,"policy_version":policy,"action":to_dict(action),"parameters":dict(parameters or {})}
             encoded=jsonm.dumps(request,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
             if len(encoded)>max_request:raise error_type("IPC_REQUEST_TOO_LARGE","request","bounded request required")
             parent.sendall(pack("!I",len(encoded))+encoded);parent.shutdown(shutdown_write)
@@ -73,7 +73,14 @@ def _build_facade():
     def observe(action:CanonicalAction)->Mapping[str,Any]:return invoke("OBSERVE",action)  # type: ignore[return-value]
     def inspect_action(action:CanonicalAction)->Mapping[str,Any]:return invoke("INSPECT",action)  # type: ignore[return-value]
     def replay_id(action:CanonicalAction)->str:return invoke("REPLAY_ID",action)  # type: ignore[return-value]
-    return observe,inspect_action,replay_id
+    def validate(action:CanonicalAction)->Mapping[str,Any]:return invoke("VALIDATE",action)  # type: ignore[return-value]
+    def reserve(action:CanonicalAction,effect_class:EffectClass,target:str,request_hash:str)->Mapping[str,Any]:
+        if type(effect_class) is not effect_type:raise error_type("EFFECT_CLASS_INVALID","effect_class","reviewed effect class required")
+        return invoke("RESERVE",action,{"effect_class":effect_class.value,"target":target,"request_hash":request_hash})  # type: ignore[return-value]
+    def attempted(action:CanonicalAction,reservation_id:str)->Mapping[str,Any]:return invoke("MARK_ATTEMPTED",action,{"reservation_id":reservation_id})  # type: ignore[return-value]
+    def confirm(action:CanonicalAction,evidence:Mapping[str,Any])->Mapping[str,Any]:return invoke("CONFIRM",action,{"evidence":dict(evidence)})  # type: ignore[return-value]
+    def reconcile(action:CanonicalAction,evidence:Mapping[str,Any])->Mapping[str,Any]:return invoke("RECONCILE",action,{"evidence":dict(evidence)})  # type: ignore[return-value]
+    return observe,inspect_action,replay_id,validate,reserve,attempted,confirm,reconcile
 
-observe_action,inspect_action,canonical_replay_id=_build_facade();del _build_facade
-__all__=("CanonicalAction","ConfirmationEvidenceType","EffectClass","ReplaySafetyError","ReplayState","RetryClassification","canonical_replay_id","inspect_action","observe_action")
+observe_action,inspect_action,canonical_replay_id,validate_action,reserve_effect,mark_attempted,confirm_effect,reconcile_effect=_build_facade();del _build_facade
+__all__=("CanonicalAction","ConfirmationEvidenceType","EffectClass","ReplaySafetyError","ReplayState","RetryClassification","canonical_replay_id","confirm_effect","inspect_action","mark_attempted","observe_action","reconcile_effect","reserve_effect","validate_action")

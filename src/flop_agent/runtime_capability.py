@@ -180,6 +180,12 @@ class CapabilityDefinition:
     finality_verified: bool | None = None
     replay_ledger_implemented: bool | None = None
     side_effect_journal_implemented: bool | None = None
+    replay_ledger_core_implemented: bool | None = None
+    replay_ledger_production_ipc_implemented: bool | None = None
+    side_effect_journal_core_implemented: bool | None = None
+    side_effect_journal_production_ipc_implemented: bool | None = None
+    confirmation_verifier_available: bool | None = None
+    reconciliation_verifier_available: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -256,7 +262,7 @@ def _production_definitions() -> tuple[CapabilityDefinition, ...]:
         CapabilityDefinition("durability.readback", Domain.EVIDENCE_DURABILITY, offline, CapabilityState.RUNTIME_NOT_OBSERVED, ReviewedSourceId.TECHNOCORE_ROOMS_JSON, True, True, ("RUNTIME_WRITE_NOT_AUTHORIZED", "RUNTIME_READBACK_NOT_OBSERVED")),
         CapabilityDefinition("delegation.verification", Domain.DELEGATION_VERIFICATION, offline, documented, ReviewedSourceId.TECHNOCORE_SECURITY, True, False, ("DELEGATION_RUNTIME_UNOBSERVED",)),
         CapabilityDefinition("tool.output_budget", Domain.TOOL_OUTPUT_BUDGET, offline, CapabilityState.REVIEW_REQUIRED, None, False, False, ()),
-        CapabilityDefinition("replay.safety", Domain.REPLAY_SAFETY, offline, CapabilityState.REVIEW_REQUIRED, None, False, False, (), replay_ledger_implemented=True, side_effect_journal_implemented=True),
+        CapabilityDefinition("replay.safety", Domain.REPLAY_SAFETY, offline, CapabilityState.REVIEW_REQUIRED, None, False, False, ("CONFIRMATION_VERIFIER_UNAVAILABLE", "RECONCILIATION_VERIFIER_UNAVAILABLE"), replay_ledger_implemented=True, side_effect_journal_implemented=False, replay_ledger_core_implemented=True, replay_ledger_production_ipc_implemented=True, side_effect_journal_core_implemented=True, side_effect_journal_production_ipc_implemented=True, confirmation_verifier_available=False, reconciliation_verifier_available=False),
         CapabilityDefinition("activity.quality", Domain.ACTIVITY_QUALITY, offline, CapabilityState.REVIEW_REQUIRED, None, False, False, ()),
         CapabilityDefinition("protocol.generic_models", Domain.PROTOCOL_MODEL, offline, documented, ReviewedSourceId.TECHNOCORE_SECURITY, False, False, ("UPSTREAM_VERSION_NOT_FINALIZED", "PTLC_EXPERIMENTAL_UNEXERCISED", "OWNED_ROOM_INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE")),
         CapabilityDefinition("runtime.release_drift", Domain.RUNTIME_DRIFT, offline, documented, ReviewedSourceId.TECHNOCORE_CONFIG, True, False, ("RELEASE_MAIN_DOC_RUNTIME_UNRECONCILED",)),
@@ -507,7 +513,13 @@ def _build_readiness_service(
                 "economic_value_verified": definition.economic_value_verified,
                 "finality_verified": definition.finality_verified,
                 "replay_ledger_implemented": definition.replay_ledger_implemented,
-                "side_effect_journal_implemented": definition.side_effect_journal_implemented}
+                "side_effect_journal_implemented": definition.side_effect_journal_implemented,
+                "replay_ledger_core_implemented": definition.replay_ledger_core_implemented,
+                "replay_ledger_production_ipc_implemented": definition.replay_ledger_production_ipc_implemented,
+                "side_effect_journal_core_implemented": definition.side_effect_journal_core_implemented,
+                "side_effect_journal_production_ipc_implemented": definition.side_effect_journal_production_ipc_implemented,
+                "confirmation_verifier_available": definition.confirmation_verifier_available,
+                "reconciliation_verifier_available": definition.reconciliation_verifier_available}
             rows[definition.domain.value].append(row)
             if required:
                 critical_rows.append(row)
@@ -696,6 +708,17 @@ def _build_manifest_validator(
         if overall_state in blocked_states and authorized is not False:
             errors.append("BLOCKED_STATE_AUTHORIZED")
         for row in rows:
+            if row.get("domain") == "REPLAY_SAFETY":
+                expected_ledger = (row.get("replay_ledger_core_implemented") is True
+                                   and row.get("replay_ledger_production_ipc_implemented") is True)
+                expected_journal = (row.get("side_effect_journal_core_implemented") is True
+                                    and row.get("side_effect_journal_production_ipc_implemented") is True
+                                    and row.get("confirmation_verifier_available") is True
+                                    and row.get("reconciliation_verifier_available") is True)
+                if row.get("replay_ledger_implemented") is not expected_ledger:
+                    errors.append("REPLAY_LEDGER_IMPLEMENTATION_DERIVATION_INVALID")
+                if row.get("side_effect_journal_implemented") is not expected_journal:
+                    errors.append("SIDE_EFFECT_JOURNAL_IMPLEMENTATION_DERIVATION_INVALID")
             if row.get("rail_type") == "PAPER_RAIL":
                 if row.get("economic_value_verified") is not False:
                     errors.append("PAPER_RAIL_ECONOMIC_VALUE_INVALID")
@@ -784,7 +807,7 @@ def _build_static_catalogs() -> tuple[Callable[[], Mapping[str, Any]], Callable[
         "EVIDENCE_DURABILITY": proxy({"write_path_implemented": True, "runtime_write_authorized": False, "readback_verifier_ready": True, "runtime_readback_observed": False}),
         "DELEGATION_VERIFICATION": proxy({"delegation_verifier_implemented": True, "delegation_documented": "DOCUMENTED_ONLY", "delegation_runtime_observed": False, "lossless_delegation_nonce_ready": True, "root_key_local_only": True, "delegation_ready": False}),
         "TOOL_OUTPUT_BUDGET": proxy({"policy_scope": "LOCAL_SAFETY_LAYER", "max_records": 200, "max_bytes": 2097152, "max_estimated_tokens": 131072, "framing": "UNTRUSTED_CONTENT", "auto_fetch": False, "auto_action": False}),
-        "REPLAY_SAFETY": proxy({"replay_ledger_implemented": True, "side_effect_journal_implemented": True, "lossless_signed_identifiers_ready": True}),
+        "REPLAY_SAFETY": proxy({"replay_ledger_implemented": True, "side_effect_journal_implemented": False, "replay_ledger_core_implemented": True, "replay_ledger_production_ipc_implemented": True, "side_effect_journal_core_implemented": True, "side_effect_journal_production_ipc_implemented": True, "confirmation_verifier_available": False, "reconciliation_verifier_available": False, "lossless_signed_identifiers_ready": True}),
         "ACTIVITY_QUALITY": proxy({"protocol_decoder_ready": False, "normalized_repeat_detector_ready": False, "fleet_signal_detector_ready": False, "independent_counterparty_metric_ready": False, "economic_value_classifier_ready": False, "person_identity_claimed": False}),
         "PROTOCOL_MODEL": proxy({"agreement": "GENERIC_MODEL_READY", "transfer_attempt": "GENERIC_MODEL_READY", "rail_observation": "GENERIC_MODEL_READY", "tclk_2": "UPSTREAM_VERSION_NOT_FINALIZED", "ptlc": "EXPERIMENTAL_UNEXERCISED", "owned_room_auth": "INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE", "remote_mcp_key_custody": False}),
         "RUNTIME_DRIFT": proxy({"release": "RELEASE_REPORTED", "main": "MAIN_REPORTED", "live_doc": "LIVE_DOC_REPORTED", "runtime": "RUNTIME_NOT_OBSERVED", "config_surface": "FUTURE_REVIEWED_RUNTIME_SOURCE", "mutable_values": ("DOCUMENTED_VALUE", "RUNTIME_OBSERVED_VALUE", "STALE_RUNTIME_VALUE", "CONFLICTING_VALUE")}),

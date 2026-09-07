@@ -126,10 +126,10 @@ def _build_public_facade(trusted_root:Path,clock:Callable[[],datetime],store_id:
             if type(value) is not str or hex64(value) is None:raise error_t("HASH_INVALID",field,"lowercase SHA-256 hex required")
     def material(a:CanonicalAction)->bytes:
         validate_action(a);return jsonm.dumps({"actor_did":a.actor_did,"action_class":a.action_class,"context":a.context,"nonce":a.nonce,"signed_payload_sha256":a.signed_payload_sha256,"signing_bytes_sha256":a.signing_bytes_sha256,"target":a.target,"schema_version":a.schema_version,"policy_version":policy},sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
-    def operate(operation:str,a:CanonicalAction)->Any:
+    def operate(operation:str,a:CanonicalAction,parameters:Mapping[str,Any]|None=None)->Any:
         canonical=material(a);rid=sha(b"FLOP-REPLAY-ID\0"+canonical).hexdigest()
         if operation=="replay_id":return rid
-        if operation not in {"observe","inspect"}:raise error_t("OPERATION_INVALID","operation","public replay operation required")
+        if operation not in {"observe","inspect","validate","reserve","mark_attempted"}:raise error_t("OPERATION_INVALID","operation","reviewed replay operation required")
         scope_material=jsonm.dumps({"actor_did":a.actor_did,"context":a.context,"nonce":a.nonce,"schema_version":a.schema_version},sort_keys=True,separators=(",",":")).encode();scope=sha(b"FLOP-NONCE-SCOPE\0"+scope_material).hexdigest()
         value=clock()
         if not isinstance(value,dt) or value.tzinfo is None or value.utcoffset() is None:raise error_t("CLOCK_INVALID","clock","aware datetime required")
@@ -158,12 +158,17 @@ def _build_public_facade(trusted_root:Path,clock:Callable[[],datetime],store_id:
             if len(credential)!=32:raise error_t("STORE_CREDENTIAL_INVALID","storage","exact local credential required")
             osm.close(credential_fd);credential_fd=None;con=sql.connect(str(db),timeout=10,isolation_level=None);opened=osm.stat(filename,dir_fd=cfd,follow_symlinks=False);held=osm.fstat(fd)
             if (opened.st_dev,opened.st_ino)!=(fi.st_dev,fi.st_ino) or (held.st_dev,held.st_ino)!=(fi.st_dev,fi.st_ino):raise error_t("STORAGE_PATH_CHANGED","storage","validated database path changed before SQLite open")
-            con.execute("PRAGMA foreign_keys=ON");con.executescript("""CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),store_id TEXT NOT NULL,store_kind TEXT NOT NULL,schema_version TEXT NOT NULL,policy_version TEXT NOT NULL,authority_digest TEXT NOT NULL);CREATE TABLE IF NOT EXISTS replay_records(replay_id TEXT PRIMARY KEY,nonce_scope TEXT NOT NULL UNIQUE,actor_did TEXT NOT NULL,action_class TEXT NOT NULL,context TEXT NOT NULL,nonce TEXT NOT NULL,payload_hash TEXT NOT NULL,signing_hash TEXT NOT NULL,target TEXT NOT NULL,schema_version TEXT NOT NULL,state TEXT NOT NULL,observation_count INTEGER NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS replay_events(event_id INTEGER PRIMARY KEY AUTOINCREMENT,replay_id TEXT NOT NULL,from_state TEXT,to_state TEXT NOT NULL,occurred_at TEXT NOT NULL,event_hash TEXT NOT NULL UNIQUE,FOREIGN KEY(replay_id) REFERENCES replay_records(replay_id));CREATE TABLE IF NOT EXISTS replay_conflicts(conflict_id TEXT PRIMARY KEY,nonce_scope TEXT NOT NULL,authoritative_replay_id TEXT NOT NULL,conflicting_replay_id TEXT NOT NULL,conflicting_material_hash TEXT NOT NULL,observed_at TEXT NOT NULL,UNIQUE(authoritative_replay_id,conflicting_replay_id),FOREIGN KEY(authoritative_replay_id) REFERENCES replay_records(replay_id));CREATE TABLE IF NOT EXISTS effects(reservation_id TEXT PRIMARY KEY,replay_id TEXT NOT NULL,effect_identity TEXT NOT NULL,authority_ref_hash TEXT NOT NULL,effect_class TEXT NOT NULL,target TEXT NOT NULL,request_hash TEXT NOT NULL,attempt_number TEXT NOT NULL,started_at TEXT,result_state TEXT NOT NULL,confirmation_evidence_type TEXT,confirmation_evidence_hash TEXT,related_evidence_identity TEXT,verifier_revision TEXT,UNIQUE(replay_id,attempt_number),FOREIGN KEY(replay_id) REFERENCES replay_records(replay_id));""")
+            con.execute("PRAGMA foreign_keys=ON");con.execute("PRAGMA synchronous=FULL");con.executescript("""CREATE TABLE IF NOT EXISTS store_metadata(singleton INTEGER PRIMARY KEY CHECK(singleton=1),store_id TEXT NOT NULL,store_kind TEXT NOT NULL,schema_version TEXT NOT NULL,policy_version TEXT NOT NULL,authority_digest TEXT NOT NULL);CREATE TABLE IF NOT EXISTS replay_records(replay_id TEXT PRIMARY KEY,nonce_scope TEXT NOT NULL UNIQUE,actor_did TEXT NOT NULL,action_class TEXT NOT NULL,context TEXT NOT NULL,nonce TEXT NOT NULL,payload_hash TEXT NOT NULL,signing_hash TEXT NOT NULL,target TEXT NOT NULL,schema_version TEXT NOT NULL,state TEXT NOT NULL,observation_count INTEGER NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);CREATE TABLE IF NOT EXISTS replay_events(event_id INTEGER PRIMARY KEY AUTOINCREMENT,replay_id TEXT NOT NULL,from_state TEXT,to_state TEXT NOT NULL,occurred_at TEXT NOT NULL,event_hash TEXT NOT NULL UNIQUE,FOREIGN KEY(replay_id) REFERENCES replay_records(replay_id));CREATE TABLE IF NOT EXISTS replay_conflicts(conflict_id TEXT PRIMARY KEY,nonce_scope TEXT NOT NULL,authoritative_replay_id TEXT NOT NULL,conflicting_replay_id TEXT NOT NULL,conflicting_material_hash TEXT NOT NULL,observed_at TEXT NOT NULL,UNIQUE(authoritative_replay_id,conflicting_replay_id),FOREIGN KEY(authoritative_replay_id) REFERENCES replay_records(replay_id));CREATE TABLE IF NOT EXISTS effects(reservation_id TEXT PRIMARY KEY,replay_id TEXT NOT NULL,effect_identity TEXT NOT NULL,authority_ref_hash TEXT NOT NULL,effect_class TEXT NOT NULL,target TEXT NOT NULL,request_hash TEXT NOT NULL,attempt_number TEXT NOT NULL,started_at TEXT,result_state TEXT NOT NULL,confirmation_evidence_type TEXT,confirmation_evidence_hash TEXT,related_evidence_identity TEXT,verifier_revision TEXT,UNIQUE(replay_id,attempt_number),FOREIGN KEY(replay_id) REFERENCES replay_records(replay_id));""")
             binding=b"|".join(v.encode() for v in (store_id,"PRODUCTION",schema,policy,str(ri.st_dev),str(ri.st_ino),str(ci.st_dev),str(ci.st_ino),str(fi.st_dev),str(fi.st_ino)));authority_digest=mac(credential,b"FLOP-STORE-FAMILY\0"+binding,sha).hexdigest();credential=b""
             con.execute("BEGIN IMMEDIATE");row=con.execute("SELECT store_id,store_kind,schema_version,policy_version,authority_digest FROM store_metadata WHERE singleton=1").fetchone();expected=(store_id,"PRODUCTION",schema,policy,authority_digest)
             if row is None:con.execute("INSERT INTO store_metadata VALUES(1,?,?,?,?,?)",expected)
             elif not all(digest(str(left),str(right)) for left,right in zip(row,expected)):raise error_t("STORE_AUTHORITY_MISMATCH","storage","sealed store provenance does not match")
             con.commit()
+            if operation!="mark_attempted":
+                con.execute("BEGIN IMMEDIATE");attempted_rows=con.execute("SELECT replay_id FROM replay_records WHERE state=?",(state_t.EFFECT_ATTEMPTED.value,)).fetchall()
+                for (attempted_rid,) in attempted_rows:
+                    con.execute("UPDATE replay_records SET state=?,updated_at=? WHERE replay_id=?",(state_t.EFFECT_OUTCOME_UNKNOWN.value,when,attempted_rid));con.execute("UPDATE effects SET result_state=? WHERE replay_id=? AND result_state=?",(state_t.EFFECT_OUTCOME_UNKNOWN.value,attempted_rid,state_t.EFFECT_ATTEMPTED.value))
+                con.commit()
             if operation=="observe":
                 con.execute("BEGIN IMMEDIATE");prior=con.execute("SELECT replay_id,state,observation_count FROM replay_records WHERE nonce_scope=?",(scope,)).fetchone()
                 if prior and prior[0]!=rid:
@@ -172,6 +177,33 @@ def _build_public_facade(trusted_root:Path,clock:Callable[[],datetime],store_id:
                     con.execute("INSERT INTO replay_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(rid,scope,a.actor_did,a.action_class,a.context,a.nonce,a.signed_payload_sha256,a.signing_bytes_sha256,a.target,a.schema_version,state_t.OBSERVED.value,1,when,when));event_hash=sha(f"{rid}|0|None|OBSERVED|{when}".encode()).hexdigest();con.execute("INSERT INTO replay_events(replay_id,from_state,to_state,occurred_at,event_hash) VALUES(?,?,?,?,?)",(rid,None,state_t.OBSERVED.value,when,event_hash));decision,count,current="FIRST_OBSERVATION",1,state_t.OBSERVED
                 else:decision,count,current="DUPLICATE_OBSERVATION",prior[2]+1,state_t(prior[1]);con.execute("UPDATE replay_records SET observation_count=?,updated_at=? WHERE replay_id=?",(count,when,rid))
                 con.commit();return proxy({"status":"DESCRIPTIVE_ONLY","decision":decision,"replay_id":rid,"state":current.value,"observation_count":count,"retry_classification":retries[current].value})
+            if operation=="validate":
+                con.execute("BEGIN IMMEDIATE");current=con.execute("SELECT state FROM replay_records WHERE replay_id=?",(rid,)).fetchone()
+                if current is None:raise error_t("REPLAY_NOT_OBSERVED","replay","observation required before validation")
+                if current[0]==state_t.OBSERVED.value:
+                    con.execute("UPDATE replay_records SET state=?,updated_at=? WHERE replay_id=?",(state_t.VALIDATED.value,when,rid));event_hash=sha(f"{rid}|VALIDATED|{when}".encode()).hexdigest();con.execute("INSERT INTO replay_events(replay_id,from_state,to_state,occurred_at,event_hash) VALUES(?,?,?,?,?)",(rid,state_t.OBSERVED.value,state_t.VALIDATED.value,when,event_hash))
+                elif current[0] not in {state_t.VALIDATED.value,state_t.EFFECT_RESERVED.value,state_t.EFFECT_ATTEMPTED.value,state_t.EFFECT_OUTCOME_UNKNOWN.value,state_t.EFFECT_FAILED_SAFE.value,state_t.EFFECT_CONFIRMED.value}:raise error_t("VALIDATION_STATE_INVALID","state","authoritative state cannot validate")
+                con.commit();return proxy({"status":"DESCRIPTIVE_ONLY","decision":"VALIDATED","replay_id":rid,"state":state_t.VALIDATED.value if current[0]==state_t.OBSERVED.value else current[0]})
+            if operation=="reserve":
+                if type(parameters) is not dict or set(parameters)!={"effect_class","target","request_hash"}:raise error_t("RESERVE_SCHEMA_INVALID","parameters","exact reserve fields required")
+                effect_name,target,request_hash=parameters["effect_class"],parameters["target"],parameters["request_hash"]
+                if type(effect_name) is not str or effect_name not in {item.value for item in effect_t}:raise error_t("EFFECT_CLASS_INVALID","effect_class","reviewed effect class required")
+                effect_class=effect_t(effect_name)
+                if type(target) is not str or safe(target) is None or not target.startswith(target_prefixes[effect_name]) or len(target)==len(target_prefixes[effect_name]):raise error_t("TARGET_INVALID","target","canonical effect target required")
+                if type(request_hash) is not str or hex64(request_hash) is None:raise error_t("HASH_INVALID","request_hash","lowercase SHA-256 hex required")
+                effect_identity=sha(f"FLOP-EFFECT|{rid}|{effect_name}|{target}|{request_hash}|{policy}".encode()).hexdigest();reservation_id=sha(f"FLOP-RESERVATION|{effect_identity}".encode()).hexdigest()
+                con.execute("BEGIN IMMEDIATE");current=con.execute("SELECT state FROM replay_records WHERE replay_id=?",(rid,)).fetchone();existing=con.execute("SELECT reservation_id,effect_identity,effect_class,target,request_hash,attempt_number,result_state FROM effects WHERE replay_id=? ORDER BY length(attempt_number) DESC,attempt_number DESC LIMIT 1",(rid,)).fetchone()
+                if existing and existing[1:5]==(effect_identity,effect_name,target,request_hash):con.commit();return proxy({"status":"DESCRIPTIVE_ONLY","decision":"EXISTING_RESERVATION","replay_id":rid,"reservation_id":existing[0],"effect_identity":existing[1],"attempt_number":existing[5],"state":existing[6]})
+                if current is None or current[0] not in {state_t.VALIDATED.value,state_t.EFFECT_FAILED_SAFE.value}:raise error_t("RESERVATION_STATE_INVALID","state","validated or proved-safe state required")
+                attempt=str(int(existing[5])+1) if existing else "1";reservation_id=sha(f"FLOP-RESERVATION|{effect_identity}|{attempt}".encode()).hexdigest();authority_ref=sha(b"IPC-REVIEWED-RESERVATION\0"+canonical).hexdigest()
+                con.execute("INSERT INTO effects(reservation_id,replay_id,effect_identity,authority_ref_hash,effect_class,target,request_hash,attempt_number,result_state) VALUES(?,?,?,?,?,?,?,?,?)",(reservation_id,rid,effect_identity,authority_ref,effect_name,target,request_hash,attempt,state_t.EFFECT_RESERVED.value));con.execute("UPDATE replay_records SET state=?,updated_at=? WHERE replay_id=?",(state_t.EFFECT_RESERVED.value,when,rid));event_hash=sha(f"{rid}|EFFECT_RESERVED|{reservation_id}|{when}".encode()).hexdigest();con.execute("INSERT INTO replay_events(replay_id,from_state,to_state,occurred_at,event_hash) VALUES(?,?,?,?,?)",(rid,current[0],state_t.EFFECT_RESERVED.value,when,event_hash));con.commit();return proxy({"status":"DESCRIPTIVE_ONLY","decision":"RESERVATION_CREATED","replay_id":rid,"reservation_id":reservation_id,"effect_identity":effect_identity,"attempt_number":attempt,"state":state_t.EFFECT_RESERVED.value})
+            if operation=="mark_attempted":
+                if type(parameters) is not dict or set(parameters)!={"reservation_id"} or type(parameters.get("reservation_id")) is not str or hex64(parameters["reservation_id"]) is None:raise error_t("ATTEMPT_SCHEMA_INVALID","parameters","exact reservation reference required")
+                reservation_id=parameters["reservation_id"];con.execute("BEGIN IMMEDIATE");effect=con.execute("SELECT replay_id,attempt_number,result_state FROM effects WHERE reservation_id=?",(reservation_id,)).fetchone();current=con.execute("SELECT state FROM replay_records WHERE replay_id=?",(rid,)).fetchone()
+                if effect is None or effect[0]!=rid:raise error_t("RESERVATION_INVALID","reservation_id","exact replay reservation required")
+                if effect[2]==state_t.EFFECT_ATTEMPTED.value:con.execute("UPDATE replay_records SET state=?,updated_at=? WHERE replay_id=?",(state_t.EFFECT_OUTCOME_UNKNOWN.value,when,rid));con.execute("UPDATE effects SET result_state=? WHERE reservation_id=?",(state_t.EFFECT_OUTCOME_UNKNOWN.value,reservation_id));con.commit();return proxy({"status":"DESCRIPTIVE_ONLY","decision":"ATTEMPT_OUTCOME_UNKNOWN","replay_id":rid,"reservation_id":reservation_id,"attempt_number":effect[1],"state":state_t.EFFECT_OUTCOME_UNKNOWN.value,"retry_classification":retry_t.RECONCILIATION_REQUIRED.value})
+                if effect[2]!=state_t.EFFECT_RESERVED.value or current is None or current[0]!=state_t.EFFECT_RESERVED.value:raise error_t("ATTEMPT_STATE_INVALID","state","reserved effect required")
+                con.execute("UPDATE effects SET result_state=?,started_at=? WHERE reservation_id=?",(state_t.EFFECT_ATTEMPTED.value,when,reservation_id));con.execute("UPDATE replay_records SET state=?,updated_at=? WHERE replay_id=?",(state_t.EFFECT_ATTEMPTED.value,when,rid));event_hash=sha(f"{rid}|EFFECT_ATTEMPTED|{reservation_id}|{when}".encode()).hexdigest();con.execute("INSERT INTO replay_events(replay_id,from_state,to_state,occurred_at,event_hash) VALUES(?,?,?,?,?)",(rid,state_t.EFFECT_RESERVED.value,state_t.EFFECT_ATTEMPTED.value,when,event_hash));con.commit();return proxy({"status":"DESCRIPTIVE_ONLY","decision":"ATTEMPT_RECORDED","replay_id":rid,"reservation_id":reservation_id,"attempt_number":effect[1],"state":state_t.EFFECT_ATTEMPTED.value,"retry_classification":retry_t.RECONCILIATION_REQUIRED.value})
             row=con.execute("SELECT replay_id,action_class,state,created_at,updated_at,observation_count FROM replay_records WHERE replay_id=?",(rid,)).fetchone()
             if row is None:return proxy({"status":"DESCRIPTIVE_ONLY","decision":"NOT_SEEN","replay_id":rid})
             effect=con.execute("SELECT effect_class,confirmation_evidence_type,confirmation_evidence_hash FROM effects WHERE replay_id=? ORDER BY length(attempt_number) DESC,attempt_number DESC LIMIT 1",(rid,)).fetchone();current=state_t(row[2]);classification=unknown[effect_t(effect[0])] if current is state_t.EFFECT_OUTCOME_UNKNOWN and effect else retries[current]
@@ -190,14 +222,17 @@ def _build_public_facade(trusted_root:Path,clock:Callable[[],datetime],store_id:
     def observe(a:CanonicalAction)->Mapping[str,Any]:return operate("observe",a)
     def inspect_action(a:CanonicalAction)->Mapping[str,Any]:return operate("inspect",a)
     def replay_id(a:CanonicalAction)->str:return operate("replay_id",a)
-    return observe,inspect_action,replay_id
+    def validate(a:CanonicalAction)->Mapping[str,Any]:return operate("validate",a)
+    def reserve(a:CanonicalAction,parameters:dict[str,Any])->Mapping[str,Any]:return operate("reserve",a,parameters)
+    def mark_attempted(a:CanonicalAction,parameters:dict[str,Any])->Mapping[str,Any]:return operate("mark_attempted",a,parameters)
+    return observe,inspect_action,replay_id,validate,reserve,mark_attempted
 
 _PRODUCTION_ROOT=Path(__file__).resolve().parents[1]/"secrets"
 def _production_clock(_dt:type[datetime]=datetime,_utc:timezone=timezone.utc)->datetime:return _dt.now(_utc)
 def _production_facade()->tuple[Callable[...,Any],...]:
     store_id=hashlib.sha256(b"FLOP-PRODUCTION-REPLAY-STORE-v1").hexdigest()
     return _build_public_facade(_PRODUCTION_ROOT,_production_clock,store_id)
-observe_action,inspect_action,canonical_replay_id=_production_facade()
+observe_action,inspect_action,canonical_replay_id,validate_action,reserve_effect,mark_attempted=_production_facade()
 del _build_public_facade
 del _production_facade
 
@@ -428,9 +463,9 @@ __all__=("CanonicalAction","ConfirmationEvidenceType","EffectClass","ReplaySafet
 IPC_PROTOCOL_VERSION="replay-ipc-v1"
 IPC_MAX_REQUEST_BYTES=16_384
 IPC_MAX_RESPONSE_BYTES=32_768
-IPC_FIELDS=frozenset({"version","request_id","auth","command","policy_version","action"})
+IPC_FIELDS=frozenset({"version","request_id","auth","command","policy_version","action","parameters"})
 IPC_ACTION_FIELDS=frozenset({"actor_did","action_class","context","nonce","signed_payload_sha256","signing_bytes_sha256","target","schema_version"})
-IPC_COMMANDS=MappingProxyType({"OBSERVE":observe_action,"INSPECT":inspect_action,"REPLAY_ID":canonical_replay_id})
+IPC_COMMANDS=frozenset({"OBSERVE","VALIDATE","RESERVE","MARK_ATTEMPTED","CONFIRM","RECONCILE","INSPECT","REPLAY_ID"})
 
 def _ipc_recv_exact(channel:socket.socket,size:int)->bytes:
     chunks=[];remaining=size
@@ -477,7 +512,18 @@ def _serve_ipc_once(fd:int)->int:
         if type(command) is not str or command not in IPC_COMMANDS:raise ReplaySafetyError("IPC_COMMAND_UNSUPPORTED","command","reviewed command required")
         raw=value["action"]
         if type(raw) is not dict or frozenset(raw)!=IPC_ACTION_FIELDS:raise ReplaySafetyError("IPC_ACTION_SCHEMA_INVALID","action","exact canonical action fields required")
-        action=CanonicalAction(**raw);result=IPC_COMMANDS[command](action)
+        parameters=value["parameters"]
+        if type(parameters) is not dict:raise ReplaySafetyError("IPC_PARAMETERS_INVALID","parameters","canonical operation parameters required")
+        action=CanonicalAction(**raw)
+        if command in {"OBSERVE","VALIDATE","INSPECT","REPLAY_ID"} and parameters:raise ReplaySafetyError("IPC_PARAMETERS_INVALID","parameters","operation accepts no parameters")
+        if command=="OBSERVE":result=observe_action(action)
+        elif command=="VALIDATE":result=validate_action(action)
+        elif command=="RESERVE":result=reserve_effect(action,parameters)
+        elif command=="MARK_ATTEMPTED":result=mark_attempted(action,parameters)
+        elif command=="INSPECT":result=inspect_action(action)
+        elif command=="REPLAY_ID":result=canonical_replay_id(action)
+        elif command=="CONFIRM":raise ReplaySafetyError("CONFIRMATION_VERIFIER_UNAVAILABLE","evidence","independent reviewed verifier required")
+        else:raise ReplaySafetyError("RECONCILIATION_VERIFIER_UNAVAILABLE","evidence","independent reviewed verifier required")
         if isinstance(result,Mapping):result=dict(result)
         response={"version":IPC_PROTOCOL_VERSION,"request_id":request_id,"ok":True,"result":result,"error":None}
     except BaseException as exc:

@@ -55,7 +55,7 @@
     "overall": {"enum": ["BLOCKED", "IMPLEMENTATION_READY", "OBSERVATION_REQUIRED", "HUMAN_REVIEW_REQUIRED", "ACTION_READY", "AUTHORIZED", "INVALID_CONFIGURATION"]},
     "capabilityState": {"enum": ["NOT_IMPLEMENTED", "IMPLEMENTED_OFFLINE", "DOCUMENTED_ONLY", "RUNTIME_NOT_OBSERVED", "NOT_REQUIRED", "RUNTIME_OBSERVED", "RUNTIME_UNAVAILABLE", "STALE_RUNTIME_OBSERVATION", "CONFLICTING_CAPABILITY_EVIDENCE", "LIVE_DOC_RUNTIME_DRIFT", "REVIEW_REQUIRED", "READY_FOR_HUMAN_APPROVAL", "AUTHORIZED", "BLOCKED"]},
     "provenance": {"type": ["string", "null"], "enum": ["DOCUMENTATION", "SIGNED_OFFICIAL_SOURCE", "REVIEWED_REPOSITORY_SOURCE", "DIRECT_RUNTIME_OBSERVATION", "REVIEWED_LOCAL_FIXTURE", "THIRD_PARTY_REPORT", "UNTRUSTED_CONTEXT", null]},
-    "blocker": {"enum": ["AUTHENTICATION_MODEL_REVIEW_REQUIRED", "BACKUP_DRILL_REQUIRED", "CHAIN_ID_UNDOCUMENTED", "CLAIM_REQUIREMENTS_UNVERIFIED", "COMPLETENESS_RUNTIME_UNVERIFIED", "CONFLICTING_CAPABILITY_EVIDENCE", "COST_SPEND_SEMANTICS_REVIEW_REQUIRED", "DELEGATION_RUNTIME_UNOBSERVED", "ECONOMIC_VALUE_UNVERIFIED", "HUMAN_APPROVAL_REQUIRED", "IMPLEMENTATION_REQUIRED", "INVALID_CONFIGURATION", "MISSING_CRITICAL_DOMAIN", "MISSING_RUNTIME_OBSERVATION", "NETWORK_IDENTITY_MISMATCH", "NETWORK_IDENTITY_UNDOCUMENTED", "OFFICIAL_ENDPOINT_UNVERIFIED", "OWNED_ROOM_INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE", "PTLC_EXPERIMENTAL_UNEXERCISED", "RAIL_FINALITY_UNOBSERVED", "RECOVERY_DRILL_REQUIRED", "RELEASE_MAIN_DOC_RUNTIME_UNRECONCILED", "REPLAY_LEDGER_REQUIRED", "REQUEST_SCHEMA_REVIEW_REQUIRED", "RPC_IDENTITY_UNDOCUMENTED", "RUNTIME_READBACK_NOT_OBSERVED", "RUNTIME_UNAVAILABLE", "RUNTIME_WRITE_NOT_AUTHORIZED", "SIDE_EFFECT_JOURNAL_REQUIRED", "STALE_RUNTIME_OBSERVATION", "TRUSTED_ACQUISITION_RUNTIME_UNVERIFIED", "UPSTREAM_VERSION_NOT_FINALIZED"]},
+    "blocker": {"enum": ["AUTHENTICATION_MODEL_REVIEW_REQUIRED", "BACKUP_DRILL_REQUIRED", "CHAIN_ID_UNDOCUMENTED", "CLAIM_REQUIREMENTS_UNVERIFIED", "COMPLETENESS_RUNTIME_UNVERIFIED", "CONFIRMATION_VERIFIER_UNAVAILABLE", "CONFLICTING_CAPABILITY_EVIDENCE", "COST_SPEND_SEMANTICS_REVIEW_REQUIRED", "DELEGATION_RUNTIME_UNOBSERVED", "ECONOMIC_VALUE_UNVERIFIED", "HUMAN_APPROVAL_REQUIRED", "IMPLEMENTATION_REQUIRED", "INVALID_CONFIGURATION", "MISSING_CRITICAL_DOMAIN", "MISSING_RUNTIME_OBSERVATION", "NETWORK_IDENTITY_MISMATCH", "NETWORK_IDENTITY_UNDOCUMENTED", "OFFICIAL_ENDPOINT_UNVERIFIED", "OWNED_ROOM_INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE", "PTLC_EXPERIMENTAL_UNEXERCISED", "RAIL_FINALITY_UNOBSERVED", "RECONCILIATION_VERIFIER_UNAVAILABLE", "RECOVERY_DRILL_REQUIRED", "RELEASE_MAIN_DOC_RUNTIME_UNRECONCILED", "REPLAY_LEDGER_REQUIRED", "REQUEST_SCHEMA_REVIEW_REQUIRED", "RPC_IDENTITY_UNDOCUMENTED", "RUNTIME_READBACK_NOT_OBSERVED", "RUNTIME_UNAVAILABLE", "RUNTIME_WRITE_NOT_AUTHORIZED", "SIDE_EFFECT_JOURNAL_REQUIRED", "STALE_RUNTIME_OBSERVATION", "TRUSTED_ACQUISITION_RUNTIME_UNVERIFIED", "UPSTREAM_VERSION_NOT_FINALIZED"]},
     "dependencyMatrix": {
       "type": "object", "additionalProperties": false,
       "required": ["IDENTITY", "TECHNOCORE", "EXPORT_EVIDENCE", "FAUCET", "TESTNET_NETWORK", "INFERENCE", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY", "DELEGATION_VERIFICATION", "TOOL_OUTPUT_BUDGET", "REPLAY_SAFETY", "ACTIVITY_QUALITY", "PROTOCOL_MODEL", "RUNTIME_DRIFT"],
@@ -94,7 +94,7 @@
     "capability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["capability_id", "domain", "implementation_status", "documented_status", "runtime_status", "provenance", "source_id", "resource_id", "observed_at", "source_hash", "observation_hash", "policy_version", "verifier_revision", "blocking_reasons", "required_for_action", "ready_to_act", "authorized_to_act", "documented_chain_id", "observed_chain_id", "documented_rpc_identity", "observed_rpc_identity", "documented_network_identity", "observed_network_identity", "testnet_live", "rail_type", "protocol_valid", "rail_crypto_verified", "economic_value_verified", "finality_verified", "replay_ledger_implemented", "side_effect_journal_implemented"],
+      "required": ["capability_id", "domain", "implementation_status", "documented_status", "runtime_status", "provenance", "source_id", "resource_id", "observed_at", "source_hash", "observation_hash", "policy_version", "verifier_revision", "blocking_reasons", "required_for_action", "ready_to_act", "authorized_to_act", "documented_chain_id", "observed_chain_id", "documented_rpc_identity", "observed_rpc_identity", "documented_network_identity", "observed_network_identity", "testnet_live", "rail_type", "protocol_valid", "rail_crypto_verified", "economic_value_verified", "finality_verified", "replay_ledger_implemented", "side_effect_journal_implemented", "replay_ledger_core_implemented", "replay_ledger_production_ipc_implemented", "side_effect_journal_core_implemented", "side_effect_journal_production_ipc_implemented", "confirmation_verifier_available", "reconciliation_verifier_available"],
       "properties": {
         "capability_id": {"type": "string", "pattern": "^[a-z0-9_.-]{1,128}$"},
         "domain": {"enum": ["IDENTITY", "TECHNOCORE", "EXPORT_EVIDENCE", "FAUCET", "TESTNET_NETWORK", "INFERENCE", "SETTLEMENT_RAIL", "EVIDENCE_DURABILITY", "DELEGATION_VERIFICATION", "TOOL_OUTPUT_BUDGET", "REPLAY_SAFETY", "ACTIVITY_QUALITY", "PROTOCOL_MODEL", "RUNTIME_DRIFT"]},
@@ -126,7 +126,13 @@
         "economic_value_verified": {"type": ["boolean", "null"]},
         "finality_verified": {"type": ["boolean", "null"]},
         "replay_ledger_implemented": {"type": ["boolean", "null"]},
-        "side_effect_journal_implemented": {"type": ["boolean", "null"]}
+        "side_effect_journal_implemented": {"type": ["boolean", "null"]},
+        "replay_ledger_core_implemented": {"type": ["boolean", "null"]},
+        "replay_ledger_production_ipc_implemented": {"type": ["boolean", "null"]},
+        "side_effect_journal_core_implemented": {"type": ["boolean", "null"]},
+        "side_effect_journal_production_ipc_implemented": {"type": ["boolean", "null"]},
+        "confirmation_verifier_available": {"type": ["boolean", "null"]},
+        "reconciliation_verifier_available": {"type": ["boolean", "null"]}
       },
       "allOf": [
         {"if": {"properties": {"runtime_status": {"const": "RUNTIME_OBSERVED"}}, "required": ["runtime_status"]}, "then": {"properties": {"provenance": {"enum": ["DIRECT_RUNTIME_OBSERVATION", "REVIEWED_LOCAL_FIXTURE"]}, "observed_at": {"type": "string"}, "source_hash": {"type": "string"}, "observation_hash": {"type": "string"}, "resource_id": {"type": "string"}}}},

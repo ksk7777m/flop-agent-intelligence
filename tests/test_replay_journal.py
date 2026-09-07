@@ -148,17 +148,23 @@ class ReplayJournalTests(unittest.TestCase):
                 for item in (value.__kwdefaults__ or {}).values():walk(item)
                 for name in value.__code__.co_names:
                     if name in value.__globals__:walk(value.__globals__[name])
-        for fn in (client.observe_action,client.inspect_action,client.canonical_replay_id):walk(fn)
+        for fn in (client.observe_action,client.validate_action,client.reserve_effect,client.mark_attempted,client.confirm_effect,client.reconcile_effect,client.inspect_action,client.canonical_replay_id):walk(fn)
         self.assertEqual(sqlite_values,[]);self.assertEqual(paths,[]);self.assertEqual(factories,[])
         self.assertNotIn("sqlite3",Path(client.__file__).read_text())
 
     def test_process_boundary_restarts_and_replays_safely(self):
         script="""from flop_agent import replay_journal as j
-a=j.CanonicalAction('did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c','SIGNED_ACTION','lobby','1','a'*64,'b'*64,'resource:fixture','replay-action-v1')
-import os,sys
+import json,os,sys
+a=j.CanonicalAction('did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c','SIGNED_ACTION','lobby',os.environ.get('REPLAY_NONCE','1'),'a'*64,'b'*64,'resource:fixture','replay-action-v1')
 os.environ['PYTHONPATH']=sys.argv[2]
 if sys.argv[1] in ('SET_STATE','EXEC_SQL'):
  try:j.observe_action.__closure__[0].cell_contents(sys.argv[1],a)
+ except j.ReplaySafetyError as exc:print(exc.code)
+elif sys.argv[1]=='validate':print(json.dumps(dict(j.validate_action(a)),sort_keys=True))
+elif sys.argv[1]=='reserve':print(json.dumps(dict(j.reserve_effect(a,j.EffectClass.PAYMENT,'rail:1','c'*64)),sort_keys=True))
+elif sys.argv[1]=='attempted':print(json.dumps(dict(j.mark_attempted(a,sys.argv[3])),sort_keys=True))
+elif sys.argv[1] in ('confirm','reconcile'):
+ try:(j.confirm_effect if sys.argv[1]=='confirm' else j.reconcile_effect)(a,{'confirmed':True,'failed_safe':True,'hash':'c'*64})
  except j.ReplaySafetyError as exc:print(exc.code)
 else:print(j.observe_action(a)['decision'] if sys.argv[1]=='observe' else j.inspect_action(a)['state'])"""
         with tempfile.TemporaryDirectory() as d:
@@ -171,6 +177,38 @@ else:print(j.observe_action(a)['decision'] if sys.argv[1]=='observe' else j.insp
             outputs=[run.stdout.strip() for run in runs]
             self.assertEqual(outputs,["FIRST_OBSERVATION","OBSERVED","DUPLICATE_OBSERVATION","IPC_COMMAND_UNSUPPORTED","IPC_COMMAND_UNSUPPORTED"])
             self.assertFalse(marker.exists());self.assertIsNone(importlib.util.find_spec("flop_agent.replay_store_helper"))
+            def run(mode,*extra):return subprocess.run([sys.executable,"-c",script,mode,str(attack),*extra],check=True,capture_output=True,text=True,env=env).stdout.strip()
+            self.assertEqual(json.loads(run("validate"))["state"],"VALIDATED")
+            reservation=json.loads(run("reserve"));self.assertEqual(reservation["decision"],"RESERVATION_CREATED")
+            self.assertEqual(json.loads(run("reserve"))["reservation_id"],reservation["reservation_id"])
+            self.assertEqual(json.loads(run("attempted",reservation["reservation_id"]))["state"],"EFFECT_ATTEMPTED")
+            self.assertEqual(run("inspect"),"EFFECT_OUTCOME_UNKNOWN")
+            self.assertEqual(run("confirm"),"CONFIRMATION_VERIFIER_UNAVAILABLE")
+            self.assertEqual(run("reconcile"),"RECONCILIATION_VERIFIER_UNAVAILABLE")
+            concurrent_env=dict(env);concurrent_env["REPLAY_NONCE"]="2"
+            subprocess.run([sys.executable,"-c",script,"observe",str(attack)],check=True,capture_output=True,text=True,env=concurrent_env)
+            subprocess.run([sys.executable,"-c",script,"validate",str(attack)],check=True,capture_output=True,text=True,env=concurrent_env)
+            contenders=[subprocess.Popen([sys.executable,"-c",script,"reserve",str(attack)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=concurrent_env) for _ in range(8)]
+            results=[]
+            for contender in contenders:
+                stdout,stderr=contender.communicate();self.assertEqual(contender.returncode,0,stderr);results.append(json.loads(stdout))
+            self.assertEqual(sum(result["decision"]=="RESERVATION_CREATED" for result in results),1)
+            self.assertEqual(len({result["reservation_id"] for result in results}),1)
+            loss_env=dict(env);loss_env["REPLAY_NONCE"]="3"
+            subprocess.run([sys.executable,"-c",script,"observe",str(attack)],check=True,capture_output=True,text=True,env=loss_env)
+            subprocess.run([sys.executable,"-c",script,"validate",str(attack)],check=True,capture_output=True,text=True,env=loss_env)
+            loss_action={"actor_did":DID,"action_class":"SIGNED_ACTION","context":"lobby","nonce":"3","signed_payload_sha256":A,"signing_bytes_sha256":B,"target":"resource:fixture","schema_version":"replay-action-v1"};helper_copy=base/"libexec"/"flop_replay_store_helper"
+            def lose_response(command,parameters):
+                parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_STREAM)
+                process=subprocess.Popen([sys.executable,"-I","-S",str(helper_copy),"--serve-fd",str(child.fileno())],pass_fds=(child.fileno(),),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,close_fds=True,cwd=str(base),env={"PATH":"/usr/bin:/bin","PYTHONNOUSERSITE":"1","LC_ALL":"C"})
+                child.close();auth=b""
+                while len(auth)<64:auth+=parent.recv(64-len(auth))
+                request={"version":"replay-ipc-v1","request_id":"d"*32,"auth":auth.decode(),"command":command,"policy_version":j.POLICY_VERSION,"action":loss_action,"parameters":parameters};encoded=json.dumps(request,separators=(",",":")).encode()
+                parent.sendall(struct.pack("!I",len(encoded))+encoded);parent.shutdown(socket.SHUT_WR);parent.close();process.wait(timeout=10)
+            reserve_parameters={"effect_class":"PAYMENT","target":"rail:1","request_hash":"c"*64};lose_response("RESERVE",reserve_parameters)
+            recovered_reservation=json.loads(subprocess.run([sys.executable,"-c",script,"reserve",str(attack)],check=True,capture_output=True,text=True,env=loss_env).stdout);self.assertEqual(recovered_reservation["decision"],"EXISTING_RESERVATION")
+            lose_response("MARK_ATTEMPTED",{"reservation_id":recovered_reservation["reservation_id"]})
+            self.assertEqual(subprocess.run([sys.executable,"-c",script,"inspect",str(attack)],check=True,capture_output=True,text=True,env=loss_env).stdout.strip(),"EFFECT_OUTCOME_UNKNOWN")
             self.assertEqual(os.stat(base/"secrets"/"replay-safety"/"store.credential").st_mode&0o777,0o600)
 
     def test_ipc_auth_schema_commands_and_canonical_input_fail_closed(self):
@@ -178,7 +216,7 @@ else:print(j.observe_action(a)['decision'] if sys.argv[1]=='observe' else j.insp
         with tempfile.TemporaryDirectory() as d:
             fake=Path(d).resolve()/"libexec"/"flop_replay_store_helper";fake.parent.mkdir();fake.parents[1].joinpath("secrets").mkdir(mode=0o700)
             module=types.ModuleType("replay_ipc_fixture");module.__file__=str(fake);module.__package__="flop_agent";sys.modules[module.__name__]=module;exec(compile(source,str(fake),"exec"),module.__dict__)
-            base={"version":"replay-ipc-v1","request_id":"b"*32,"auth":"0"*64,"command":"OBSERVE","policy_version":j.POLICY_VERSION,"action":dict(action().__dict__)}
+            base={"version":"replay-ipc-v1","request_id":"b"*32,"auth":"0"*64,"command":"OBSERVE","policy_version":j.POLICY_VERSION,"action":dict(action().__dict__),"parameters":{}}
             def exchange(value,declared=None,use_server_auth=True,trailing=b""):
                 parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_STREAM);worker=threading.Thread(target=module._serve_ipc_once,args=(child.detach(),));worker.start();server_auth=parent.recv(64).decode()
                 if callable(value):encoded=value(server_auth)

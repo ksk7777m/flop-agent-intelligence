@@ -36,7 +36,7 @@ def ready_definitions():
         rc.CapabilityDefinition("durability.readback", domain.EVIDENCE_DURABILITY, offline, documented, source.TECHNOCORE_ROOMS_JSON, True, True, ()),
         rc.CapabilityDefinition("delegation.verification", domain.DELEGATION_VERIFICATION, offline, documented, source.TECHNOCORE_SECURITY, False, False, ()),
         rc.CapabilityDefinition("tool.output_budget", domain.TOOL_OUTPUT_BUDGET, offline, state.REVIEW_REQUIRED, None, False, False, ()),
-        rc.CapabilityDefinition("replay.safety", domain.REPLAY_SAFETY, offline, documented, None, False, False, (), replay_ledger_implemented=True, side_effect_journal_implemented=True),
+        rc.CapabilityDefinition("replay.safety", domain.REPLAY_SAFETY, offline, documented, None, False, False, (), replay_ledger_implemented=True, side_effect_journal_implemented=True, replay_ledger_core_implemented=True, replay_ledger_production_ipc_implemented=True, side_effect_journal_core_implemented=True, side_effect_journal_production_ipc_implemented=True, confirmation_verifier_available=True, reconciliation_verifier_available=True),
         rc.CapabilityDefinition("activity.quality", domain.ACTIVITY_QUALITY, offline, state.REVIEW_REQUIRED, None, False, False, ()),
         rc.CapabilityDefinition("protocol.generic_models", domain.PROTOCOL_MODEL, offline, documented, source.TECHNOCORE_SECURITY, False, False, ()),
         rc.CapabilityDefinition("runtime.drift", domain.RUNTIME_DRIFT, offline, state.RUNTIME_NOT_OBSERVED, source.TECHNOCORE_CONFIG, False, False, ()),
@@ -267,7 +267,9 @@ class RuntimeCapabilityTests(unittest.TestCase):
         self.assertFalse(status["TOOL_OUTPUT_BUDGET"]["auto_fetch"])
         self.assertFalse(status["TOOL_OUTPUT_BUDGET"]["auto_action"])
         self.assertTrue(status["REPLAY_SAFETY"]["replay_ledger_implemented"])
-        self.assertTrue(status["REPLAY_SAFETY"]["side_effect_journal_implemented"])
+        self.assertFalse(status["REPLAY_SAFETY"]["side_effect_journal_implemented"])
+        self.assertTrue(status["REPLAY_SAFETY"]["side_effect_journal_production_ipc_implemented"])
+        self.assertFalse(status["REPLAY_SAFETY"]["confirmation_verifier_available"])
         self.assertEqual(status["RUNTIME_DRIFT"]["runtime"], "RUNTIME_NOT_OBSERVED")
         self.assertEqual(status["PROTOCOL_MODEL"]["ptlc"], "EXPERIMENTAL_UNEXERCISED")
         self.assertEqual(status["PROTOCOL_MODEL"]["owned_room_auth"], "INSUFFICIENT_AS_SOLE_AUTH_EVIDENCE")
@@ -536,9 +538,15 @@ class RuntimeCapabilityTests(unittest.TestCase):
             replay = value["domains"]["REPLAY_SAFETY"][0]
             self.assertTrue(replay["required_for_action"])
             self.assertTrue(replay["replay_ledger_implemented"])
-            self.assertTrue(replay["side_effect_journal_implemented"])
-            self.assertNotIn("REPLAY_LEDGER_REQUIRED", replay["blocking_reasons"])
-            self.assertNotIn("SIDE_EFFECT_JOURNAL_REQUIRED", replay["blocking_reasons"])
+            self.assertFalse(replay["side_effect_journal_implemented"])
+            self.assertTrue(replay["replay_ledger_core_implemented"])
+            self.assertTrue(replay["replay_ledger_production_ipc_implemented"])
+            self.assertTrue(replay["side_effect_journal_core_implemented"])
+            self.assertTrue(replay["side_effect_journal_production_ipc_implemented"])
+            self.assertFalse(replay["confirmation_verifier_available"])
+            self.assertFalse(replay["reconciliation_verifier_available"])
+            self.assertIn("CONFIRMATION_VERIFIER_UNAVAILABLE", replay["blocking_reasons"])
+            self.assertIn("RECONCILIATION_VERIFIER_UNAVAILABLE", replay["blocking_reasons"])
             self.assertFalse(value["ready_to_act"])
 
     def test_contract_rejects_ready_without_replay_or_required_dependency(self):

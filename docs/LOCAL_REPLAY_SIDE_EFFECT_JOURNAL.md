@@ -24,6 +24,10 @@ that concurrent workers cannot both reserve one effect. An attempt left in
 `EFFECT_ATTEMPTED` is recovered as `EFFECT_OUTCOME_UNKNOWN`; it is never treated
 as failure and never automatically retried. Confirmation and reconciliation
 store hashes of reviewed evidence, not raw payloads or secrets.
+Production connections explicitly use SQLite `synchronous=FULL`; success is
+constructed and sent only after the authoritative transaction commits. The
+durability claim is limited to SQLite's documented FULL synchronous behavior
+and the local filesystem beneath it, not protection from storage-device failure.
 
 Production SQLite authority lives in a dedicated local helper process. The
 application facade communicates with a freshly spawned standalone `libexec`
@@ -64,16 +68,33 @@ inside one test service is performed only by workers issued from that family.
 
 This protects against ordinary API misuse and database/path reconstruction. It
 does not claim protection after arbitrary access to private local files,
-debugger or process-memory access, or deliberate in-process Python tampering.
+debugger or process-memory access, deliberate in-process Python tampering,
+arbitrary malicious Python in the helper, or an arbitrary malicious process
+already executing as the same macOS UID. A `0600` credential, same-UID peer
+check, helper-generated channel challenge, hidden path, and Python closure do
+not distinguish mutually hostile processes owned by one user. They provide
+other-UID exclusion, channel/session binding, replay separation, and resistance
+to ordinary caller misuse within this explicitly narrower local-agent boundary.
 Copying both the database and credential is outside that boundary; inode/root
 binding still fails closed for an ordinary copy, but a full local compromise is
 not treated as a cryptographic security boundary.
 The production application facade retains only observation, lookup, and
-canonical replay-ID operations; it carries no authority issuer, privileged
-effect mutator, SQLite module, database path, or writable store factory. SQLite
+canonical replay-ID plus typed validation, reservation, and attempted-state
+operations; it carries no SQLite module, database path, writable store factory,
+arbitrary state setter, or SQL primitive. SQLite
 open, credential authentication, SQL execution, and connection close occur only
 in the helper process. The boundary does not claim protection against malicious
 code already executing inside that privileged helper process.
+
+`VALIDATE`, `RESERVE`, and `MARK_ATTEMPTED` are real IPC transactions. A
+reservation ID is helper-derived from the canonical replay, effect class,
+target, request hash, policy, and service-derived attempt number. Identical
+reserve requests return the same reservation. A repeated or response-lost
+attempt cannot mint another attempt; restart recovery classifies the durable
+attempt as `EFFECT_OUTCOME_UNKNOWN`. `CONFIRM` and `RECONCILE` are explicit
+protocol commands but fail with verifier-unavailable errors because no reviewed
+independent production verifier exists. Client assertions never confirm an
+effect or establish failed-safe state.
 
 Nonce conflicts are recorded separately from the authoritative action state.
 A conflict detected after confirmation therefore leaves the confirmed result
