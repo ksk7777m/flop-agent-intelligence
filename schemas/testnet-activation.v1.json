@@ -1,0 +1,18 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://ksk7777m.github.io/flop-agent-intelligence/schemas/testnet-activation.v1.json",
+  "type":"object","additionalProperties":false,
+  "required":["schema","status","content_label","evidence_id","state","session_id_reference","provider_id","provider_identity_verified","model_name","model_hash","measured_root","runtime_model_identity_observed","raw_request_hash","raw_response_hash","normalized_result_hash","escrow_amount","settled_amount","compute_units","receipt_hash","receipt_signature_verified","settlement_identity","settlement_verified","evidence_complete","airdrop_scoring","airdrop_eligibility_verified","activity_class","captured_at","evidence_transport_reference","policy_version"],
+  "properties":{
+    "schema":{"const":"flop-testnet-activation-v1"},"status":{"const":"DESCRIPTIVE_ONLY"},"content_label":{"const":"UNTRUSTED_CONTENT"},
+    "evidence_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},"state":{"const":"EVIDENCE_INCOMPLETE"},
+    "session_id_reference":{"type":["string","null"],"pattern":"^[A-Za-z0-9._:-]{1,256}$"},"provider_id":{"type":["string","null"],"pattern":"^[A-Za-z0-9._:-]{1,256}$"},"provider_identity_verified":{"const":false},
+    "model_name":{"type":["string","null"],"pattern":"^[A-Za-z0-9._:-]{1,256}$"},"model_hash":{"$ref":"#/$defs/hash"},"measured_root":{"$ref":"#/$defs/hash"},"runtime_model_identity_observed":{"const":false},
+    "raw_request_hash":{"$ref":"#/$defs/hash"},"raw_response_hash":{"$ref":"#/$defs/hash"},"normalized_result_hash":{"$ref":"#/$defs/hash"},
+    "escrow_amount":{"$ref":"#/$defs/amount"},"settled_amount":{"$ref":"#/$defs/amount"},"compute_units":{"$ref":"#/$defs/amount"},"receipt_hash":{"$ref":"#/$defs/hash"},
+    "receipt_signature_verified":{"const":false},"settlement_identity":{"type":["string","null"],"pattern":"^[A-Za-z0-9._:-]{1,256}$"},"settlement_verified":{"const":false},"evidence_complete":{"const":false},
+    "airdrop_scoring":{"const":"AIRDROP_SCORING_UNRESOLVED"},"airdrop_eligibility_verified":{"const":false},"activity_class":{"enum":["USEFUL_INFERENCE","UNKNOWN_UTILITY","SELF_REFERENTIAL"]},
+    "captured_at":{"type":"string","pattern":"^[A-Za-z0-9._:-]{1,256}$"},"evidence_transport_reference":{"type":["object","null"]},"policy_version":{"const":"testnet-activation-safety-policy-v1"}
+  },
+  "$defs":{"hash":{"type":["string","null"],"pattern":"^[0-9a-f]{64}$"},"amount":{"type":["string","null"],"pattern":"^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"}}
+}

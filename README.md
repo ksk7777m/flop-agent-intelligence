@@ -90,6 +90,12 @@ PYTHONPATH=src python3 -m flop_agent.cli testnet-readiness status
 See [Testnet Adapter](docs/TESTNET_ADAPTER.md) for fixtures, source gates,
 wallet-key separation and the future activation checklist.
 
+The offline [Testnet Activation and Inference Evidence model](docs/TESTNET_ACTIVATION_INFERENCE_EVIDENCE.md)
+adds sealed, disabled Faucet, wallet, inference-session, usage-receipt, and
+evidence-ledger interfaces. All official endpoints and runtime parameters remain
+unresolved; no runtime observation, readiness, authorization, signer, or live
+effect is introduced.
+
 ## Wire Evidence, Signer, and Verifier Hardening V1
 
 The offline hardening layer preserves nonce values as exact decimal strings,
