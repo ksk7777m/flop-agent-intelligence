@@ -25,7 +25,20 @@ that concurrent workers cannot both reserve one effect. An attempt left in
 as failure and never automatically retried. Confirmation and reconciliation
 store hashes of reviewed evidence, not raw payloads or secrets.
 
-Production captures its private root under `secrets`, creates directories and
+Production SQLite authority lives in a dedicated local helper process. The
+application facade communicates with a freshly spawned helper over an inherited
+Unix-domain socket pair using bounded, length-prefixed canonical JSON. It never
+imports SQLite, retains no database path, and has no connection, transaction,
+SQL, or state-setting primitive. The inherited connected descriptor, a fresh
+one-request authentication value, and same-account peer validation make the
+channel local and non-discoverable; there is no filesystem socket, TCP listener,
+HTTP endpoint, or remotely reachable service. Authentication authorizes only
+the fixed `OBSERVE`, `INSPECT`, and `REPLAY_ID` protocol operations. Unknown
+commands, fields, versions, types, paths, SQL, desired states, malformed frames,
+and oversized messages fail closed. The helper independently reconstructs and
+revalidates every canonical action before deriving identity or touching storage.
+
+The helper captures its private root under `secrets`, creates directories and
 files as `0700` and `0600`, opens path components relative to trusted directory
 descriptors with no-follow semantics, and exposes no path or dependency
 injection. Every trusted-root component is walked from `/` using directory file
@@ -50,13 +63,12 @@ debugger or process-memory access, or deliberate in-process Python tampering.
 Copying both the database and credential is outside that boundary; inode/root
 binding still fails closed for an ordinary copy, but a full local compromise is
 not treated as a cryptographic security boundary.
-The production facade retains only observation, lookup, and canonical replay-ID
-operations; it carries no authority issuer or privileged effect mutator. Its
-reachable closure graph contains a high-level dispatcher limited to those three
-validated operations. SQLite open, credential authentication, SQL execution,
-and connection close occur within the dispatcher invocation; no reachable
-helper returns a connection, file descriptor, transaction, session, callback
-sink, or general store factory.
+The production application facade retains only observation, lookup, and
+canonical replay-ID operations; it carries no authority issuer, privileged
+effect mutator, SQLite module, database path, or writable store factory. SQLite
+open, credential authentication, SQL execution, and connection close occur only
+in the helper process. The boundary does not claim protection against malicious
+code already executing inside that privileged helper process.
 
 Nonce conflicts are recorded separately from the authoritative action state.
 A conflict detected after confirmation therefore leaves the confirmed result

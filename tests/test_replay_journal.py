@@ -1,10 +1,11 @@
-import inspect,json,os,pickle,shutil,sqlite3,subprocess,sys,tempfile,threading,types,unittest
+import inspect,json,os,pickle,shutil,socket,sqlite3,struct,subprocess,sys,tempfile,threading,types,unittest
 from decimal import Decimal
 from datetime import datetime,timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
-from flop_agent import replay_journal as j
+from flop_agent import replay_journal as client
+from flop_agent import replay_store_helper as j
 
 NOW=datetime(2026,9,7,tzinfo=timezone.utc); A="a"*64;B="b"*64;C="c"*64;DID="did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c"
 def action(nonce="900719925474099312345678901234567890",payload=A,target="resource:fixture"):
@@ -125,55 +126,77 @@ class ReplayJournalTests(unittest.TestCase):
             self.assertEqual(w.observe(action())["state"],"OBSERVED")
             con=sqlite3.connect(path);self.assertEqual(con.execute("SELECT COUNT(*) FROM replay_records").fetchone()[0],1);con.close()
 
-    def test_public_production_facade_reopens_across_fresh_module_instances(self):
-        source=Path(j.__file__).read_text()
-        with tempfile.TemporaryDirectory() as d:
-            fake=Path(d).resolve()/"pkg"/"src"/"flop_agent"/"replay_journal.py";root=fake.parents[2]/"secrets";root.mkdir(parents=True,mode=0o700)
-            def load(name):
-                module=types.ModuleType(name);module.__file__=str(fake);module.__package__="flop_agent";sys.modules[name]=module;exec(compile(source,str(fake),"exec"),module.__dict__);return module
-            one=load("replay_restart_one");a=one.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1");one.observe_action(a)
-            two=load("replay_restart_two");b=two.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
-            self.assertEqual(two.inspect_action(b)["state"],"OBSERVED");self.assertEqual(two.observe_action(b)["decision"],"DUPLICATE_OBSERVATION")
-            credential=root/"replay-safety"/"store.credential";self.assertEqual(os.stat(credential).st_mode&0o777,0o600)
-            db_only=Path(d).resolve()/"db-only"/"src"/"flop_agent"/"replay_journal.py";db_only_root=db_only.parents[2]/"secrets"/"replay-safety";db_only_root.mkdir(parents=True,mode=0o700);shutil.copy2(root/"replay-safety"/"ledger.sqlite3",db_only_root/"ledger.sqlite3")
-            fake=db_only;three=load("replay_restart_db_only");c=three.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
-            with self.assertRaises(three.ReplaySafetyError):three.inspect_action(c)
-            full=Path(d).resolve()/"full-copy"/"src"/"flop_agent"/"replay_journal.py";full_root=full.parents[2]/"secrets";full_root.mkdir(parents=True,mode=0o700);shutil.copytree(root/"replay-safety",full_root/"replay-safety")
-            fake=full;four=load("replay_restart_full_copy");e=four.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
-            with self.assertRaises(four.ReplaySafetyError):four.inspect_action(e)
-            for name in ("replay_restart_one","replay_restart_two","replay_restart_db_only","replay_restart_full_copy"):sys.modules.pop(name,None)
-
-    def test_public_production_facade_reopens_in_a_new_process(self):
-        script="""from pathlib import Path
-import sys,types
-source=Path(sys.argv[1]).read_text();fake=Path(sys.argv[2]);name='replay_process_'+sys.argv[3];module=types.ModuleType(name);module.__file__=str(fake);module.__package__='flop_agent';sys.modules[name]=module;exec(compile(source,str(fake),'exec'),module.__dict__)
-a=module.CanonicalAction('did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c','SIGNED_ACTION','lobby','1','a'*64,'b'*64,'resource:fixture','replay-action-v1')
-print(module.observe_action(a)['decision'] if sys.argv[3]=='one' else module.inspect_action(a)['state'])"""
-        with tempfile.TemporaryDirectory() as d:
-            fake=Path(d).resolve()/"pkg"/"src"/"flop_agent"/"replay_journal.py";root=fake.parents[2]/"secrets";root.mkdir(parents=True,mode=0o700);env={"PYTHONDONTWRITEBYTECODE":"1"}
-            first=subprocess.run([sys.executable,"-c",script,j.__file__,str(fake),"one"],check=True,capture_output=True,text=True,env=env)
-            second=subprocess.run([sys.executable,"-c",script,j.__file__,str(fake),"two"],check=True,capture_output=True,text=True,env=env)
-            self.assertEqual(first.stdout.strip(),"FIRST_OBSERVATION");self.assertEqual(second.stdout.strip(),"OBSERVED")
-
-    def test_public_facade_closure_exposes_no_credential_connection_or_store_factory(self):
-        seen=set();secret_like=[];connections=[];factories=[];dispatchers=[]
+    def test_public_client_has_no_sqlite_path_or_writable_factory(self):
+        seen=set();sqlite_values=[];paths=[];factories=[]
         def walk(value):
             if id(value) in seen:return
             seen.add(id(value))
-            if isinstance(value,bytes) and len(value)==32:secret_like.append(value);return
-            if isinstance(value,sqlite3.Connection):connections.append(value);return
+            if isinstance(value,(str,Path)) and ("ledger.sqlite3" in str(value) or "replay-safety" in str(value)):paths.append(value)
+            if isinstance(value,types.ModuleType):
+                if value.__name__=="sqlite3":sqlite_values.append(value)
+                if hasattr(value,"connect") and value.__name__=="sqlite3":factories.append(value.connect)
+                return
             if inspect.isfunction(value):
-                if value.__name__ in {"connect","open_store","get_connection","session","transaction"}:factories.append(value)
-                if value.__name__=="operate":dispatchers.append(value)
                 for cell in value.__closure__ or ():
                     try:walk(cell.cell_contents)
                     except ValueError:pass
                 for item in value.__defaults__ or ():walk(item)
                 for item in (value.__kwdefaults__ or {}).values():walk(item)
-        for fn in (j.observe_action,j.inspect_action,j.canonical_replay_id):walk(fn)
-        self.assertEqual(secret_like,[]);self.assertEqual(connections,[]);self.assertEqual(factories,[]);self.assertEqual(len(dispatchers),1)
-        with self.assertRaises(j.ReplaySafetyError):dispatchers[0]("connect",action())
-        self.assertNotIn("family_secret",Path(j.__file__).read_text())
+                for name in value.__code__.co_names:
+                    if name in value.__globals__:walk(value.__globals__[name])
+        for fn in (client.observe_action,client.inspect_action,client.canonical_replay_id):walk(fn)
+        self.assertEqual(sqlite_values,[]);self.assertEqual(paths,[]);self.assertEqual(factories,[])
+        self.assertNotIn("sqlite3",Path(client.__file__).read_text())
+
+    def test_process_boundary_restarts_and_replays_safely(self):
+        script="""from flop_agent import replay_journal as j
+a=j.CanonicalAction('did:key:z6MkeTGwHmLmuCmgg4ABYhzWVh6ZX7hTwWt8gguAretUfc9c','SIGNED_ACTION','lobby','1','a'*64,'b'*64,'resource:fixture','replay-action-v1')
+import sys
+if sys.argv[1] in ('SET_STATE','EXEC_SQL'):
+ try:j.observe_action.__closure__[0].cell_contents(sys.argv[1],a)
+ except j.ReplaySafetyError as exc:print(exc.code)
+else:print(j.observe_action(a)['decision'] if sys.argv[1]=='observe' else j.inspect_action(a)['state'])"""
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d).resolve();pkg=base/"src"/"flop_agent";pkg.mkdir(parents=True);(base/"secrets").mkdir(mode=0o700)
+            shutil.copy2(client.__file__,pkg/"replay_journal.py");shutil.copy2(j.__file__,pkg/"replay_store_helper.py");(pkg/"__init__.py").touch()
+            env={"PYTHONDONTWRITEBYTECODE":"1","PYTHONPATH":str(base/"src")}
+            runs=[subprocess.run([sys.executable,"-c",script,mode],capture_output=True,text=True,env=env) for mode in ("observe","inspect","observe","SET_STATE","EXEC_SQL")]
+            for run in runs:self.assertEqual(run.returncode,0,run.stderr)
+            outputs=[run.stdout.strip() for run in runs]
+            self.assertEqual(outputs,["FIRST_OBSERVATION","OBSERVED","DUPLICATE_OBSERVATION","IPC_COMMAND_UNSUPPORTED","IPC_COMMAND_UNSUPPORTED"])
+            self.assertEqual(os.stat(base/"secrets"/"replay-safety"/"store.credential").st_mode&0o777,0o600)
+
+    def test_ipc_auth_schema_commands_and_canonical_input_fail_closed(self):
+        source=Path(j.__file__).read_text()
+        with tempfile.TemporaryDirectory() as d:
+            fake=Path(d).resolve()/"pkg"/"src"/"flop_agent"/"replay_store_helper.py";fake.parents[2].joinpath("secrets").mkdir(parents=True,mode=0o700)
+            module=types.ModuleType("replay_ipc_fixture");module.__file__=str(fake);module.__package__="flop_agent";sys.modules[module.__name__]=module;exec(compile(source,str(fake),"exec"),module.__dict__)
+            auth="a"*64;base={"version":"replay-ipc-v1","request_id":"b"*32,"auth":auth,"command":"OBSERVE","policy_version":j.POLICY_VERSION,"action":dict(action().__dict__)}
+            def exchange(value,declared=None):
+                parent,child=socket.socketpair(socket.AF_UNIX,socket.SOCK_STREAM);worker=threading.Thread(target=module._serve_ipc_once,args=(child.detach(),auth));worker.start()
+                encoded=value if isinstance(value,bytes) else json.dumps(value,separators=(",",":")).encode();parent.sendall(struct.pack("!I",len(encoded) if declared is None else declared)+encoded)
+                if declared is not None and declared>len(encoded):parent.shutdown(socket.SHUT_WR)
+                header=b""
+                while len(header)<4:header+=parent.recv(4-len(header))
+                size=struct.unpack("!I",header)[0];payload=b""
+                while len(payload)<size:payload+=parent.recv(size-len(payload))
+                response=json.loads(payload);parent.close();worker.join();return response
+            cases=[]
+            wrong=dict(base);wrong["auth"]="c"*64;cases.append(wrong)
+            for command in ("EXEC_SQL","SET_STATE","OPEN_DB"):
+                value=dict(base);value["command"]=command;cases.append(value)
+            extra=dict(base);extra["sql"]="UPDATE replay_records";cases.append(extra)
+            bad_nonce=json.loads(json.dumps(base));bad_nonce["action"]["nonce"]=1.0;cases.append(bad_nonce)
+            bad_did=json.loads(json.dumps(base));bad_did["action"]["actor_did"]="did:key:z0";cases.append(bad_did)
+            bad_hash=json.loads(json.dumps(base));bad_hash["action"]["signed_payload_sha256"]="bad";cases.append(bad_hash)
+            bad_schema=json.loads(json.dumps(base));bad_schema["action"]["schema_version"]="attacker";cases.append(bad_schema)
+            bad_policy=dict(base);bad_policy["policy_version"]="attacker";cases.append(bad_policy)
+            for value in cases:self.assertFalse(exchange(value)["ok"],value)
+            oversized=exchange(b"x",module.IPC_MAX_REQUEST_BYTES+1);self.assertFalse(oversized["ok"])
+            truncated=exchange(b"{}",10);self.assertFalse(truncated["ok"])
+            first=exchange(base);self.assertTrue(first["ok"]);self.assertEqual(first["result"]["decision"],"FIRST_OBSERVATION")
+            self.assertEqual(exchange(base)["result"]["decision"],"DUPLICATE_OBSERVATION")
+            sys.modules.pop(module.__name__,None)
 
     def test_terminal_nonce_conflict_is_recorded_without_changing_authoritative_result(self):
         with tempfile.TemporaryDirectory() as d:
