@@ -211,6 +211,87 @@ else:print(j.observe_action(a)['decision'] if sys.argv[1]=='observe' else j.insp
             self.assertEqual(subprocess.run([sys.executable,"-c",script,"inspect",str(attack)],check=True,capture_output=True,text=True,env=loss_env).stdout.strip(),"EFFECT_OUTCOME_UNKNOWN")
             self.assertEqual(os.stat(base/"secrets"/"replay-safety"/"store.credential").st_mode&0o777,0o600)
 
+    def test_client_rejects_trailing_and_multiple_response_frames(self):
+        helper_template='''import json,socket,struct,sys
+channel=socket.socket(fileno=int(sys.argv[2]));channel.sendall(b"a"*64)
+def exact(size):
+ out=b""
+ while len(out)<size:out+=channel.recv(size-len(out))
+ return out
+size=struct.unpack("!I",exact(4))[0];request=json.loads(exact(size));channel.recv(1)
+response={"version":"replay-ipc-v1","request_id":request["request_id"],"ok":True,"result":{"decision":"FIRST_OBSERVATION"},"error":None}
+encoded=json.dumps(response,separators=(",",":")).encode();frame=struct.pack("!I",len(encoded))+encoded
+channel.sendall(frame+EXTRA);channel.close()
+'''
+        for extra in ("b'x'","frame"):
+            with self.subTest(extra=extra),tempfile.TemporaryDirectory() as d:
+                base=Path(d).resolve();pkg=base/"src"/"flop_agent";pkg.mkdir(parents=True);helper=base/"libexec"/"flop_replay_store_helper";helper.parent.mkdir()
+                helper.write_text(helper_template.replace("EXTRA",extra))
+                digest=__import__("hashlib").sha256(helper.read_bytes()).hexdigest()
+                source=Path(client.__file__).read_text().replace("f11c9acec9c5fd19b9cb6b790dfb6eff4806adcfea6ab4038d4a7f4478cd5ad2",digest)
+                module=types.ModuleType("response_framing_fixture");module.__file__=str(pkg/"replay_journal.py");module.__package__="flop_agent";sys.modules[module.__name__]=module
+                exec(compile(source,module.__file__,"exec"),module.__dict__)
+                fixture_action=module.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
+                with self.assertRaises(module.ReplaySafetyError) as caught:module.observe_action(fixture_action)
+                self.assertEqual(caught.exception.code,"IPC_TRAILING_DATA")
+                sys.modules.pop(module.__name__,None)
+
+    def test_production_subprocess_transactions_roll_back_under_test_artifact_faults(self):
+        helper_source=HELPER_PATH.read_text();client_source=Path(client.__file__).read_text();original_digest="f11c9acec9c5fd19b9cb6b790dfb6eff4806adcfea6ab4038d4a7f4478cd5ad2"
+        script="""from flop_agent import replay_journal as j
+import json,os,sys
+a=j.CanonicalAction(%r,'SIGNED_ACTION','lobby','1',os.environ.get('PAYLOAD','a'*64),'b'*64,'resource:fixture','replay-action-v1')
+try:
+ if sys.argv[1]=='observe':result=j.observe_action(a)
+ elif sys.argv[1]=='validate':result=j.validate_action(a)
+ elif sys.argv[1]=='reserve':result=j.reserve_effect(a,j.EffectClass.PAYMENT,'rail:1','c'*64)
+ elif sys.argv[1]=='attempted':result=j.mark_attempted(a,sys.argv[2])
+ elif sys.argv[1]=='confirm':result=j.confirm_effect(a,{'confirmed':True})
+ elif sys.argv[1]=='reconcile':result=j.reconcile_effect(a,{'failed_safe':True})
+ else:result=j.inspect_action(a)
+ print(json.dumps(dict(result),sort_keys=True))
+except j.ReplaySafetyError as exc:print('ERROR:'+exc.code);raise SystemExit(7)
+""" % DID
+        faults={
+            "validate":(
+                'con.execute("UPDATE replay_records SET state=?,updated_at=? WHERE replay_id=?",(state_t.VALIDATED.value,when,rid));event_hash=',
+                'con.execute("UPDATE replay_records SET state=?,updated_at=? WHERE replay_id=?",(state_t.VALIDATED.value,when,rid));raise RuntimeError("test fault");event_hash='),
+            "reserve":(
+                'con.execute("INSERT INTO effects(reservation_id,replay_id,effect_identity,authority_ref_hash,effect_class,target,request_hash,attempt_number,result_state) VALUES(?,?,?,?,?,?,?,?,?)",(reservation_id,rid,effect_identity,authority_ref,effect_name,target,request_hash,attempt,state_t.EFFECT_RESERVED.value));con.execute("UPDATE replay_records',
+                'con.execute("INSERT INTO effects(reservation_id,replay_id,effect_identity,authority_ref_hash,effect_class,target,request_hash,attempt_number,result_state) VALUES(?,?,?,?,?,?,?,?,?)",(reservation_id,rid,effect_identity,authority_ref,effect_name,target,request_hash,attempt,state_t.EFFECT_RESERVED.value));raise RuntimeError("test fault");con.execute("UPDATE replay_records'),
+            "attempted":(
+                'con.execute("UPDATE effects SET result_state=?,started_at=? WHERE reservation_id=?",(state_t.EFFECT_ATTEMPTED.value,when,reservation_id));con.execute("UPDATE replay_records',
+                'con.execute("UPDATE effects SET result_state=?,started_at=? WHERE reservation_id=?",(state_t.EFFECT_ATTEMPTED.value,when,reservation_id));raise RuntimeError("test fault");con.execute("UPDATE replay_records'),
+            "conflict":(
+                'con.execute("INSERT OR IGNORE INTO replay_conflicts VALUES(?,?,?,?,?,?)",(conflict_id,scope,prior[0],rid,sha(canonical).hexdigest(),when));con.commit();return proxy(',
+                'con.execute("INSERT OR IGNORE INTO replay_conflicts VALUES(?,?,?,?,?,?)",(conflict_id,scope,prior[0],rid,sha(canonical).hexdigest(),when));raise RuntimeError("test fault");con.commit();return proxy('),
+        }
+        for fault in faults:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as d:
+                base=Path(d).resolve();pkg=base/"src"/"flop_agent";pkg.mkdir(parents=True);(pkg/"__init__.py").touch();(base/"secrets").mkdir(mode=0o700);helper=base/"libexec"/"flop_replay_store_helper";helper.parent.mkdir()
+                def install(source):
+                    helper.write_text(source);digest=__import__("hashlib").sha256(helper.read_bytes()).hexdigest();(pkg/"replay_journal.py").write_text(client_source.replace(original_digest,digest))
+                env={"PYTHONDONTWRITEBYTECODE":"1","PYTHONPATH":str(base/"src")}
+                def run(operation,*args,check=True,extra_env=None):
+                    active=dict(env);active.update(extra_env or {});return subprocess.run([sys.executable,"-c",script,operation,*args],capture_output=True,text=True,env=active,check=check)
+                install(helper_source);run("observe")
+                reservation=None
+                if fault in {"reserve","attempted"}:run("validate")
+                if fault=="attempted":reservation=json.loads(run("reserve").stdout)["reservation_id"]
+                marker,replacement=faults[fault];self.assertEqual(helper_source.count(marker),1);install(helper_source.replace(marker,replacement))
+                failed=run("observe" if fault=="conflict" else fault,*(reservation,) if reservation else (),check=False,extra_env={"PAYLOAD":C} if fault=="conflict" else None)
+                self.assertEqual(failed.returncode,7);self.assertIn("ERROR:IPC_OPERATION_FAILED",failed.stdout)
+                install(helper_source);path=base/"secrets"/"replay-safety"/"ledger.sqlite3";con=sqlite3.connect(path)
+                state=con.execute("SELECT state FROM replay_records").fetchone()[0]
+                self.assertEqual(state,{"validate":"OBSERVED","reserve":"VALIDATED","attempted":"EFFECT_RESERVED","conflict":"OBSERVED"}[fault])
+                self.assertEqual(con.execute("PRAGMA integrity_check").fetchone()[0],"ok")
+                self.assertEqual(con.execute("SELECT COUNT(*) FROM effects").fetchone()[0],1 if fault=="attempted" else 0)
+                self.assertEqual(con.execute("SELECT COUNT(*) FROM replay_conflicts").fetchone()[0],0)
+                self.assertEqual(con.execute("SELECT COUNT(*) FROM replay_events WHERE to_state IN ('VALIDATED','EFFECT_RESERVED','EFFECT_ATTEMPTED')").fetchone()[0],{"validate":0,"reserve":1,"attempted":2,"conflict":0}[fault]);con.close()
+                before=path.read_bytes()
+                if fault=="attempted":
+                    self.assertEqual(run("confirm",check=False).returncode,7);self.assertEqual(run("reconcile",check=False).returncode,7);self.assertEqual(path.read_bytes(),before)
+
     def test_ipc_auth_schema_commands_and_canonical_input_fail_closed(self):
         source=HELPER_PATH.read_text()
         with tempfile.TemporaryDirectory() as d:

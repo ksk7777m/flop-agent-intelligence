@@ -37,6 +37,12 @@ def _build_facade():
     action_type,effect_type,error_type,proxy=CanonicalAction,EffectClass,ReplaySafetyError,MappingProxyType
     version,policy,max_request,max_response=PROTOCOL_VERSION,POLICY_VERSION,MAX_REQUEST_BYTES,MAX_RESPONSE_BYTES
     to_dict,token_hex=asdict,secrets.token_hex
+    def reject_duplicate_pairs(pairs:list[tuple[str,Any]])->dict[str,Any]:
+        result={}
+        for key,value in pairs:
+            if key in result:raise error_type("IPC_DUPLICATE_FIELD","response","duplicate JSON fields forbidden")
+            result[key]=value
+        return result
     def recv_exact(channel:socket.socket,size:int)->bytes:
         chunks=[];remaining=size
         while remaining:
@@ -56,7 +62,9 @@ def _build_facade():
             parent.sendall(pack("!I",len(encoded))+encoded);parent.shutdown(shutdown_write)
             size=unpack("!I",recv_exact(parent,4))[0]
             if size>max_response:raise error_type("IPC_RESPONSE_TOO_LARGE","response","bounded response required")
-            response=jsonm.loads(recv_exact(parent,size).decode("utf-8"))
+            payload=recv_exact(parent,size)
+            if parent.recv(1)!=b"":raise error_type("IPC_TRAILING_DATA","response","exactly one framed response required")
+            response=jsonm.loads(payload.decode("utf-8"),object_pairs_hook=reject_duplicate_pairs)
             if type(response) is not dict or set(response)!={"version","request_id","ok","result","error"} or response.get("version")!=version or response.get("request_id")!=request_id:raise error_type("IPC_RESPONSE_INVALID","response","canonical response required")
             if response["ok"] is not True:
                 error=response.get("error")
