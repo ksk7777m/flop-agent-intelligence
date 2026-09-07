@@ -1,0 +1,19 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://ksk7777m.github.io/flop-agent-intelligence/schemas/evidence-transport.v1.json",
+  "type":"object","additionalProperties":false,
+  "required":["schema","status","content_label","transport","room","page_limit","returned_records","truncated","completeness","generation","first_seq","last_seq","requested_since","requested_limit","snapshot_hash","acquisition_source","acquired_at","source_revision","policy_version","gap_status","retention_status","transport_acquired","content_parsed","content_verified","transport_complete","transcript_complete","history_complete","retention_status_known"],
+  "properties":{
+    "schema":{"const":"flop-evidence-transport-v1"},"status":{"const":"DESCRIPTIVE_ONLY"},"content_label":{"const":"UNTRUSTED_CONTENT"},
+    "transport":{"enum":["MCP_PAGE","ROOM_EXPORT","ROOM_DIRECT_READ","DISCOVERY_SNAPSHOT","LOCAL_ARCHIVE","FUTURE_EVENT_FEED"]},
+    "room":{"type":"string","pattern":"^[a-z0-9][a-z0-9_-]{0,47}$"},"page_limit":{"type":["integer","null"],"minimum":0},"returned_records":{"type":"integer","minimum":0},"truncated":{"type":["boolean","null"]},
+    "completeness":{"enum":["COMPLETE_VERIFIED","PARTIAL","UNKNOWN","CONFLICTING"]},"generation":{"type":["string","null"],"pattern":"^[A-Za-z0-9._:-]{1,128}$"},"first_seq":{"type":["integer","null"],"minimum":0},"last_seq":{"type":["integer","null"],"minimum":0},"requested_since":{"type":["integer","null"],"minimum":0},"requested_limit":{"type":["integer","null"],"minimum":0},
+    "snapshot_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"acquisition_source":{"enum":["DIRECT_REVIEWED_SOURCE","THIRD_PARTY_MIRROR","LOCAL_ARCHIVE"]},"acquired_at":{"type":"integer","minimum":0},"source_revision":{"type":"string","pattern":"^[0-9a-f]{40}$"},"policy_version":{"const":"evidence-transport-retention-policy-v1"},
+    "gap_status":{"enum":["NO_GAP_OBSERVED","GAP_UNRESOLVED","HISTORY_GAP","RETENTION_LOSS_CONFIRMED"]},"retention_status":{"enum":["RETENTION_FLOOR_UNKNOWN","RETENTION_FLOOR_OBSERVED","RETENTION_CHANGED","RETENTION_CONFLICTING"]},
+    "transport_acquired":{"type":"boolean"},"content_parsed":{"type":"boolean"},"content_verified":{"type":"boolean"},"transport_complete":{"type":"boolean"},"transcript_complete":{"type":"boolean"},"history_complete":{"type":"boolean"},"retention_status_known":{"type":"boolean"}
+  },
+  "allOf":[
+    {"if":{"properties":{"transport":{"const":"MCP_PAGE"}},"required":["transport"]},"then":{"properties":{"completeness":{"not":{"const":"COMPLETE_VERIFIED"}},"transcript_complete":{"const":false},"history_complete":{"const":false}}}},
+    {"if":{"properties":{"completeness":{"const":"COMPLETE_VERIFIED"}},"required":["completeness"]},"then":{"properties":{"transport":{"const":"ROOM_EXPORT"},"transport_complete":{"const":true},"transcript_complete":{"const":true},"history_complete":{"const":true},"retention_status_known":{"const":true}}}}
+  ]
+}

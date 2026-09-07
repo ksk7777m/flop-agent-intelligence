@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "Evidence Transport V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/evidence-transport.v1.json",
+      "path": "schemas/evidence-transport.v1.json",
+      "purpose": "Validates descriptive evidence transport, completeness, gap, and retention metadata.",
+      "related_endpoint": null
+    },
+    {
       "name": "Technocore Observatory Snapshot",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/observatory.schema.json",
       "path": "schemas/observatory.schema.json",
