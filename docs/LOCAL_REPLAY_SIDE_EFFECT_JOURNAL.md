@@ -40,8 +40,14 @@ imports SQLite, retains no database path, and has no connection, transaction,
 SQL, or state-setting primitive. The inherited connected descriptor, a fresh
 helper-generated one-request channel challenge, and same-account peer validation make the
 channel local and non-discoverable; there is no filesystem socket, TCP listener,
-HTTP endpoint, or remotely reachable service. Authentication authorizes only
-the fixed `OBSERVE`, `INSPECT`, and `REPLAY_ID` protocol operations. Unknown
+HTTP endpoint, or remotely reachable service. Authentication permits a client
+to request only the fixed `OBSERVE`, `VALIDATE`, `RESERVE`, `MARK_ATTEMPTED`,
+`CONFIRM`, `RECONCILE`, `INSPECT`, and `REPLAY_ID` protocol operations.
+`OBSERVE`, `VALIDATE`, `RESERVE`, `MARK_ATTEMPTED`, `INSPECT`, and `REPLAY_ID`
+are implemented; `CONFIRM` and `RECONCILE` are recognized but fail closed while
+their independent verifiers remain unavailable. Authentication does not grant
+arbitrary state mutation, SQL, retry classification, caller-asserted
+confirmation or failed-safe status, or external action authority. Unknown
 commands, fields, versions, types, paths, SQL, desired states, malformed frames,
 duplicate JSON fields, trailing bytes, concatenated frames, and oversized
 messages fail closed before mutation. The helper independently reconstructs and
