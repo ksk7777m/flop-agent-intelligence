@@ -155,6 +155,49 @@ class NetworkIdentityEvidence:
 
 
 @dataclass(frozen=True)
+class EvidenceTransportReference:
+    acquisition_id: str
+    snapshot_hash: str
+    transport: str
+    completeness: str
+    generation: str | None
+    first_seq: int | None
+    last_seq: int | None
+    gap_status: str
+    acquisition_source: str
+
+    def __post_init__(self) -> None:
+        if (_HASH.fullmatch(self.acquisition_id) is None
+                or _HASH.fullmatch(self.snapshot_hash) is None):
+            raise ActivationError("EVIDENCE_REFERENCE_INVALID", "hash")
+        if self.transport not in {"MCP_PAGE", "ROOM_EXPORT", "ROOM_DIRECT_READ",
+                "DISCOVERY_SNAPSHOT", "LOCAL_ARCHIVE", "FUTURE_EVENT_FEED"}:
+            raise ActivationError("EVIDENCE_REFERENCE_INVALID", "transport")
+        if self.completeness not in {"COMPLETE_VERIFIED", "PARTIAL", "UNKNOWN",
+                                    "CONFLICTING"}:
+            raise ActivationError("EVIDENCE_REFERENCE_INVALID", "completeness")
+        if self.generation is not None and _ID.fullmatch(self.generation) is None:
+            raise ActivationError("EVIDENCE_REFERENCE_INVALID", "generation")
+        for name, value in (("first_seq", self.first_seq), ("last_seq", self.last_seq)):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int)
+                                      or value < 0):
+                raise ActivationError("EVIDENCE_REFERENCE_INVALID", name)
+        if self.gap_status not in {"NO_GAP_OBSERVED", "GAP_UNRESOLVED", "HISTORY_GAP",
+                                   "RETENTION_LOSS_CONFIRMED"}:
+            raise ActivationError("EVIDENCE_REFERENCE_INVALID", "gap_status")
+        if self.acquisition_source not in {"DIRECT_REVIEWED_SOURCE", "THIRD_PARTY_MIRROR",
+                                           "LOCAL_ARCHIVE"}:
+            raise ActivationError("EVIDENCE_REFERENCE_INVALID", "acquisition_source")
+
+    def public_projection(self) -> Mapping[str, Any]:
+        return MappingProxyType({"acquisition_id": self.acquisition_id,
+            "snapshot_hash": self.snapshot_hash, "transport": self.transport,
+            "completeness": self.completeness, "generation": self.generation,
+            "first_seq": self.first_seq, "last_seq": self.last_seq,
+            "gap_status": self.gap_status, "acquisition_source": self.acquisition_source})
+
+
+@dataclass(frozen=True)
 class InferenceEvidence:
     evidence_id: str
     state: LedgerState
@@ -178,7 +221,12 @@ class InferenceEvidence:
     evidence_complete: bool
     activity_class: ActivityClass
     captured_at: str
-    evidence_transport_reference: Mapping[str, Any] | None
+    evidence_transport_reference: EvidenceTransportReference | None
+
+    def __post_init__(self) -> None:
+        if (self.evidence_transport_reference is not None
+                and type(self.evidence_transport_reference) is not EvidenceTransportReference):
+            raise ActivationError("EVIDENCE_REFERENCE_INVALID", "evidence_transport_reference")
 
     def public_projection(self) -> Mapping[str, Any]:
         return MappingProxyType({"schema": "flop-testnet-activation-v1",
@@ -203,7 +251,7 @@ class InferenceEvidence:
             "airdrop_eligibility_verified": False,
             "activity_class": self.activity_class.value,
             "captured_at": self.captured_at,
-            "evidence_transport_reference": (dict(self.evidence_transport_reference)
+            "evidence_transport_reference": (dict(self.evidence_transport_reference.public_projection())
                 if self.evidence_transport_reference is not None else None),
             "policy_version": "testnet-activation-safety-policy-v1"})
 
@@ -282,6 +330,13 @@ def validate_activation_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
     if value.get("ready_to_act") is True: errors.append("RUNTIME_READINESS_UNAVAILABLE")
     if value.get("paper_rail_value_settlement_verified") is True:
         errors.append("PAPER_RAIL_IS_NOT_VALUE_SETTLEMENT")
+    reference = value.get("evidence_transport_reference")
+    allowed_reference = {"acquisition_id", "snapshot_hash", "transport", "completeness",
+                         "generation", "first_seq", "last_seq", "gap_status",
+                         "acquisition_source"}
+    if reference is not None and (not isinstance(reference, Mapping)
+                                  or set(reference) != allowed_reference):
+        errors.append("EVIDENCE_REFERENCE_CLOSED_FIELDS_REQUIRED")
     return tuple(sorted(set(errors)))
 
 
@@ -289,7 +344,8 @@ def _bootstrap() -> tuple[Any, Any]:
     hash_type, id_type, decimal_type, secret_type = _HASH, _ID, _DECIMAL, _SECRET
     sha256, proxy = hashlib.sha256, MappingProxyType
     error_type, bytes_type, mapping_type = ActivationError, bytes, Mapping
-    evidence_type, state_type, activity_type = InferenceEvidence, LedgerState, ActivityClass
+    evidence_type, reference_type = InferenceEvidence, EvidenceTransportReference
+    state_type, activity_type = LedgerState, ActivityClass
     policy_version, schema_version, max_bytes = POLICY_VERSION, SCHEMA_VERSION, MAX_EVIDENCE_BYTES
     disabled_state = CapabilityState.IMPLEMENTED_DISABLED.value
     no_effect = EffectOutcome.NOT_ATTEMPTED.value
@@ -346,9 +402,11 @@ def _bootstrap() -> tuple[Any, Any]:
         if transport is not None:
             if not isinstance(transport, mapping_type) or transport.get("status") != "DESCRIPTIVE_ONLY":
                 raise error_type("EVIDENCE_REFERENCE_INVALID", "evidence_transport_reference")
-            transport = proxy({key: transport.get(key) for key in (
-                "status", "transport", "completeness", "snapshot_hash", "acquisition_id",
-                "generation", "first_seq", "last_seq", "gap_status")})
+            transport = reference_type(transport.get("acquisition_id"),
+                transport.get("snapshot_hash"), transport.get("transport"),
+                transport.get("completeness"), transport.get("generation"),
+                transport.get("first_seq"), transport.get("last_seq"),
+                transport.get("gap_status"), transport.get("acquisition_source"))
         raw_request = fields.get("raw_request"); raw_response = fields.get("raw_response")
         receipt_raw = fields.get("receipt_raw")
         request_hash = exact_bytes(raw_request) if raw_request is not None else None
@@ -377,6 +435,14 @@ def _bootstrap() -> tuple[Any, Any]:
         return evidence
 
     def safe_project(evidence: InferenceEvidence) -> Mapping[str, Any]:
+        reference = evidence.evidence_transport_reference
+        projected_reference = (None if reference is None else {
+            "acquisition_id": reference.acquisition_id,
+            "snapshot_hash": reference.snapshot_hash, "transport": reference.transport,
+            "completeness": reference.completeness, "generation": reference.generation,
+            "first_seq": reference.first_seq, "last_seq": reference.last_seq,
+            "gap_status": reference.gap_status,
+            "acquisition_source": reference.acquisition_source})
         return proxy({"schema": schema_version, "status": "DESCRIPTIVE_ONLY",
             "content_label": "UNTRUSTED_CONTENT", "evidence_id": evidence.evidence_id,
             "state": "EVIDENCE_INCOMPLETE", "session_id_reference": evidence.session_id_reference,
@@ -395,8 +461,7 @@ def _bootstrap() -> tuple[Any, Any]:
             "airdrop_eligibility_verified": False,
             "activity_class": evidence.activity_class.value,
             "captured_at": evidence.captured_at,
-            "evidence_transport_reference": (dict(evidence.evidence_transport_reference)
-                if evidence.evidence_transport_reference is not None else None),
+            "evidence_transport_reference": projected_reference,
             "policy_version": policy_version})
 
     def project(evidence: InferenceEvidence) -> Mapping[str, Any]:
@@ -500,7 +565,7 @@ def assess_network_identity(
 
 __all__ = ("ActivationError", "ActivationState", "ActivityClass", "AgentWalletAdapter",
     "CapabilityState", "EffectOutcome", "FaucetAdapter", "InferenceEvidence",
-    "InferenceSessionAdapter", "LedgerState", "ParameterAssessment", "ParameterEvidence",
+    "EvidenceTransportReference", "InferenceSessionAdapter", "LedgerState", "ParameterAssessment", "ParameterEvidence",
     "NetworkIdentityEvidence", "RatificationStatus", "SourceClass", "TestnetEvidenceLedger",
     "TestnetInferenceEvidenceLedger", "UsageReceiptAdapter", "activation_status",
     "assess_network_identity", "assess_parameter_evidence", "offline_interfaces", "unknown_faucet_outcome",

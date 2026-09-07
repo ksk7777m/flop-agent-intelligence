@@ -161,7 +161,8 @@ class TestnetActivationTests(unittest.TestCase):
         reference = {"status": "DESCRIPTIVE_ONLY", "transport": "ROOM_EXPORT",
             "completeness": "COMPLETE_VERIFIED", "snapshot_hash": "a" * 64,
             "acquisition_id": "b" * 64, "generation": "g1", "first_seq": 1,
-            "last_seq": 2, "gap_status": "NO_GAP_OBSERVED", "raw": "secret"}
+            "last_seq": 2, "gap_status": "NO_GAP_OBSERVED",
+            "acquisition_source": "DIRECT_REVIEWED_SOURCE", "raw": "secret"}
         evidence = self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z",
                                                  evidence_transport_reference=reference)
         projected = self.ledger.public_projection(evidence)["evidence_transport_reference"]
@@ -170,6 +171,43 @@ class TestnetActivationTests(unittest.TestCase):
         with self.assertRaises(ta.ActivationError):
             self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z",
                 evidence_transport_reference={"status": "AUTHORITATIVE"})
+
+    def test_direct_construction_never_accepts_arbitrary_nested_reference(self):
+        base = self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z")
+        attacks = (
+            {"raw_prompt": "PRIVATE_PROMPT"}, {"raw_response": "PRIVATE_RESPONSE"},
+            {"private_key": "SECRET"}, {"seed": "SECRET"}, {"mnemonic": "SECRET"},
+            {"token": "SECRET"}, {"authorization": "Bearer SECRET"},
+            {"metadata": {"extension": [{"password": "SECRET"}]}},
+            {"unknown": ["SECRET"]})
+        for attack in attacks:
+            reference = {"acquisition_id": "a" * 64, **attack}
+            with self.subTest(attack=next(iter(attack))), self.assertRaises(ta.ActivationError) as caught:
+                dataclasses.replace(base, evidence_transport_reference=reference)
+            rendered = str(caught.exception) + repr(caught.exception) + repr(caught.exception.metadata)
+            self.assertNotIn("SECRET", rendered)
+            self.assertNotIn("PRIVATE_PROMPT", rendered)
+            self.assertNotIn("PRIVATE_RESPONSE", rendered)
+
+    def test_closed_reference_schema_rejects_nested_extras_and_roundtrips_safely(self):
+        reference = {"status": "DESCRIPTIVE_ONLY", "transport": "ROOM_EXPORT",
+            "completeness": "COMPLETE_VERIFIED", "snapshot_hash": "a" * 64,
+            "acquisition_id": "b" * 64, "generation": "g1", "first_seq": 1,
+            "last_seq": 2, "gap_status": "NO_GAP_OBSERVED",
+            "acquisition_source": "DIRECT_REVIEWED_SOURCE"}
+        evidence = self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z",
+                                                 evidence_transport_reference=reference)
+        projection = dict(self.ledger.public_projection(evidence))
+        schema = json.loads((ROOT / "schemas/testnet-activation.v1.json").read_text())
+        validator = jsonschema.Draft202012Validator(schema)
+        validator.validate(json.loads(json.dumps(projection)))
+        for field in ("raw_prompt", "raw_response", "private_key", "seed", "mnemonic",
+                      "token", "authorization", "metadata", "unknown"):
+            forged = json.loads(json.dumps(projection))
+            forged["evidence_transport_reference"][field] = {"deep": ["SECRET"]}
+            self.assertTrue(list(validator.iter_errors(forged)), field)
+            self.assertIn("EVIDENCE_REFERENCE_CLOSED_FIELDS_REQUIRED",
+                          ta.validate_activation_projection(forged))
 
     def test_parameter_sources_conflict_without_automatic_winner(self):
         def item(value, source, ratification):

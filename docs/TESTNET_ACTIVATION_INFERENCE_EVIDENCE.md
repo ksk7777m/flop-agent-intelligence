@@ -45,7 +45,11 @@ revocation remain documented possibilities rather than runtime observations.
 
 `TestnetInferenceEvidenceLedger` is separate from Technocore contribution
 evidence, the Replay store, and the general Evidence archive. It may retain
-bounded references to descriptive Evidence Transport projections. It stores
+closed, fixed-field references to descriptive Evidence Transport projections.
+Both direct construction and ledger projection reject arbitrary nested fields;
+the public schema permits only acquisition and snapshot hashes, transport,
+completeness, generation, sequence bounds, gap status, and acquisition source.
+It stores
 exact hashes of bounded raw request, response, and receipt bytes—not prompt or
 response bodies—and distinguishes raw response hashes from any separately
 claimed normalized-result hash. Amounts and compute units are lossless canonical
