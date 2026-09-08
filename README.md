@@ -96,6 +96,15 @@ evidence-ledger interfaces. All official endpoints and runtime parameters remain
 unresolved; no runtime observation, readiness, authorization, signer, or live
 effect is introduced.
 
+## Technocore 0.13.0 Transport Semantics
+
+The offline transport reconciliation model separates MCP listing truncation,
+HTTP completion/status, schema validation, completeness, freshness, retry,
+side-effect certainty, and nonce outcome. It stores no raw MCP or HTTP body and
+enables no retry or live action. Live 0.13.0 compatibility remains unobserved
+and `COMPATIBILITY_REVIEW_REQUIRED`. See
+[Technocore 0.13.0 Transport Semantics](docs/TECHNOCORE_0130_TRANSPORT_SEMANTICS.md).
+
 ## Wire Evidence, Signer, and Verifier Hardening V1
 
 The offline hardening layer preserves nonce values as exact decimal strings,

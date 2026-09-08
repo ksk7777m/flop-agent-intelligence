@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "Technocore 0.13.0 Transport Semantics V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/technocore-transport-semantics.v1.json",
+      "path": "schemas/technocore-transport-semantics.v1.json",
+      "purpose": "Validates descriptive-only MCP truncation, HTTP outcome, retry, nonce, and freshness evidence without raw remote content.",
+      "related_endpoint": null
+    },
+    {
       "name": "Testnet Activation and Inference Evidence V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/testnet-activation.v1.json",
       "path": "schemas/testnet-activation.v1.json",

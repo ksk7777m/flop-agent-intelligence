@@ -16,19 +16,21 @@
     "reviewed_technocore_agent_version": {"type": "string", "minLength": 1},
     "source_evidence": {
       "type": "object", "additionalProperties": false,
-      "required": ["identifier", "local_artifact", "classification"],
+      "required": ["identifier", "local_artifact", "classification", "source_revision"],
       "properties": {
         "identifier": {"type": "string", "minLength": 1},
-        "local_artifact": {"const": "data/presence_semantic_contract.json"},
-        "classification": {"const": "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT"}
+        "local_artifact": {"const": "docs/TECHNOCORE_0130_TRANSPORT_SEMANTICS.md"},
+        "classification": {"const": "LOCALLY_REVIEWED_OFFICIAL_RELEASE_CONTRACT"},
+        "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
       }
     },
     "semantic_invariants": {
       "type": "object", "additionalProperties": false,
-      "required": ["room", "kv", "mailbox", "did_signature", "presence"],
+      "required": ["room", "kv", "transport", "mailbox", "did_signature", "presence"],
       "properties": {
         "room": {"$ref": "#/$defs/nonEmptyStrings"},
         "kv": {"$ref": "#/$defs/nonEmptyStrings"},
+        "transport": {"$ref": "#/$defs/nonEmptyStrings"},
         "mailbox": {"$ref": "#/$defs/nonEmptyStrings"},
         "did_signature": {"$ref": "#/$defs/nonEmptyStrings"},
         "presence": {"$ref": "#/$defs/nonEmptyStrings"}

@@ -1,12 +1,13 @@
 {
   "schema": "technocore-compatibility-manifest-v1",
   "status": "COMPATIBILITY_REVIEW_REQUIRED",
-  "reviewed_at": "2026-08-29T00:00:00Z",
-  "reviewed_technocore_agent_version": "0.10.0",
+  "reviewed_at": "2026-09-08T00:00:00Z",
+  "reviewed_technocore_agent_version": "0.13.0",
   "source_evidence": {
-    "identifier": "technocore-presence-semantic-v0.1-reviewed-2026-08-29",
-    "local_artifact": "data/presence_semantic_contract.json",
-    "classification": "LOCALLY_REVIEWED_OFFICIAL_SEMANTIC_CONTRACT"
+    "identifier": "technocore-0.13.0-transport-reviewed-2026-09-08",
+    "local_artifact": "docs/TECHNOCORE_0130_TRANSPORT_SEMANTICS.md",
+    "classification": "LOCALLY_REVIEWED_OFFICIAL_RELEASE_CONTRACT",
+    "source_revision": "45921c3e3699e01a55cde391674815367e0cff6b"
   },
   "semantic_invariants": {
     "room": [
@@ -19,6 +20,13 @@
       "conditional create uses if_absent",
       "conditional update binds the exact prior value",
       "HTTP 409 reports a conflict but its body remains untrusted"
+    ],
+    "transport": [
+      "MCP list_notes defaults to 50 and clamps to 1 through 200",
+      "truncated MCP note listings preserve dropped count and never prove absence",
+      "POST upload HTTP 408 leaves side-effect outcome unknown and requires reconciliation before retry",
+      "HTTP success, schema validation, completeness and freshness are independent",
+      "note read success does not prove freshness or live 0.13.0 compatibility"
     ],
     "mailbox": [
       "mb- writes require signed messages",
@@ -39,7 +47,8 @@
       "kind": "DOCUMENTED_CAPABILITY",
       "capabilities": [
         "ordered room sequence identifiers",
-        "Ed25519 did:key content signatures"
+        "Ed25519 did:key content signatures",
+        "Technocore 0.13.0 documented transport semantics"
       ]
     },
     "runtime_observed": {

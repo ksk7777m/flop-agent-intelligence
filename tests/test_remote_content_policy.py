@@ -566,12 +566,14 @@ class RemoteContentPolicyTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout.strip(), "DASHBOARD_DOM_SAFETY_PASS")
 
-    def test_compatibility_manifest_is_strict_and_not_current(self):
+    def test_compatibility_manifest_is_strict_and_fail_closed(self):
         manifest = json.loads((ROOT / "data/technocore_compatibility.json").read_text())
         schema = json.loads((ROOT / "schemas/technocore-compatibility.v1.json").read_text())
         jsonschema.Draft202012Validator(schema).validate(manifest)
         self.assertEqual(manifest["status"], "COMPATIBILITY_REVIEW_REQUIRED")
-        self.assertEqual(manifest["reviewed_technocore_agent_version"], "0.10.0")
+        self.assertEqual(manifest["reviewed_technocore_agent_version"], "0.13.0")
+        self.assertEqual(
+            manifest["capability_evidence"]["runtime_observed"]["capabilities"], [])
         self.assertIsNone(manifest["deployment_observations"]["limits"])
 
 
