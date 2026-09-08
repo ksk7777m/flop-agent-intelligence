@@ -49,6 +49,10 @@ closed, fixed-field references to descriptive Evidence Transport projections.
 Both direct construction and ledger projection reject arbitrary nested fields;
 the public schema permits only acquisition and snapshot hashes, transport,
 completeness, generation, sequence bounds, gap status, and acquisition source.
+Ledger input accepts exactly those nine reference fields plus the descriptive
+status marker; extra metadata and provider payloads are rejected rather than
+silently retained or discarded. Runtime and semantic validation apply the same
+types, bounds, and sequence ordering as the public schema.
 It stores
 exact hashes of bounded raw request, response, and receipt bytes—not prompt or
 response bodies—and distinguishes raw response hashes from any separately

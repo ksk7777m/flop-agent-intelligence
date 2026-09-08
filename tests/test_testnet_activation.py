@@ -162,15 +162,30 @@ class TestnetActivationTests(unittest.TestCase):
             "completeness": "COMPLETE_VERIFIED", "snapshot_hash": "a" * 64,
             "acquisition_id": "b" * 64, "generation": "g1", "first_seq": 1,
             "last_seq": 2, "gap_status": "NO_GAP_OBSERVED",
-            "acquisition_source": "DIRECT_REVIEWED_SOURCE", "raw": "secret"}
+            "acquisition_source": "DIRECT_REVIEWED_SOURCE"}
         evidence = self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z",
                                                  evidence_transport_reference=reference)
         projected = self.ledger.public_projection(evidence)["evidence_transport_reference"]
-        self.assertNotIn("raw", projected)
         self.assertEqual(projected["snapshot_hash"], "a" * 64)
         with self.assertRaises(ta.ActivationError):
             self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z",
                 evidence_transport_reference={"status": "AUTHORITATIVE"})
+
+    def test_reference_input_rejects_extras_without_echoing_values(self):
+        reference = {"status": "DESCRIPTIVE_ONLY", "transport": "ROOM_EXPORT",
+            "completeness": "COMPLETE_VERIFIED", "snapshot_hash": "a" * 64,
+            "acquisition_id": "b" * 64, "generation": "g1", "first_seq": 1,
+            "last_seq": 2, "gap_status": "NO_GAP_OBSERVED",
+            "acquisition_source": "DIRECT_REVIEWED_SOURCE"}
+        for field in ("raw_prompt", "raw_response", "metadata", "provider_payload",
+                      "PRIVATE_SECRET_VALUE"):
+            forged = dict(reference); forged[field] = {"deep": ["REJECTED_VALUE"]}
+            with self.subTest(field=field), self.assertRaises(ta.ActivationError) as caught:
+                self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z",
+                                               evidence_transport_reference=forged)
+            rendered = str(caught.exception) + repr(caught.exception.metadata)
+            self.assertNotIn("REJECTED_VALUE", rendered)
+            self.assertNotIn("PRIVATE_SECRET_VALUE", rendered)
 
     def test_direct_construction_never_accepts_arbitrary_nested_reference(self):
         base = self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z")
@@ -208,6 +223,31 @@ class TestnetActivationTests(unittest.TestCase):
             self.assertTrue(list(validator.iter_errors(forged)), field)
             self.assertIn("EVIDENCE_REFERENCE_CLOSED_FIELDS_REQUIRED",
                           ta.validate_activation_projection(forged))
+        top_level = json.loads(json.dumps(projection))
+        top_level["provider_payload"] = {"deep": ["SECRET"]}
+        self.assertTrue(list(validator.iter_errors(top_level)))
+        self.assertIn("ACTIVATION_PROJECTION_CLOSED_FIELDS_REQUIRED",
+                      ta.validate_activation_projection(top_level))
+
+    def test_reference_runtime_and_semantic_validation_match_schema(self):
+        reference = {"status": "DESCRIPTIVE_ONLY", "transport": "ROOM_EXPORT",
+            "completeness": "COMPLETE_VERIFIED", "snapshot_hash": "a" * 64,
+            "acquisition_id": "b" * 64, "generation": "g1", "first_seq": 1,
+            "last_seq": 2, "gap_status": "NO_GAP_OBSERVED",
+            "acquisition_source": "DIRECT_REVIEWED_SOURCE"}
+        for change in ({"generation": "g" * 129}, {"first_seq": True},
+                       {"first_seq": 3, "last_seq": 2},
+                       {"transport": {"provider_payload": "SECRET"}}):
+            forged = dict(reference); forged.update(change)
+            with self.subTest(change=next(iter(change))), self.assertRaises(ta.ActivationError):
+                self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z",
+                                               evidence_transport_reference=forged)
+            evidence = self.ledger.record_observation(captured_at="2026-09-07T00:00:00Z")
+            projection = json.loads(json.dumps(dict(self.ledger.public_projection(evidence))))
+            projection["evidence_transport_reference"] = {
+                key: value for key, value in forged.items() if key != "status"}
+            self.assertIn("EVIDENCE_REFERENCE_INVALID",
+                          ta.validate_activation_projection(projection))
 
     def test_parameter_sources_conflict_without_automatic_winner(self):
         def item(value, source, ratification):

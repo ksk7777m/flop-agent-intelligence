@@ -21,8 +21,21 @@ UNRESOLVED_VALUE = "UNRESOLVED_OFFICIAL_VALUE"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _ID = re.compile(r"^[A-Za-z0-9._:-]{1,256}$")
+_GENERATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _DECIMAL = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 _SECRET = re.compile(r"(?:private.?key|secret|seed|mnemonic|session.?key)", re.I)
+_EVIDENCE_REFERENCE_FIELDS = frozenset({"acquisition_id", "snapshot_hash", "transport",
+    "completeness", "generation", "first_seq", "last_seq", "gap_status",
+    "acquisition_source"})
+_ACTIVATION_PROJECTION_FIELDS = frozenset({"schema", "status", "content_label",
+    "evidence_id", "state", "session_id_reference", "provider_id",
+    "provider_identity_verified", "model_name", "model_hash", "measured_root",
+    "runtime_model_identity_observed", "raw_request_hash", "raw_response_hash",
+    "normalized_result_hash", "escrow_amount", "settled_amount", "compute_units",
+    "receipt_hash", "receipt_signature_verified", "settlement_identity",
+    "settlement_verified", "evidence_complete", "airdrop_scoring",
+    "airdrop_eligibility_verified", "activity_class", "captured_at",
+    "evidence_transport_reference", "policy_version"})
 
 
 class ActivationError(ValueError):
@@ -167,27 +180,38 @@ class EvidenceTransportReference:
     acquisition_source: str
 
     def __post_init__(self) -> None:
-        if (_HASH.fullmatch(self.acquisition_id) is None
+        if (not isinstance(self.acquisition_id, str)
+                or not isinstance(self.snapshot_hash, str)
+                or _HASH.fullmatch(self.acquisition_id) is None
                 or _HASH.fullmatch(self.snapshot_hash) is None):
             raise ActivationError("EVIDENCE_REFERENCE_INVALID", "hash")
-        if self.transport not in {"MCP_PAGE", "ROOM_EXPORT", "ROOM_DIRECT_READ",
-                "DISCOVERY_SNAPSHOT", "LOCAL_ARCHIVE", "FUTURE_EVENT_FEED"}:
+        if (not isinstance(self.transport, str)
+                or self.transport not in {"MCP_PAGE", "ROOM_EXPORT", "ROOM_DIRECT_READ",
+                "DISCOVERY_SNAPSHOT", "LOCAL_ARCHIVE", "FUTURE_EVENT_FEED"}):
             raise ActivationError("EVIDENCE_REFERENCE_INVALID", "transport")
-        if self.completeness not in {"COMPLETE_VERIFIED", "PARTIAL", "UNKNOWN",
-                                    "CONFLICTING"}:
+        if (not isinstance(self.completeness, str)
+                or self.completeness not in {"COMPLETE_VERIFIED", "PARTIAL", "UNKNOWN",
+                                             "CONFLICTING"}):
             raise ActivationError("EVIDENCE_REFERENCE_INVALID", "completeness")
-        if self.generation is not None and _ID.fullmatch(self.generation) is None:
+        if (self.generation is not None
+                and (not isinstance(self.generation, str)
+                     or _GENERATION_ID.fullmatch(self.generation) is None)):
             raise ActivationError("EVIDENCE_REFERENCE_INVALID", "generation")
         for name, value in (("first_seq", self.first_seq), ("last_seq", self.last_seq)):
             if value is not None and (isinstance(value, bool) or not isinstance(value, int)
                                       or value < 0):
                 raise ActivationError("EVIDENCE_REFERENCE_INVALID", name)
-        if self.gap_status not in {"NO_GAP_OBSERVED", "GAP_UNRESOLVED", "HISTORY_GAP",
-                                   "RETENTION_LOSS_CONFIRMED"}:
+        if (not isinstance(self.gap_status, str)
+                or self.gap_status not in {"NO_GAP_OBSERVED", "GAP_UNRESOLVED", "HISTORY_GAP",
+                                           "RETENTION_LOSS_CONFIRMED"}):
             raise ActivationError("EVIDENCE_REFERENCE_INVALID", "gap_status")
-        if self.acquisition_source not in {"DIRECT_REVIEWED_SOURCE", "THIRD_PARTY_MIRROR",
-                                           "LOCAL_ARCHIVE"}:
+        if (not isinstance(self.acquisition_source, str)
+                or self.acquisition_source not in {"DIRECT_REVIEWED_SOURCE", "THIRD_PARTY_MIRROR",
+                                                    "LOCAL_ARCHIVE"}):
             raise ActivationError("EVIDENCE_REFERENCE_INVALID", "acquisition_source")
+        if (self.first_seq is not None and self.last_seq is not None
+                and self.first_seq > self.last_seq):
+            raise ActivationError("EVIDENCE_REFERENCE_INVALID", "sequence_range")
 
     def public_projection(self) -> Mapping[str, Any]:
         return MappingProxyType({"acquisition_id": self.acquisition_id,
@@ -320,6 +344,10 @@ TestnetEvidenceLedger = TestnetInferenceEvidenceLedger
 def validate_activation_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
     """Reject semantic promotion in descriptive Testnet evidence."""
     errors: list[str] = []
+    if not isinstance(value, Mapping):
+        return ("ACTIVATION_PROJECTION_OBJECT_REQUIRED",)
+    if set(value) != _ACTIVATION_PROJECTION_FIELDS:
+        errors.append("ACTIVATION_PROJECTION_CLOSED_FIELDS_REQUIRED")
     if value.get("status") != "DESCRIPTIVE_ONLY": errors.append("DESCRIPTIVE_STATUS_REQUIRED")
     if value.get("receipt_signature_verified") is True: errors.append("RECEIPT_VERIFIER_UNAVAILABLE")
     if value.get("settlement_verified") is True: errors.append("SETTLEMENT_VERIFIER_UNAVAILABLE")
@@ -331,17 +359,21 @@ def validate_activation_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
     if value.get("paper_rail_value_settlement_verified") is True:
         errors.append("PAPER_RAIL_IS_NOT_VALUE_SETTLEMENT")
     reference = value.get("evidence_transport_reference")
-    allowed_reference = {"acquisition_id", "snapshot_hash", "transport", "completeness",
-                         "generation", "first_seq", "last_seq", "gap_status",
-                         "acquisition_source"}
     if reference is not None and (not isinstance(reference, Mapping)
-                                  or set(reference) != allowed_reference):
+                                  or set(reference) != _EVIDENCE_REFERENCE_FIELDS):
         errors.append("EVIDENCE_REFERENCE_CLOSED_FIELDS_REQUIRED")
+    elif reference is not None:
+        try:
+            EvidenceTransportReference(**{field: reference[field]
+                for field in _EVIDENCE_REFERENCE_FIELDS})
+        except (ActivationError, KeyError, TypeError):
+            errors.append("EVIDENCE_REFERENCE_INVALID")
     return tuple(sorted(set(errors)))
 
 
 def _bootstrap() -> tuple[Any, Any]:
     hash_type, id_type, decimal_type, secret_type = _HASH, _ID, _DECIMAL, _SECRET
+    reference_fields = _EVIDENCE_REFERENCE_FIELDS
     sha256, proxy = hashlib.sha256, MappingProxyType
     error_type, bytes_type, mapping_type = ActivationError, bytes, Mapping
     evidence_type, reference_type = InferenceEvidence, EvidenceTransportReference
@@ -389,11 +421,13 @@ def _bootstrap() -> tuple[Any, Any]:
             "settlement_identity", "activity_class", "captured_at",
             "evidence_transport_reference"}
         if set(fields) - allowed:
-            unknown = sorted(set(fields) - allowed)[0]
-            if secret_type.search(unknown): raise error_type("SECRET_INPUT_REJECTED", unknown)
-            raise error_type("FIELD_NOT_ALLOWED", unknown)
+            if any(isinstance(name, str) and secret_type.search(name)
+                   for name in set(fields) - allowed):
+                raise error_type("SECRET_INPUT_REJECTED", "input_field")
+            raise error_type("FIELD_NOT_ALLOWED", "input_field")
         for name in fields:
-            if secret_type.search(name): raise error_type("SECRET_INPUT_REJECTED", name)
+            if isinstance(name, str) and secret_type.search(name):
+                raise error_type("SECRET_INPUT_REJECTED", "input_field")
         captured = clean_optional("captured_at", fields.get("captured_at"))
         if captured is None: raise error_type("FIELD_REQUIRED", "captured_at")
         activity = fields.get("activity_class", activity_type.UNKNOWN_UTILITY)
@@ -402,6 +436,9 @@ def _bootstrap() -> tuple[Any, Any]:
         if transport is not None:
             if not isinstance(transport, mapping_type) or transport.get("status") != "DESCRIPTIVE_ONLY":
                 raise error_type("EVIDENCE_REFERENCE_INVALID", "evidence_transport_reference")
+            if set(transport) != reference_fields | {"status"}:
+                raise error_type("EVIDENCE_REFERENCE_CLOSED_FIELDS_REQUIRED",
+                                 "evidence_transport_reference")
             transport = reference_type(transport.get("acquisition_id"),
                 transport.get("snapshot_hash"), transport.get("transport"),
                 transport.get("completeness"), transport.get("generation"),
