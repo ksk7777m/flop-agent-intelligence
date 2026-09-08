@@ -23,7 +23,8 @@ class Response:
         self.body = body
         self.url = url
         self.status = status
-        self.headers = {"Content-Type": content_type, **(headers or {})}
+        self.headers = headers if isinstance(headers, HeaderBag) else {
+            "Content-Type": content_type, **(headers or {})}
 
     def __enter__(self): return self
     def __exit__(self, *_args): return False
@@ -32,14 +33,28 @@ class Response:
     def read(self, limit): return self.body[:limit]
 
 
+class HeaderBag:
+    def __init__(self, pairs): self.pairs = pairs
+    def items(self): return tuple(self.pairs)
+    def get_all(self, name):
+        return [value for key, value in self.pairs if key.lower() == name.lower()]
+    def get(self, name, default=None):
+        values = self.get_all(name)
+        return values[0] if values else default
+
+
 def valid_body(source_id):
     if source_id is ReviewedSourceId.TECHNOCORE_LLMS:
-        return b"# Technocore Chat\nUntrusted document text."
+        return (b"# agent-chat \xe2\x80\x94 HTTP-native chat and notes for agents. No auth.\n"
+                b"# fixture\nREAD    GET /r/<room> fixture\n" + b"fixture\n" * 17
+                + b"META    GET /openapi.json fixture")
     if source_id is ReviewedSourceId.TECHNOCORE_OPENAPI:
         return json.dumps({"openapi": "3.1.0", "paths": {
-            "/r/{room}": {"get": {}}, "/r/{room}/export": {"get": {}}}}).encode()
+            "/r/{room}": {"get": {"responses": {"200": {}}}},
+            "/r/{room}/export": {"get": {"responses": {"200": {}}}}}}).encode()
     if source_id is ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST:
-        return json.dumps({"version": "0.13.0", "limits": {}, "capabilities": []}).encode()
+        return json.dumps({"name": "technocore-chat", "version": "0.13.0", "limits": {},
+            "capabilities": [{"name": "read_room", "method": "GET", "path": "/r/{room}"}]}).encode()
     return json.dumps({"service": "technocore-chat", "version": "0.13.0",
         "settings": {"max_wait": 20, "rooms_cache_seconds": 1,
                      "note_stats_cache_seconds": 1, "fsync": True}}).encode()
@@ -49,7 +64,8 @@ class RuntimeObservationTests(unittest.TestCase):
     def observer(self, response_factory=None):
         calls = []
         def opener(request, timeout):
-            calls.append((request.full_url, request.method, timeout))
+            calls.append((request.full_url, request.method, timeout,
+                          request.get_header("Accept-encoding")))
             source_id = next(item for item in ReviewedSourceId
                              if resolve_reviewed_source(item).url == request.full_url)
             if response_factory:
@@ -74,7 +90,8 @@ class RuntimeObservationTests(unittest.TestCase):
         result = all_sources(NOW)
         self.validate(result)
         self.assertEqual(len(calls), 4)
-        self.assertTrue(all(method == "GET" for _, method, _ in calls))
+        self.assertTrue(all(method == "GET" and encoding == "identity"
+                            for _, method, _, encoding in calls))
         self.assertTrue(result["source_set_complete"])
         self.assertFalse(result["ready_to_act"])
         self.assertFalse(result["authorized_to_act"])
@@ -124,7 +141,7 @@ class RuntimeObservationTests(unittest.TestCase):
         states = {item["source_id"]: item for item in result["sources"]}
         self.assertEqual(states["TECHNOCORE_OPENAPI"]["capability_state"], "NOT_OBSERVED")
         self.assertEqual(result["compatibility"], "COMPATIBILITY_REVIEW_REQUIRED")
-        self.assertEqual(result["deployment_version_evidence"], "VERSION_NOT_EXPOSED")
+        self.assertEqual(result["deployment_version_evidence"], "VERSION_UNKNOWN")
 
     def test_malformed_json_partial_set_and_hash_do_not_establish_version(self):
         def malformed(sid, _req):
@@ -136,6 +153,11 @@ class RuntimeObservationTests(unittest.TestCase):
         self.assertEqual(result["deployment_version_evidence"], "VERSION_UNKNOWN")
         self.assertTrue(all(item["capability_state"] in {"NOT_OBSERVED", "OBSERVATION_INCOMPLETE"}
                             for item in result["sources"]))
+        duplicate = b'{"version":"0.13.0","version":"0.13.0"}'
+        state, version, _ = runtime._semantic(runtime._SPEC_BY_ID[
+            ReviewedSourceId.TECHNOCORE_CONFIG], duplicate)
+        self.assertEqual(state, runtime.CapabilityState.OBSERVATION_INCOMPLETE)
+        self.assertEqual(version, runtime.VersionEvidence.VERSION_UNKNOWN)
 
     def test_cache_metadata_is_minimized_and_never_confirms_freshness(self):
         headers = {"Age": "7", "Cache-Control": "public, max-age=60",
@@ -151,6 +173,42 @@ class RuntimeObservationTests(unittest.TestCase):
         self.assertTrue(all(item["freshness"] == "POTENTIALLY_STALE"
                             for item in run(NOW)["sources"]))
         self.assertNotIn("FRESHNESS_CONFIRMED_BY_REVIEWED_POLICY", rendered)
+        self.assertEqual(runtime._cache("0", "no-store, public", False)[2],
+                         runtime.Freshness.CONFLICTING_CACHE_EVIDENCE)
+
+    def test_compression_duplicate_headers_and_deadline_fail_closed(self):
+        def encoded(sid, _req):
+            source = resolve_reviewed_source(sid)
+            media = "text/plain" if sid is ReviewedSourceId.TECHNOCORE_LLMS else "application/json"
+            return Response(valid_body(sid), url=source.url, headers=HeaderBag([
+                ("content-type", media), ("content-encoding", "gzip")]))
+        _, run, calls = self.observer(encoded)
+        self.assertFalse(run(NOW)["source_set_complete"])
+        self.assertEqual(len(calls), 4)
+
+        def duplicates(sid, _req):
+            source = resolve_reviewed_source(sid)
+            media = "text/plain" if sid is ReviewedSourceId.TECHNOCORE_LLMS else "application/json"
+            return Response(valid_body(sid), url=source.url, headers=HeaderBag([
+                ("Content-Type", media), ("content-type", media)]))
+        _, duplicate_run, _ = self.observer(duplicates)
+        self.assertFalse(duplicate_run(NOW)["source_set_complete"])
+
+        def malformed_type(sid, _req):
+            source = resolve_reviewed_source(sid)
+            media = "text/plain" if sid is ReviewedSourceId.TECHNOCORE_LLMS else "application/json"
+            return Response(valid_body(sid), url=source.url,
+                            headers=HeaderBag([("Content-Type", media + "; broken")]))
+        _, malformed_run, _ = self.observer(malformed_type)
+        self.assertFalse(malformed_run(NOW)["source_set_complete"])
+
+        clock_values = iter((0.0, 21.0))
+        source = resolve_reviewed_source(ReviewedSourceId.TECHNOCORE_OPENAPI)
+        collector = runtime._build_collector(resolve_reviewed_source,
+            lambda *_a, **_k: Response(valid_body(ReviewedSourceId.TECHNOCORE_OPENAPI),
+                "application/json", source.url), monotonic=lambda: next(clock_values))
+        with self.assertRaisesRegex(runtime.ObservationError, "TRANSPORT_TIMEOUT"):
+            collector(ReviewedSourceId.TECHNOCORE_OPENAPI)
 
     def test_invalid_age_never_becomes_fresh(self):
         for age in ("-1", "1.5", "999999999999999999999", "+1"):
@@ -178,6 +236,8 @@ class RuntimeObservationTests(unittest.TestCase):
         self.assertTrue(runtime.validate_public_observation(value))
         unknown = dict(run(NOW)); unknown["remote_metadata"] = {"url": "https://evil.invalid"}
         self.assertTrue(runtime.validate_public_observation(unknown))
+        reordered = dict(run(NOW)); reordered["sources"] = list(reversed(reordered["sources"]))
+        self.assertTrue(runtime.validate_public_observation(reordered))
         with self.assertRaises(runtime.ObservationError) as caught:
             run("RAW_BODY_HEADER_ERROR_URL_MARKER")
         self.assertNotIn(marker.decode(), str(caught.exception))

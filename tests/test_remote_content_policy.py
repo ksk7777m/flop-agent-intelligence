@@ -575,6 +575,13 @@ class RemoteContentPolicyTests(unittest.TestCase):
         self.assertEqual(
             manifest["capability_evidence"]["runtime_observed"]["status"],
             "ONE_SHOT_PARTIAL_SEMANTIC_OBSERVATION")
+        self.assertEqual(manifest["observation_policy_binding"], {
+            "observed_predicate_policy_revision": "technocore-runtime-predicates-v1",
+            "current_predicate_policy_revision": "technocore-runtime-predicates-v2",
+            "llms_result": "OBSERVED_UNDER_SUPERSEDED_POLICY",
+            "reobservation_status": "REOBSERVATION_REQUIRED",
+            "source_set_complete": False,
+        })
         self.assertIsNone(manifest["deployment_observations"]["limits"])
 
 

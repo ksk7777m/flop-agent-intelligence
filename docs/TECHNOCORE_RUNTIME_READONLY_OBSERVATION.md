@@ -64,6 +64,13 @@ so that source is retained as a semantic gap for this observation; the predicate
 was corrected against the pinned repository after the run and the live request
 was not repeated.
 
+The historical result is bound to `technocore-runtime-predicates-v1`. Current
+code uses `technocore-runtime-predicates-v2`; therefore the stored LLMS state is
+`OBSERVED_UNDER_SUPERSEDED_POLICY`, the four-source semantic set is incomplete,
+and `REOBSERVATION_REQUIRED` remains explicit. The old response body was not
+stored and is not re-evaluated under v2. A policy ID or hash alone cannot create
+a semantic match.
+
 Agent manifest and config exposed an explicit `0.13.0` version. This is one-shot
 deployment-version evidence, while overall compatibility remains
 `COMPATIBILITY_REVIEW_REQUIRED`. All four responses exposed minimized cache

@@ -4,16 +4,23 @@
   "title": "Technocore Runtime Read-only Observation V1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema","status","documented_version","documented_revision","observation_policy_version","observed_at","source_set_complete","sources","deployment_version_evidence","compatibility","runtime_nonce_status","drift_status","ready_to_act","authorized_to_act","live_action_enabled"],
+  "required": ["schema","status","documented_version","documented_revision","observation_policy_version","predicate_policy_revision","observed_at","source_set_complete","sources","deployment_version_evidence","compatibility","runtime_nonce_status","drift_status","ready_to_act","authorized_to_act","live_action_enabled"],
   "properties": {
     "schema": {"const": "technocore-runtime-observation-v1"},
     "status": {"const": "DESCRIPTIVE_ONLY"},
     "documented_version": {"const": "0.13.0"},
     "documented_revision": {"const": "45921c3e3699e01a55cde391674815367e0cff6b"},
     "observation_policy_version": {"const": "technocore-runtime-readonly-observation-v1"},
+    "predicate_policy_revision": {"const": "technocore-runtime-predicates-v2"},
     "observed_at": {"type": "string", "format": "date-time"},
     "source_set_complete": {"type": "boolean"},
-    "sources": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/$defs/source"}},
+    "sources": {"type": "array", "minItems": 4, "maxItems": 4,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/source"}, {"properties": {"source_id": {"const": "TECHNOCORE_LLMS"}, "source_class": {"const": "TEXT_DOCUMENT"}}}]},
+        {"allOf": [{"$ref": "#/$defs/source"}, {"properties": {"source_id": {"const": "TECHNOCORE_OPENAPI"}, "source_class": {"const": "OPENAPI_DOCUMENT"}}}]},
+        {"allOf": [{"$ref": "#/$defs/source"}, {"properties": {"source_id": {"const": "TECHNOCORE_AGENT_MANIFEST"}, "source_class": {"const": "AGENT_MANIFEST"}}}]},
+        {"allOf": [{"$ref": "#/$defs/source"}, {"properties": {"source_id": {"const": "TECHNOCORE_CONFIG"}, "source_class": {"const": "CONFIG_DOCUMENT"}}}]}
+      ], "items": false},
     "deployment_version_evidence": {"enum": ["VERSION_EXPLICITLY_OBSERVED","VERSION_NOT_EXPOSED","VERSION_EVIDENCE_CONFLICTING","VERSION_UNKNOWN"]},
     "compatibility": {"const": "COMPATIBILITY_REVIEW_REQUIRED"},
     "runtime_nonce_status": {"const": "BLOCKED_BY_LIVE_SIGNED_WRITE"},
@@ -22,10 +29,17 @@
     "authorized_to_act": {"const": false},
     "live_action_enabled": {"const": false}
   },
+  "allOf": [
+    {"if": {"properties": {"source_set_complete": {"const": true}}, "required": ["source_set_complete"]},
+     "then": {"properties": {"sources": {"items": {"properties": {
+       "request_completed": {"const": true},
+       "capability_state": {"const": "OBSERVED_IN_LIVE_DOCUMENT"}
+     }}}}}}
+  ],
   "$defs": {
     "source": {
       "type": "object", "additionalProperties": false,
-      "required": ["source_id","source_class","request_attempted","request_completed","http_status","final_url_matched","redirect_detected","response_size_accepted","content_type_accepted","schema_validation","capability_state","version_evidence","cache_policy_observed","age_state","cache_control_class","validator_present","freshness","body_sha256","body_bytes","observed_at"],
+      "required": ["source_id","source_class","request_attempted","request_completed","http_status","final_url_matched","redirect_detected","response_size_accepted","content_type_accepted","schema_validation","capability_state","version_evidence","cache_policy_observed","age_state","cache_control_class","validator_present","freshness","body_sha256","body_bytes","observed_at","predicate_policy_revision"],
       "properties": {
         "source_id": {"enum": ["TECHNOCORE_LLMS","TECHNOCORE_OPENAPI","TECHNOCORE_AGENT_MANIFEST","TECHNOCORE_CONFIG"]},
         "source_class": {"enum": ["TEXT_DOCUMENT","OPENAPI_DOCUMENT","AGENT_MANIFEST","CONFIG_DOCUMENT"]},
@@ -33,7 +47,7 @@
         "request_completed": {"type": "boolean"},
         "http_status": {"type": ["integer","null"], "minimum": 100, "maximum": 599},
         "final_url_matched": {"type": "boolean"},
-        "redirect_detected": {"const": false},
+        "redirect_detected": {"type": "boolean"},
         "response_size_accepted": {"type": "boolean"},
         "content_type_accepted": {"type": "boolean"},
         "schema_validation": {"enum": ["VALIDATED","NOT_VALIDATED"]},
@@ -46,7 +60,8 @@
         "freshness": {"enum": ["FRESHNESS_UNKNOWN","POTENTIALLY_STALE","CONFLICTING_CACHE_EVIDENCE"]},
         "body_sha256": {"type": ["string","null"], "pattern": "^[0-9a-f]{64}$"},
         "body_bytes": {"type": ["integer","null"], "minimum": 0, "maximum": 2097152},
-        "observed_at": {"type": "string", "format": "date-time"}
+        "observed_at": {"type": "string", "format": "date-time"},
+        "predicate_policy_revision": {"const": "technocore-runtime-predicates-v2"}
       }
     }
   }

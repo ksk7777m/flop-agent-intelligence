@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from .remote_content_policy import ReviewedSourceId, resolve_reviewed_source
 
 SCHEMA_VERSION = "technocore-runtime-observation-v1"
 POLICY_VERSION = "technocore-runtime-readonly-observation-v1"
+CURRENT_PREDICATE_POLICY_REVISION = "technocore-runtime-predicates-v2"
 DOCUMENTED_REVISION = "45921c3e3699e01a55cde391674815367e0cff6b"
 DOCUMENTED_VERSION = "0.13.0"
 MAX_AGE_SECONDS = (1 << 31) - 1
@@ -97,8 +99,8 @@ class _Fetched:
     final_url_matched: bool
     redirect_detected: bool
     content_type: str
-    age: str | None
-    cache_control: str | None
+    age: str | None = field(repr=False)
+    cache_control: str | None = field(repr=False)
     validator_present: bool
     body: bytes = field(repr=False)
 
@@ -110,44 +112,81 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 
 
 def _build_collector(source_resolver: Callable[[ReviewedSourceId], Any],
-                     opener: Callable[..., Any] | None = None) -> Callable[[ReviewedSourceId], _Fetched]:
+                     opener: Callable[..., Any] | None = None,
+                     monotonic: Callable[[], float] = time.monotonic
+                     ) -> Callable[[ReviewedSourceId], _Fetched]:
     """Private fixture seam; production captures the reviewed registry and opener."""
     request_type = urllib.request.Request
     configured_open = opener or urllib.request.build_opener(_RejectRedirects()).open
     specs = _SPEC_BY_ID
 
+    def header_values(headers: Any, name: str) -> tuple[str, ...]:
+        if hasattr(headers, "get_all"):
+            values = headers.get_all(name) or []
+        else:
+            values = [value for key, value in headers.items() if key.lower() == name.lower()]
+        return tuple(value for value in values if isinstance(value, str))
+
     def collect(source_id: ReviewedSourceId) -> _Fetched:
         if type(source_id) is not ReviewedSourceId or source_id not in specs:
             raise PermissionError("reviewed runtime observation source required")
         source, spec = source_resolver(source_id), specs[source_id]
-        request = request_type(source.url, method="GET", headers={"User-Agent": POLICY_VERSION})
+        request = request_type(source.url, method="GET", headers={
+            "User-Agent": POLICY_VERSION, "Accept-Encoding": "identity"})
+        deadline = monotonic() + source.timeout
         try:
             with configured_open(request, timeout=source.timeout) as response:
+                if monotonic() > deadline:
+                    raise ObservationError("TRANSPORT_TIMEOUT")
                 final_url = response.geturl()
                 if final_url != source.url:
                     raise ObservationError("FINAL_URL_MISMATCH", redirect_detected=True)
                 status = response.getcode()
                 if status != 200:
                     raise ObservationError("HTTP_STATUS_REJECTED", status=status)
-                media_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                content_types = header_values(response.headers, "Content-Type")
+                if len(content_types) != 1:
+                    raise ObservationError("CONTENT_TYPE_AMBIGUOUS")
+                content_parts = [part.strip() for part in content_types[0].split(";")]
+                media_type = content_parts[0].lower()
+                parameters: dict[str, str] = {}
+                for parameter in content_parts[1:]:
+                    if "=" not in parameter:
+                        raise ObservationError("CONTENT_TYPE_PARAMETER_INVALID")
+                    name, parameter_value = (part.strip().lower() for part in parameter.split("=", 1))
+                    if (not name or not parameter_value or name in parameters
+                            or name != "charset" or parameter_value.strip('"') != "utf-8"):
+                        raise ObservationError("CONTENT_TYPE_PARAMETER_INVALID")
+                    parameters[name] = parameter_value
                 if media_type not in spec.accepted_content_types:
                     raise ObservationError("CONTENT_TYPE_REJECTED")
-                declared = response.headers.get("Content-Length")
+                encodings = header_values(response.headers, "Content-Encoding")
+                if len(encodings) > 1 or (encodings and encodings[0].strip().lower() != "identity"):
+                    raise ObservationError("CONTENT_ENCODING_REJECTED")
+                lengths = header_values(response.headers, "Content-Length")
+                if len(lengths) > 1:
+                    raise ObservationError("CONTENT_LENGTH_AMBIGUOUS")
+                declared = lengths[0] if lengths else None
                 if declared is not None:
                     if re.fullmatch(r"0|[1-9][0-9]{0,9}", declared) is None:
                         raise ObservationError("CONTENT_LENGTH_INVALID")
                     if int(declared) > source.max_bytes:
                         raise ObservationError("RESPONSE_TOO_LARGE")
                 body = response.read(source.max_bytes + 1)
+                if monotonic() > deadline:
+                    raise ObservationError("TRANSPORT_TIMEOUT")
                 if len(body) > source.max_bytes:
                     raise ObservationError("RESPONSE_TOO_LARGE")
-                age = response.headers.get("Age")
-                control = response.headers.get("Cache-Control")
+                ages = header_values(response.headers, "Age")
+                controls = header_values(response.headers, "Cache-Control")
+                age = ages[0] if len(ages) == 1 else "INVALID" if ages else None
+                control = controls[0] if len(controls) == 1 else "INVALID" if controls else None
                 age = age if age is None or len(age) <= 32 else "INVALID"
                 control = control if control is None or len(control) <= 1024 else "INVALID"
                 return _Fetched(source_id, status, True, False, media_type,
                     age, control,
-                    bool(response.headers.get("ETag") or response.headers.get("Last-Modified")), body)
+                    bool(header_values(response.headers, "ETag")
+                         or header_values(response.headers, "Last-Modified")), body)
         except urllib.error.HTTPError as error:
             redirected = 300 <= error.code <= 399
             raise ObservationError("REDIRECT_REJECTED" if redirected else "HTTP_ERROR",
@@ -173,8 +212,14 @@ def _cache(age_raw: str | None, control_raw: str | None,
             age = int(age_raw)
             age_state = "VALID" if age <= MAX_AGE_SECONDS else "INVALID"
     control = CacheControlClass.ABSENT
+    cache_conflict = False
     if control_raw is not None:
-        tokens = {part.strip().lower() for part in control_raw.split(",")}
+        raw_tokens = [part.strip().lower() for part in control_raw.split(",")]
+        names = [part.split("=", 1)[0] for part in raw_tokens]
+        cache_conflict = (not all(raw_tokens) or len(names) != len(set(names))
+                          or ("no-store" in names and any(name in names for name in
+                              ("public", "max-age", "s-maxage", "stale-while-revalidate"))))
+        tokens = set(raw_tokens)
         if "no-store" in tokens:
             control = CacheControlClass.NO_STORE
         elif tokens.intersection({"no-cache", "must-revalidate", "proxy-revalidate"}):
@@ -183,7 +228,7 @@ def _cache(age_raw: str | None, control_raw: str | None,
             control = CacheControlClass.CACHEABLE
         else:
             control = CacheControlClass.UNCLASSIFIED
-    if age_state == "INVALID":
+    if age_state == "INVALID" or cache_conflict:
         freshness = Freshness.CONFLICTING_CACHE_EVIDENCE
     elif age is not None and age > 0:
         freshness = Freshness.POTENTIALLY_STALE
@@ -207,8 +252,15 @@ def _semantic(spec: _SourceSpec, body: bytes) -> tuple[CapabilityState, VersionE
         state = CapabilityState.OBSERVED_IN_LIVE_DOCUMENT if valid else CapabilityState.NOT_OBSERVED
         return state, VersionEvidence.VERSION_NOT_EXPOSED, digest
     try:
-        value = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in result:
+                    raise ValueError("duplicate JSON field")
+                result[key] = item
+            return result
+        value = json.loads(body, object_pairs_hook=unique)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return CapabilityState.OBSERVATION_INCOMPLETE, VersionEvidence.VERSION_UNKNOWN, digest
     if not isinstance(value, dict):
         return CapabilityState.CONFLICTING, VersionEvidence.VERSION_UNKNOWN, digest
@@ -219,16 +271,29 @@ def _semantic(spec: _SourceSpec, body: bytes) -> tuple[CapabilityState, VersionE
                          if version == DOCUMENTED_VERSION else VersionEvidence.VERSION_EVIDENCE_CONFLICTING)
     if spec.source_class is SourceClass.OPENAPI_DOCUMENT:
         paths = value.get("paths")
-        valid = (value.get("openapi") == "3.1.0" and isinstance(paths, dict)
-                 and isinstance(paths.get("/r/{room}/export"), dict)
-                 and isinstance(paths.get("/r/{room}"), dict))
+        room = paths.get("/r/{room}") if isinstance(paths, dict) else None
+        export = paths.get("/r/{room}/export") if isinstance(paths, dict) else None
+        valid = (value.get("openapi") == "3.1.0" and isinstance(room, dict)
+                 and isinstance(export, dict) and isinstance(room.get("get"), dict)
+                 and isinstance(export.get("get"), dict)
+                 and isinstance(room["get"].get("responses"), dict)
+                 and isinstance(export["get"].get("responses"), dict))
     elif spec.source_class is SourceClass.AGENT_MANIFEST:
-        valid = isinstance(value.get("limits"), dict) and isinstance(value.get("capabilities"), (dict, list))
+        capabilities = value.get("capabilities")
+        valid = (value.get("name") == "technocore-chat" and isinstance(value.get("limits"), dict)
+                 and isinstance(capabilities, list)
+                 and any(isinstance(item, dict) and item.get("name") == "read_room"
+                         and item.get("method") == "GET" and item.get("path") == "/r/{room}"
+                         for item in capabilities))
     else:
         settings = value.get("settings")
         valid = (value.get("service") == "technocore-chat" and isinstance(settings, dict)
-                 and all(key in settings for key in ("max_wait", "rooms_cache_seconds",
-                                                      "note_stats_cache_seconds", "fsync")))
+                 and isinstance(settings.get("max_wait"), (int, float))
+                 and not isinstance(settings.get("max_wait"), bool)
+                 and all(isinstance(settings.get(key), (int, float))
+                         and not isinstance(settings.get(key), bool) and settings[key] >= 0
+                         for key in ("rooms_cache_seconds", "note_stats_cache_seconds"))
+                 and isinstance(settings.get("fsync"), bool))
     return (CapabilityState.OBSERVED_IN_LIVE_DOCUMENT if valid else CapabilityState.NOT_OBSERVED,
             version_state, digest)
 
@@ -255,6 +320,7 @@ class _SourceObservation:
     body_sha256: str | None
     body_bytes: int | None
     observed_at: str
+    predicate_policy_revision: str
 
     def public_projection(self) -> Mapping[str, Any]:
         return MappingProxyType({
@@ -273,13 +339,16 @@ class _SourceObservation:
             "validator_present": self.validator_present, "freshness": self.freshness.value,
             "body_sha256": self.body_sha256, "body_bytes": self.body_bytes,
             "observed_at": self.observed_at,
+            "predicate_policy_revision": self.predicate_policy_revision,
         })
 
 
 def _public_observation(observations: tuple[_SourceObservation, ...], observed_at: str) -> Mapping[str, Any]:
     expected = tuple(spec.source_id for spec in _SPECS)
     ids = tuple(item.source_id for item in observations)
-    complete = ids == expected and all(item.request_completed for item in observations)
+    complete = (ids == expected and all(item.request_completed for item in observations)
+                and all(item.capability_state is CapabilityState.OBSERVED_IN_LIVE_DOCUMENT
+                        for item in observations))
     version_states = {item.version_evidence for item in observations}
     overall_version = (VersionEvidence.VERSION_EVIDENCE_CONFLICTING
                        if VersionEvidence.VERSION_EVIDENCE_CONFLICTING in version_states
@@ -301,6 +370,7 @@ def _public_observation(observations: tuple[_SourceObservation, ...], observed_a
         "documented_version": DOCUMENTED_VERSION,
         "documented_revision": DOCUMENTED_REVISION,
         "observation_policy_version": POLICY_VERSION,
+        "predicate_policy_revision": CURRENT_PREDICATE_POLICY_REVISION,
         "observed_at": observed_at, "source_set_complete": complete,
         "sources": [dict(item.public_projection()) for item in observations],
         "deployment_version_evidence": overall_version.value,
@@ -317,7 +387,7 @@ def _public_observation(observations: tuple[_SourceObservation, ...], observed_a
 
 def validate_public_observation(value: Mapping[str, Any]) -> tuple[str, ...]:
     top = {"schema", "status", "documented_version", "documented_revision",
-           "observation_policy_version", "observed_at", "source_set_complete", "sources",
+           "observation_policy_version", "predicate_policy_revision", "observed_at", "source_set_complete", "sources",
            "deployment_version_evidence", "compatibility", "runtime_nonce_status",
            "drift_status", "ready_to_act", "authorized_to_act", "live_action_enabled"}
     source = {"source_id", "source_class", "request_attempted", "request_completed",
@@ -325,7 +395,7 @@ def validate_public_observation(value: Mapping[str, Any]) -> tuple[str, ...]:
               "response_size_accepted", "content_type_accepted", "schema_validation",
               "capability_state", "version_evidence", "cache_policy_observed", "age_state",
               "cache_control_class", "validator_present", "freshness", "body_sha256",
-              "body_bytes", "observed_at"}
+              "body_bytes", "observed_at", "predicate_policy_revision"}
     errors = []
     if not isinstance(value, Mapping) or set(value) != top:
         return ("CLOSED_TOP_LEVEL_FIELDS_REQUIRED",)
@@ -338,6 +408,51 @@ def validate_public_observation(value: Mapping[str, Any]) -> tuple[str, ...]:
     for name in ("ready_to_act", "authorized_to_act", "live_action_enabled"):
         if value.get(name) is not False:
             errors.append("LIVE_ACTION_PROHIBITED")
+    if value.get("predicate_policy_revision") != CURRENT_PREDICATE_POLICY_REVISION:
+        errors.append("PREDICATE_POLICY_REVISION_INVALID")
+    if not isinstance(value.get("observed_at"), str) or _TIME.fullmatch(value["observed_at"]) is None:
+        errors.append("OBSERVATION_TIME_INVALID")
+    if type(value.get("source_set_complete")) is not bool:
+        errors.append("SOURCE_COMPLETENESS_TYPE_INVALID")
+    if isinstance(items, list) and len(items) == len(_SPECS):
+        expected_ids = [spec.source_id.value for spec in _SPECS]
+        if [item.get("source_id") for item in items if isinstance(item, Mapping)] != expected_ids:
+            errors.append("SOURCE_ORDER_OR_ID_INVALID")
+        for item in items:
+            if isinstance(item, Mapping):
+                if item.get("predicate_policy_revision") != CURRENT_PREDICATE_POLICY_REVISION:
+                    errors.append("SOURCE_POLICY_REVISION_INVALID")
+                if item.get("observed_at") != value.get("observed_at"):
+                    errors.append("SOURCE_TIME_MISMATCH")
+                for field_name in ("request_attempted", "request_completed", "final_url_matched",
+                                   "redirect_detected", "response_size_accepted",
+                                   "content_type_accepted", "cache_policy_observed",
+                                   "validator_present"):
+                    if type(item.get(field_name)) is not bool:
+                        errors.append("SOURCE_BOOLEAN_INVALID")
+                status = item.get("http_status")
+                if status is not None and (type(status) is not int or not 100 <= status <= 599):
+                    errors.append("HTTP_STATUS_INVALID")
+                digest, length = item.get("body_sha256"), item.get("body_bytes")
+                if digest is not None and (not isinstance(digest, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", digest) is None):
+                    errors.append("BODY_HASH_INVALID")
+                if length is not None and (type(length) is not int or not 0 <= length <= 2 * 1024 * 1024):
+                    errors.append("BODY_LENGTH_INVALID")
+                if item.get("request_completed") is True:
+                    if (status != 200 or item.get("final_url_matched") is not True
+                            or item.get("redirect_detected") is not False
+                            or item.get("response_size_accepted") is not True
+                            or item.get("content_type_accepted") is not True
+                            or digest is None or length is None):
+                        errors.append("COMPLETED_SOURCE_STATE_INVALID")
+                elif digest is not None or length is not None:
+                    errors.append("FAILED_SOURCE_BODY_EVIDENCE_PROHIBITED")
+        semantic_complete = all(isinstance(item, Mapping)
+            and item.get("request_completed") is True
+            and item.get("capability_state") == "OBSERVED_IN_LIVE_DOCUMENT" for item in items)
+        if value.get("source_set_complete") is not semantic_complete:
+            errors.append("SOURCE_COMPLETENESS_INVALID")
     return tuple(sorted(set(errors)))
 
 
@@ -360,7 +475,8 @@ def _build_observer(collector: Callable[[ReviewedSourceId], _Fetched]
             fetched.final_url_matched, fetched.redirect_detected, True, True,
             "VALIDATED" if capability is CapabilityState.OBSERVED_IN_LIVE_DOCUMENT else "NOT_VALIDATED",
             capability, version, fetched.cache_control is not None, age_state, control,
-            fetched.validator_present, freshness, digest, len(fetched.body), observed_at)
+            fetched.validator_present, freshness, digest, len(fetched.body), observed_at,
+            CURRENT_PREDICATE_POLICY_REVISION)
 
     def observe_once(observed_at: str) -> Mapping[str, Any]:
         """One request per fixed source, no retry; failures remain explicit gaps."""
@@ -375,7 +491,8 @@ def _build_observer(collector: Callable[[ReviewedSourceId], _Fetched]
                     True, False, error.status, False, error.redirect_detected, False, False, "NOT_VALIDATED",
                     CapabilityState.OBSERVATION_INCOMPLETE, VersionEvidence.VERSION_UNKNOWN,
                     False, "ABSENT", CacheControlClass.ABSENT, False,
-                    Freshness.FRESHNESS_UNKNOWN, None, None, observed_at))
+                    Freshness.FRESHNESS_UNKNOWN, None, None, observed_at,
+                    CURRENT_PREDICATE_POLICY_REVISION))
         return _public_observation(tuple(observations), observed_at)
 
     return observe_source, observe_once

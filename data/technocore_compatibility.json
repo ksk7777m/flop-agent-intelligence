@@ -69,6 +69,13 @@
     "deployment_version": "0.13.0",
     "observed_at": "2026-09-08T04:34:36Z"
   },
+  "observation_policy_binding": {
+    "observed_predicate_policy_revision": "technocore-runtime-predicates-v1",
+    "current_predicate_policy_revision": "technocore-runtime-predicates-v2",
+    "llms_result": "OBSERVED_UNDER_SUPERSEDED_POLICY",
+    "reobservation_status": "REOBSERVATION_REQUIRED",
+    "source_set_complete": false
+  },
   "freshness": {
     "status": "REVIEW_REQUIRED",
     "reason": "One-shot cache metadata was potentially stale and does not establish latest state or continuing live compatibility"
