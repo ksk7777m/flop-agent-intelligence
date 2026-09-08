@@ -15,7 +15,7 @@
     "response_schema": {"enum": ["VALIDATED","NOT_VALIDATED"]},
     "content_completeness": {"enum": ["COMPLETE_BODY_ONLY","PARTIAL","UNKNOWN"]},
     "content_truncated": {"type": ["boolean","null"]},
-    "dropped_count": {"type": ["integer","null"], "minimum": 0},
+    "dropped_count": {"type": ["integer","null"], "minimum": 0, "maximum": 9223372036854775807},
     "effective_limit": {"type": ["integer","null"], "minimum": 1, "maximum": 200},
     "freshness": {"enum": ["UNKNOWN","STALE"]},
     "response_metadata_observed": {"type": "boolean"},
@@ -39,7 +39,8 @@
     "policy_version": {"const": "technocore-0130-transport-policy-v1"}
   },
   "allOf": [
-    {"if": {"properties": {"http_status": {"const": 408}}, "required": ["http_status"]}, "then": {"properties": {"request_completion": {"const": "UNKNOWN"}, "retry_disposition": {"const": "RECONCILIATION_REQUIRED"}, "new_connection_required": {"const": true}, "side_effect_certainty": {"const": "OUTCOME_UNKNOWN"}}}},
+    {"if": {"properties": {"operation": {"const": "POST_UPLOAD"}, "http_status": {"const": 408}}, "required": ["operation","http_status"]}, "then": {"properties": {"request_completion": {"const": "UNKNOWN"}, "retry_disposition": {"const": "RECONCILIATION_REQUIRED"}, "new_connection_required": {"const": true}, "reconciliation_required": {"const": true}, "new_authorization_required": {"const": true}, "replay_journal_required": {"const": true}, "side_effect_certainty": {"const": "OUTCOME_UNKNOWN"}}}},
+    {"if": {"properties": {"operation": {"const": "CONDITIONAL_NOTE_WRITE"}, "http_status": {"const": 409}}, "required": ["operation","http_status"]}, "then": {"properties": {"retry_disposition": {"const": "RECONCILIATION_REQUIRED"}, "reconciliation_required": {"const": true}, "new_authorization_required": {"const": true}, "replay_journal_required": {"const": true}, "side_effect_certainty": {"const": "OUTCOME_UNKNOWN"}}}},
     {"if": {"properties": {"content_truncated": {"const": true}}, "required": ["content_truncated"]}, "then": {"properties": {"content_completeness": {"const": "PARTIAL"}, "dropped_count": {"type": "integer", "minimum": 1}}}},
     {"if": {"properties": {"operation": {"const": "MCP_LIST_NOTES"}}, "required": ["operation"]}, "then": {"properties": {"http_status": {"const": null}, "content_completeness": {"enum": ["PARTIAL","UNKNOWN"]}, "freshness": {"const": "UNKNOWN"}}}}
   ]

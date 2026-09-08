@@ -11,7 +11,7 @@ was not observed, so compatibility remains `COMPATIBILITY_REVIEW_REQUIRED`.
 
 | 0.13.0 concern | Initial classification | Existing coverage | This package |
 |---|---|---|---|
-| MCP `list_notes` truncation | `PARTIALLY_COVERED` | Evidence Transport keeps MCP pages `UNKNOWN`/`PARTIAL` and never proves absence | Records documented default 50/max 200, truncation and dropped count; legacy omission stays unknown |
+| MCP `list_notes` truncation | `PARTIALLY_COVERED` | Evidence Transport keeps MCP pages `UNKNOWN`/`PARTIAL` and never proves absence | Recognizes only the exact final 0.13.0 footer with matching shown/limit/key counts; malformed, duplicate, ambiguous, oversized, or legacy output stays unknown |
 | POST upload HTTP 408 | `PARTIALLY_COVERED` | Replay Journal preserves unknown effects and requires reconciliation | Separates new-connection transport advice from retry authority; outcome remains unknown |
 | conditional-note HTTP 409 body | `PARTIALLY_COVERED` | Remote Content Policy and Presence retain only bounded hash metadata | Adds hash-only conditional-write outcome; no CAS rebase, target, payload or capability |
 | sweep and signature target | `ALREADY_COVERED` | Identity and Wire Evidence sweep first, reconstruct exact stored bytes, reject empty output and preserve Unicode code points | Adds cross-package regression only; no duplicate implementation |
@@ -38,6 +38,12 @@ side-effect certainty and nonce outcome are independent. In particular:
 - an HTTP 200 note read proves retrieval only. Without reviewed cache evidence
   and a separately verified runtime it cannot establish current ownership,
   revocation, authorization, latest state, or compatibility.
+
+The MCP footer parser consumes the bounded byte result directly. Caller-supplied
+truncation booleans or dropped counts are not accepted, and remote key or text
+content cannot mint truncation evidence. Count evidence is bounded to a signed
+64-bit representation; this is an evidence-format bound, not a deployment-capacity
+claim.
 
 The public projection is a strict field-by-field reconstruction validated by
 `schemas/technocore-transport-semantics.v1.json`. It includes only structured

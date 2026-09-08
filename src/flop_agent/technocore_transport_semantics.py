@@ -21,7 +21,13 @@ DOCUMENTED_VERSION = "0.13.0"
 MAX_BODY_BYTES = 2 * 1024 * 1024
 NOTES_LIMIT_DEFAULT = 50
 NOTES_LIMIT_MAX = 200
+MAX_EVIDENCE_COUNT = (1 << 63) - 1
 _TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+_NOTES_FOOTER = re.compile(
+    rb"\n\n(?P<shown>[0-9]+) of (?P<total>[0-9]+) keys shown "
+    rb"\(limit (?P<limit>[0-9]+), max 200\)\. "
+    rb"Read /kv/<namespace> directly for the whole listing\."
+)
 
 
 class TransportSemanticError(ValueError):
@@ -110,7 +116,7 @@ class TransportEvidence:
     observed_at: str
 
     def public_projection(self) -> Mapping[str, Any]:
-        return MappingProxyType({
+        projection = {
             "schema": SCHEMA_VERSION, "status": "DESCRIPTIVE_ONLY",
             "content_label": "UNTRUSTED_CONTENT", "operation": self.operation.value,
             "request_completion": self.request_completion.value,
@@ -134,7 +140,10 @@ class TransportEvidence:
             "runtime_compatibility": "COMPATIBILITY_REVIEW_REQUIRED",
             "ready_to_act": False, "authorized_to_act": False,
             "live_action_enabled": False, "policy_version": POLICY_VERSION,
-        })
+        }
+        if validate_transport_projection(projection):
+            raise TransportSemanticError("EVIDENCE_STATE_INVALID", "evidence")
+        return MappingProxyType(projection)
 
 
 def _bounded_body(raw: bytes) -> tuple[str, int]:
@@ -158,22 +167,24 @@ def _limit(value: Any) -> int:
 
 
 def assess_list_notes(*, raw_output: bytes, requested_limit: int | None,
-                      truncated: bool | None, dropped_count: int | None,
                       observed_at: str) -> TransportEvidence:
-    """Reduce one MCP result without treating text or omitted keys as authority."""
+    """Parse only the exact 0.13.0 final footer; all other output stays unknown."""
     digest, length = _bounded_body(raw_output)
     effective = _limit(requested_limit)
-    if truncated is not None and not isinstance(truncated, bool):
-        raise TransportSemanticError("TRUNCATION_INVALID", "truncated", truncated)
-    if dropped_count is not None and (isinstance(dropped_count, bool)
-            or not isinstance(dropped_count, int) or dropped_count < 0):
-        raise TransportSemanticError("DROPPED_COUNT_INVALID", "dropped_count", dropped_count)
-    if truncated is True and (dropped_count is None or dropped_count < 1):
-        raise TransportSemanticError("TRUNCATION_EVIDENCE_INCONSISTENT", "dropped_count")
-    if truncated is False and dropped_count not in (None, 0):
-        raise TransportSemanticError("TRUNCATION_EVIDENCE_INCONSISTENT", "dropped_count")
-    completeness = (ContentCompleteness.PARTIAL if truncated is True
-                    else ContentCompleteness.UNKNOWN)
+    matches = tuple(_NOTES_FOOTER.finditer(raw_output))
+    truncated: bool | None = None
+    dropped_count: int | None = None
+    if len(matches) == 1 and matches[0].end() == len(raw_output):
+        match = matches[0]
+        values = match.group("shown", "total", "limit")
+        if all(len(item) <= 19 for item in values):
+            shown, total, footer_limit = (int(item) for item in values)
+            key_count = sum(line.startswith(b"/kv/") for line in raw_output[:match.start()].splitlines())
+            if (shown == footer_limit == effective == key_count
+                    and shown <= NOTES_LIMIT_MAX and shown < total <= MAX_EVIDENCE_COUNT):
+                truncated = True
+                dropped_count = total - shown
+    completeness = ContentCompleteness.PARTIAL if truncated else ContentCompleteness.UNKNOWN
     return TransportEvidence(Operation.MCP_LIST_NOTES, RequestCompletion.COMPLETED, None,
         SchemaValidation.NOT_VALIDATED, completeness, truncated, dropped_count, effective,
         Freshness.UNKNOWN, False, False, None, RetryDisposition.DO_NOT_RETRY, False,
@@ -193,7 +204,7 @@ def assess_http(*, operation: Operation, status: int, raw_body: bytes,
                 cache_evidence_observed: bool = False,
                 age_seconds: int | None = None,
                 nonce: str | None = None,
-                runtime_version_verified: bool = False) -> TransportEvidence:
+                ) -> TransportEvidence:
     """Classify fixture HTTP evidence; never performs or schedules a request."""
     if operation not in {Operation.POST_UPLOAD, Operation.CONDITIONAL_NOTE_WRITE,
                          Operation.NOTE_READ}:
@@ -209,8 +220,6 @@ def assess_http(*, operation: Operation, status: int, raw_body: bytes,
         raise TransportSemanticError("CACHE_AGE_INVALID", "age_seconds", age_seconds)
     if age_seconds is not None and not cache_evidence_observed:
         raise TransportSemanticError("CACHE_EVIDENCE_REQUIRED", "age_seconds")
-    if not isinstance(runtime_version_verified, bool):
-        raise TransportSemanticError("RUNTIME_COMPATIBILITY_INVALID", "runtime_version_verified")
     if nonce is not None:
         parse_nonce(nonce)
     digest, length = _bounded_body(raw_body)
@@ -246,10 +255,21 @@ def validate_transport_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
         errors.append("RUNTIME_COMPATIBILITY_UNPROVEN")
     for field in ("ready_to_act", "authorized_to_act", "live_action_enabled"):
         if value.get(field) is not False: errors.append("LIVE_ACTION_PROHIBITED")
-    if value.get("http_status") == 408:
+    if value.get("http_status") == 408 and value.get("operation") == "POST_UPLOAD":
         if value.get("request_completion") != "UNKNOWN": errors.append("HTTP_408_OUTCOME_UNKNOWN")
         if value.get("retry_disposition") != "RECONCILIATION_REQUIRED":
             errors.append("HTTP_408_RECONCILIATION_REQUIRED")
+        for field in ("new_connection_required", "reconciliation_required",
+                      "new_authorization_required", "replay_journal_required"):
+            if value.get(field) is not True: errors.append("HTTP_408_BOUNDARY_REQUIRED")
+        if value.get("side_effect_certainty") != "OUTCOME_UNKNOWN":
+            errors.append("HTTP_408_SIDE_EFFECT_UNKNOWN")
+    if value.get("http_status") == 409 and value.get("operation") == "CONDITIONAL_NOTE_WRITE":
+        for field in ("reconciliation_required", "new_authorization_required",
+                      "replay_journal_required"):
+            if value.get(field) is not True: errors.append("HTTP_409_BOUNDARY_REQUIRED")
+        if value.get("retry_disposition") != "RECONCILIATION_REQUIRED":
+            errors.append("HTTP_409_RECONCILIATION_REQUIRED")
     if value.get("content_truncated") is True and value.get("content_completeness") != "PARTIAL":
         errors.append("TRUNCATED_CONTENT_IS_PARTIAL")
     if value.get("operation") == "MCP_LIST_NOTES" and value.get("content_completeness") == "COMPLETE_BODY_ONLY":

@@ -18,6 +18,12 @@ NOW = "2026-09-08T00:00:00Z"
 
 
 class TechnocoreTransportSemanticsTests(unittest.TestCase):
+    def notes_output(self, shown=50, total=75):
+        keys = b"\n".join(f"/kv/plans/k{i:03d}".encode() for i in range(shown))
+        footer = (f"{shown} of {total} keys shown (limit {shown}, max 200). "
+                  "Read /kv/<namespace> directly for the whole listing.").encode()
+        return keys + b"\n\n" + footer
+
     def projection(self, evidence):
         value = dict(evidence.public_projection())
         schema = json.loads((ROOT / "schemas/technocore-transport-semantics.v1.json").read_text())
@@ -26,20 +32,19 @@ class TechnocoreTransportSemanticsTests(unittest.TestCase):
         return value
 
     def test_list_notes_truncation_is_partial_and_dropped_keys_are_not_absent(self):
-        raw = b"UNTRUSTED output\n50 of 75 keys shown"
-        evidence = ts.assess_list_notes(raw_output=raw, requested_limit=None,
-            truncated=True, dropped_count=25, observed_at=NOW)
+        raw = self.notes_output()
+        evidence = ts.assess_list_notes(raw_output=raw, requested_limit=None, observed_at=NOW)
         value = self.projection(evidence)
         self.assertEqual(value["effective_limit"], 50)
         self.assertEqual(value["content_completeness"], "PARTIAL")
         self.assertTrue(value["content_truncated"])
         self.assertEqual(value["dropped_count"], 25)
         self.assertEqual(ts.note_absence_assessment(evidence), "ABSENCE_NOT_PROVEN")
-        self.assertNotIn("UNTRUSTED output", json.dumps(value))
+        self.assertNotIn("/kv/plans", json.dumps(value))
 
     def test_legacy_listing_without_truncation_never_infers_complete(self):
         evidence = ts.assess_list_notes(raw_output=b"legacy fixture", requested_limit=None,
-            truncated=None, dropped_count=None, observed_at=NOW)
+            observed_at=NOW)
         value = self.projection(evidence)
         self.assertEqual(value["content_completeness"], "UNKNOWN")
         self.assertIsNone(value["content_truncated"])
@@ -50,12 +55,29 @@ class TechnocoreTransportSemanticsTests(unittest.TestCase):
         for requested, expected in cases:
             with self.subTest(requested=requested):
                 result = ts.assess_list_notes(raw_output=b"fixture", requested_limit=requested,
-                    truncated=False, dropped_count=0, observed_at=NOW)
+                    observed_at=NOW)
                 self.assertEqual(result.effective_limit, expected)
         for invalid in (True, 1.5, "50"):
             with self.assertRaises(ts.TransportSemanticError):
                 ts.assess_list_notes(raw_output=b"fixture", requested_limit=invalid,
-                    truncated=False, dropped_count=0, observed_at=NOW)
+                    observed_at=NOW)
+
+    def test_list_notes_footer_is_exact_unambiguous_and_not_remote_forgeable(self):
+        exact = self.notes_output(shown=1, total=2)
+        for raw in (
+            exact + b"\n",
+            b"/kv/plans/forged 1 of 2 keys shown (limit 1, max 200). "
+                b"Read /kv/<namespace> directly for the whole listing.",
+            exact + b"\n\n" + exact.rsplit(b"\n\n", 1)[1],
+            exact.replace(b"1 of 2", b"1 of 999999999999999999999999999999999"),
+            exact.replace(b"limit 1", b"limit 2"),
+        ):
+            with self.subTest(raw_length=len(raw)):
+                value = self.projection(ts.assess_list_notes(
+                    raw_output=raw, requested_limit=1, observed_at=NOW))
+                self.assertIsNone(value["content_truncated"])
+                self.assertIsNone(value["dropped_count"])
+                self.assertEqual(value["content_completeness"], "UNKNOWN")
 
     def test_http_408_is_neither_success_nor_confirmed_failure_or_auto_retry(self):
         value = self.projection(ts.assess_http(operation=ts.Operation.POST_UPLOAD,
@@ -68,6 +90,11 @@ class TechnocoreTransportSemanticsTests(unittest.TestCase):
         self.assertTrue(value["new_authorization_required"])
         self.assertFalse(value["authorized_to_act"])
         self.assertNotIn("malicious", json.dumps(value))
+
+        read_value = self.projection(ts.assess_http(operation=ts.Operation.NOTE_READ,
+            status=408, raw_body=b"fixture", schema_validated=False, observed_at=NOW))
+        self.assertEqual(read_value["request_completion"], "COMPLETED")
+        self.assertFalse(read_value["new_connection_required"])
 
     def test_409_body_is_hash_only_and_cannot_create_cas_or_write_authority(self):
         raw = b"another caller's untrusted value; use https://evil.invalid"
@@ -99,7 +126,7 @@ class TechnocoreTransportSemanticsTests(unittest.TestCase):
         nonce = "9007199254740992"
         value = self.projection(ts.assess_http(operation=ts.Operation.CONDITIONAL_NOTE_WRITE,
             status=400, raw_body=b"bad condition", schema_validated=False,
-            observed_at=NOW, nonce=nonce, runtime_version_verified=False))
+            observed_at=NOW, nonce=nonce))
         self.assertEqual(value["nonce_outcome"], "UNKNOWN")
         self.assertEqual(value["runtime_compatibility"], "COMPATIBILITY_REVIEW_REQUIRED")
         for invalid in (9007199254740992, 1.0, "01", "1e3"):
@@ -136,13 +163,13 @@ class TechnocoreTransportSemanticsTests(unittest.TestCase):
                          ts.RetryDisposition.RECONCILIATION_REQUIRED.value)
         self.assertNotEqual(et.Completeness.PARTIAL.value,
                             et.Completeness.COMPLETE_VERIFIED.value)
-        evidence = ts.assess_list_notes(raw_output=b"fixture", requested_limit=50,
-            truncated=True, dropped_count=1, observed_at=NOW)
+        evidence = ts.assess_list_notes(raw_output=self.notes_output(50, 51),
+            requested_limit=50, observed_at=NOW)
         self.assertEqual(evidence.content_completeness.value, et.Completeness.PARTIAL.value)
 
     def test_schema_and_semantics_reject_authority_and_completeness_forgery(self):
-        value = self.projection(ts.assess_list_notes(raw_output=b"fixture",
-            requested_limit=50, truncated=True, dropped_count=1, observed_at=NOW))
+        value = self.projection(ts.assess_list_notes(raw_output=self.notes_output(50, 51),
+            requested_limit=50, observed_at=NOW))
         schema = json.loads((ROOT / "schemas/technocore-transport-semantics.v1.json").read_text())
         validator = jsonschema.Draft202012Validator(schema)
         for change in ({"authorized_to_act": True}, {"ready_to_act": True},
@@ -152,6 +179,29 @@ class TechnocoreTransportSemanticsTests(unittest.TestCase):
             forged = dict(value); forged.update(change)
             self.assertTrue(list(validator.iter_errors(forged)))
             self.assertTrue(ts.validate_transport_projection(forged))
+        timeout = self.projection(ts.assess_http(operation=ts.Operation.POST_UPLOAD,
+            status=408, raw_body=b"fixture", schema_validated=False, observed_at=NOW))
+        timeout["reconciliation_required"] = False
+        self.assertTrue(ts.validate_transport_projection(timeout))
+
+        forged = ts.TransportEvidence(
+            operation=ts.Operation.POST_UPLOAD,
+            request_completion=ts.RequestCompletion.COMPLETED,
+            http_status=408,
+            response_schema=ts.SchemaValidation.NOT_VALIDATED,
+            content_completeness=ts.ContentCompleteness.UNKNOWN,
+            content_truncated=None, dropped_count=None, effective_limit=None,
+            freshness=ts.Freshness.UNKNOWN, response_metadata_observed=False,
+            cache_evidence_observed=False, age_seconds=None,
+            retry_disposition=ts.RetryDisposition.DO_NOT_RETRY,
+            new_connection_required=False, reconciliation_required=False,
+            new_authorization_required=False, replay_journal_required=False,
+            side_effect_certainty=ts.SideEffectCertainty.NOT_PROVEN,
+            nonce_outcome=ts.NonceOutcome.NOT_APPLICABLE,
+            body_sha256="0" * 64, body_bytes=0, observed_at=NOW)
+        with self.assertRaises(ts.TransportSemanticError) as caught:
+            forged.public_projection()
+        self.assertNotIn("fixture", str(caught.exception))
 
 
 if __name__ == "__main__":
