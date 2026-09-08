@@ -99,12 +99,13 @@ Production API classification:
 Final public-effect API inventory (reviewed 2026-09-08):
 
 - `SEALED_SERVICE`: reviewed HTTP/Technocore readers, readiness and monitor
-  services, fixed-source runtime observation, fixed-root monitor/KV persistence, fixed-ID receipt and fixture
+  services, fixed-source runtime observation, fixed-root monitor/KV persistence,
+  the fixed-root durable observation journal, fixed-ID receipt and fixture
   stores, local identity operations, Presence operations, activity append,
   receipt signing, and the sensitive-action router
 - `SAFE_STATIC`: remote classifiers/minimized evidence/receipt verification,
   dashboard text rendering, offline Technocore 0.13.0 transport evidence
-  classification, observation retention/predicate-migration ceremony, the fixed-root local durable observation journal, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
+  classification, observation retention/predicate-migration ceremony, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
   payment/Presence-write adapters
 - `DEPRECATED_INTERNAL`: underscore-prefixed fixture mechanisms and their
   private dependency-injecting factories only

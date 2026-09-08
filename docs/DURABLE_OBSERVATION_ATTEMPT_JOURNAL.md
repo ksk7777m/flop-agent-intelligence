@@ -40,12 +40,20 @@ a compromised host or malicious same-UID process.
 
 The journal and lock live only below the fixed Git-ignored runtime directory.
 The directory is `0700`; journal, lock and candidate are `0600`, owner-only,
-regular, single-link objects. No-follow opens, `O_EXCL` candidates, nonblocking
-OS file locking, complete-write loops, file fsync, atomic replace and directory
-fsync provide single-writer snapshot durability. Failure before replace keeps
+regular, single-link objects. The verified parent is opened first; the runtime
+root is then opened relative to that directory descriptor. Journal, lock and
+candidate opens, stat checks, candidate unlink, atomic replace, and directory
+fsync are anchored to the verified runtime directory descriptor. Descriptor
+metadata is compared with non-following directory-entry metadata. No-follow
+opens, `O_EXCL` candidates, a captured process `RLock`, nonblocking OS file
+locking, complete-write loops, file fsync, atomic replace and directory fsync
+provide single-writer snapshot durability. Tokens also bind their issuer PID,
+so a fork cannot reuse a parent token. Failure before replace keeps
 the old good journal. Failure after replace but before directory fsync is
-reported as failure and must be inspected; it is never claimed durable by the
-failed call.
+reported as `DURABILITY_UNKNOWN`, blocks subsequent writes in that service, and
+requires inspection/manual investigation. The call does not claim durable
+success and does not predict whether the old or new directory entry would have
+survived an actual crash.
 
 Crash before journal creation leaves only an absence of durable evidence, not
 proof that no request ran. A durable attempt/source intent without a durable
@@ -62,12 +70,23 @@ truncates, rotates, deletes, resumes, retries, creates a review/plan, or invokes
 a network operation. A process restart cannot reconstruct the sealed writer
 token.
 
+The physical file is an atomically replaced complete snapshot, not a physically
+append-only file. Every candidate includes the validated old sequence unchanged,
+adds one record whose previous hash equals the old head, stays below 2 MiB, and
+is parsed and hash-chain validated again before replace. At the limit, writes
+stop without deletion. With no external anchor, a valid older snapshot can be
+substituted without detection; the chain detects malformed tails, middle
+corruption, reordering, gaps and forks, but not disk rollback or host compromise.
+
 ## Privacy and remaining boundary
 
 The public projection contains only fixed IDs/hashes, enums, counts, booleans,
 and four ordered minimized source states. It excludes paths, filenames, UID,
 PID, hostname, raw response/header/error/URL, metadata, credentials and journal
 record bodies. It cannot be deserialized into writer or execution authority.
+Fixture result/evidence issuers are returned only by the private test factory;
+the production factory returns no issuer, and a fixture token belongs to a
+different sealed registry and cannot commit into a production-shaped service.
 
 Only local journal persistence is added. Manual reobservation runner remains
 unconnected. Retention/rotation/repair policy is absent. Runtime nonce remains

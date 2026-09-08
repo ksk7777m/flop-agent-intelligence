@@ -18,7 +18,7 @@ from flop_agent import evidence_transport, observation_retention, replay_journal
 
 class DurableObservationJournalTests(unittest.TestCase):
     def service(self, root, fault=None):
-        values = journal._build_store(Path(root), fault=fault)
+        values = journal._build_store(Path(root), fault=fault, fixture_issuers=True)
         return dict(zip(("prepare", "intent", "source_intent", "started", "result",
             "commit", "finalize", "inspect", "issue_result", "issue_evidence"), values))
 
@@ -38,6 +38,8 @@ class DurableObservationJournalTests(unittest.TestCase):
         self.assertEqual(tuple(inspect.signature(journal.inspect_journal).parameters), ())
         for name in journal.__all__:
             self.assertNotIn(name, {"_build_store", "_fixture_result", "_fixture_evidence"})
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(len(journal._build_store(Path(folder))), 8)
         source = inspect.getsource(journal)
         for forbidden in ("import urllib", "import requests", "import httpx", "import socket",
                           "import subprocess", "invoke_mcp(", "invoke_signer(", "use_wallet("):
@@ -79,6 +81,57 @@ class DurableObservationJournalTests(unittest.TestCase):
                 fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 with self.assertRaisesRegex(journal.JournalError, "DUPLICATE_WRITER"):
                     api["intent"](token)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); root.chmod(0o700); target = root / "target"; target.write_bytes(b"")
+            (root / ".journal.candidate").symlink_to(target)
+            with self.assertRaises(journal.JournalError): self.service(root)["prepare"]()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "fork required")
+    def test_other_process_writer_lock_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); api, token = self.prepared(root)
+            ready_r, ready_w = os.pipe(); release_r, release_w = os.pipe(); pid = os.fork()
+            if pid == 0:
+                os.close(ready_r); os.close(release_w)
+                fd = os.open(root / "journal.lock", os.O_RDWR)
+                fcntl.flock(fd, fcntl.LOCK_EX); os.write(ready_w, b"1"); os.read(release_r, 1)
+                os.close(fd); os.close(ready_w); os.close(release_r); os._exit(0)
+            os.close(ready_w); os.close(release_r); self.assertEqual(os.read(ready_r, 1), b"1")
+            with self.assertRaisesRegex(journal.JournalError, "DUPLICATE_WRITER"):
+                api["intent"](token)
+            os.write(release_w, b"1"); os.close(release_w); os.close(ready_r); os.waitpid(pid, 0)
+
+    def test_symlink_runtime_directory_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            parent = Path(folder); real = parent / "real"; real.mkdir(mode=0o700)
+            linked = parent / "linked"; linked.symlink_to(real, target_is_directory=True)
+            with self.assertRaises(journal.JournalError): self.service(linked)["inspect"]()
+
+    def test_thread_updates_are_serialized_without_lost_update(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api, token = self.prepared(folder); barrier = threading.Barrier(2); outcomes = []
+            def worker():
+                barrier.wait()
+                try: api["intent"](token); outcomes.append("OK")
+                except journal.JournalError as error: outcomes.append(error.code)
+            workers = [threading.Thread(target=worker) for _ in range(2)]
+            for worker in workers: worker.start()
+            for worker in workers: worker.join()
+            self.assertEqual(sorted(outcomes), ["DUPLICATE_ATTEMPT_INTENT", "OK"])
+            self.assertEqual(api["inspect"]()["record_count"], 2)
+
+    @unittest.skipUnless(hasattr(os, "fork"), "fork required")
+    def test_forked_process_cannot_reuse_parent_token(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api, token = self.prepared(folder); read_fd, write_fd = os.pipe(); pid = os.fork()
+            if pid == 0:
+                os.close(read_fd)
+                try: api["intent"](token); code = b"BAD"
+                except journal.JournalError as error: code = error.code.encode("ascii")
+                os.write(write_fd, code); os.close(write_fd); os._exit(0)
+            os.close(write_fd); result = os.read(read_fd, 128); os.close(read_fd); os.waitpid(pid, 0)
+            self.assertEqual(result, b"FOREIGN_PROCESS_ATTEMPT")
+            self.assertEqual(api["inspect"]()["record_count"], 1)
 
     def test_short_writes_complete_and_write_failure_preserves_good_state(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -107,8 +160,14 @@ class DurableObservationJournalTests(unittest.TestCase):
                 return real(fd)
             api = self.service(folder)
             with mock.patch.object(journal.os, "fsync", side_effect=fail_directory):
-                with self.assertRaises(journal.JournalError): api["prepare"]()
-            self.assertEqual(api["inspect"]()["journal_integrity"], "VALID")
+                with self.assertRaisesRegex(journal.JournalError, "DIRECTORY_FSYNC_DURABILITY_UNKNOWN"):
+                    api["prepare"]()
+            value = api["inspect"]()
+            self.assertEqual(value["journal_integrity"], "VALID")
+            self.assertEqual(value["durability"], "UNKNOWN")
+            self.assertTrue(value["reconciliation_required"])
+            with self.assertRaisesRegex(journal.JournalError, "DURABILITY_RECONCILIATION_REQUIRED"):
+                api["prepare"]()
 
     def test_hash_chain_sequence_duplicate_and_middle_corruption(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -212,6 +271,23 @@ class DurableObservationJournalTests(unittest.TestCase):
             with self.assertRaises(TypeError): token.__reduce__()
             with tempfile.TemporaryDirectory() as other:
                 with self.assertRaises(journal.JournalError): self.service(other)["intent"](token)
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            fixture, token = self.complete(first); sealed = fixture["issue_evidence"]()
+            production_shaped = journal._build_store(Path(second))
+            production_shaped[0]()
+            with self.assertRaisesRegex(journal.JournalError, "SEALED_V2_EVIDENCE_REQUIRED"):
+                production_shaped[5](object(), sealed)
+
+    def test_updates_use_directory_fd_anchoring(self):
+        with tempfile.TemporaryDirectory() as folder:
+            real_open = os.open; real_replace = os.replace
+            with mock.patch.object(journal.os, "open", wraps=real_open) as opened, \
+                 mock.patch.object(journal.os, "replace", wraps=real_replace) as replaced:
+                self.service(folder)["prepare"]()
+            self.assertTrue(any(call.kwargs.get("dir_fd") is not None for call in opened.call_args_list))
+            self.assertTrue(all(call.kwargs.get("src_dir_fd") is not None
+                                and call.kwargs.get("dst_dir_fd") is not None
+                                for call in replaced.call_args_list))
 
     def test_public_projection_schema_privacy_and_semantics(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -226,6 +302,15 @@ class DurableObservationJournalTests(unittest.TestCase):
             for change in ({"extra": {}}, {"record_count": True}, {"retry_count": 1},
                            {"automatic_retry_allowed": True}, {"sources": [{"raw": "private"}] * 4}):
                 forged = dict(value); forged.update(change); self.assertTrue(journal.validate_projection(forged))
+
+    def test_public_projection_rejects_finalized_incomplete_and_unblocked_states(self):
+        with tempfile.TemporaryDirectory() as folder:
+            value = dict(self.service(folder)["inspect"]())
+            forged = dict(value); forged["execution_blocked"] = False
+            self.assertTrue(journal.validate_projection(forged))
+            forged = dict(value); forged.update({"finalized": True, "evidence_committed": True,
+                "attempt_state": "FINALIZED"})
+            self.assertTrue(journal.validate_projection(forged))
 
     def test_fault_points_never_trigger_resume_or_network(self):
         points = {"BEFORE_CREATE", "LOCKED", "WRITE_PARTIAL", "FILE_FSYNCED", "RENAMED", "DIRECTORY_FSYNCED"}
