@@ -36,6 +36,12 @@ and reconciliation flag. Sequence, not wall time, orders records. The chain
 detects local damage and accidental substitution; it is not protection against
 a compromised host or malicious same-UID process.
 
+Inspection validates not only each record and hash link but the complete
+transition grammar: plan, optional permit consumption, attempt intent, each
+ordered source intent/request boundary/result, evidence commit, then finalize.
+Known record types cannot be reordered or used with contradictory source,
+result, evidence or state fields, even if a replacement hash chain is supplied.
+
 ## Persistence and crash meaning
 
 The journal and lock live only below the fixed Git-ignored runtime directory.

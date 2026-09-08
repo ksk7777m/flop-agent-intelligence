@@ -6,6 +6,7 @@ import pickle
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import jsonschema
 
@@ -75,6 +76,9 @@ class ManualReobservationRunnerTests(unittest.TestCase):
         self.assertFalse(plan["execution_enabled"])
         self.assertEqual(status["production_permit_issuer"], "ABSENT")
         self.assertEqual(status["live_get_count"], 0)
+        forged = dict(plan); forged["sources"] = [dict(item) for item in plan["sources"]]
+        forged["sources"][0]["ordinal"] = False
+        self.assertEqual(runner.validate_plan(forged), ("FIXED_SOURCES_INVALID",))
 
     def test_production_surface_has_no_issuer_execute_cli_or_scheduler(self):
         self.assertNotIn("_build_fixture_runner", runner.__all__)
@@ -86,6 +90,10 @@ class ManualReobservationRunnerTests(unittest.TestCase):
             self.assertNotIn(forbidden, source.lower())
         cli = Path("src/flop_agent/cli.py").read_text()
         self.assertNotIn("manual-reobservation", cli)
+        with tempfile.TemporaryDirectory() as folder:
+            production_api = journal._build_store(Path(folder))
+            with self.assertRaisesRegex(runner.RunnerError, "FIXTURE_JOURNAL_REQUIRED"):
+                runner._build_fixture_runner(production_api, lambda *_args: None)
 
     def test_exact_four_gets_fixed_order_and_finalized_journal(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -188,6 +196,80 @@ class ManualReobservationRunnerTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             state = recover(); self.assertTrue(state["reconciliation_required"])
             self.assertFalse(state["automatic_retry_allowed"])
+
+    def test_journal_plan_attempt_and_boundary_receipt_mismatch_fail_closed(self):
+        for position, field in ((8, "plan_id"), (1, "attempt_id"), (3, "attempt_generation")):
+            with self.subTest(position=position, field=field), tempfile.TemporaryDirectory() as folder:
+                calls = []
+                api = list(journal._build_store(Path(folder), fixture_issuers=True))
+                original = api[position]
+                def forged(*args, _original=original, _field=field):
+                    value = dict(_original(*args)); value[_field] = "f" * 64 if _field != "attempt_generation" else 1
+                    return value
+                api[position] = forged
+                def observer(*_args): calls.append(1); raise AssertionError("must not run")
+                issue, execute, _recover = runner._build_fixture_runner(tuple(api), observer)
+                with self.assertRaises(runner.RunnerError): execute(issue())
+                self.assertEqual(calls, [])
+
+    def test_permit_candidate_and_fsync_crashes_block_before_get(self):
+        for point in ("WRITE_PARTIAL", "FILE_FSYNCED", "RENAMED",
+                      "PERMIT_CONSUMED_DURABLE"):
+            with self.subTest(point=point), tempfile.TemporaryDirectory() as folder:
+                armed = False
+                def fault(current):
+                    nonlocal armed
+                    if current == "PLAN_DURABLE": armed = True
+                    elif armed and current == point: raise OSError("private detail")
+                (issue, execute, recover), calls, _api = self.service(folder, fault=fault)
+                permit = issue()
+                with self.assertRaises(runner.RunnerError): execute(permit)
+                self.assertEqual(calls, [])
+                state = recover(); self.assertTrue(state["execution_blocked"])
+                self.assertFalse(state["automatic_retry_allowed"])
+                if point == "RENAMED": self.assertEqual(state["durability"], "UNKNOWN")
+
+    def test_post_result_commit_and_finalize_faults_never_repeat_gets(self):
+        for point, expected_calls in (("SOURCE_RESULT_DURABLE", 1),
+                                      ("ALL_RESULTS_DURABLE", 4),
+                                      ("EVIDENCE_COMMITTED", 4),
+                                      ("BEFORE_FINALIZE", 4), ("FINALIZED", 4)):
+            with self.subTest(point=point), tempfile.TemporaryDirectory() as folder:
+                def fault(current):
+                    if current == point: raise OSError("private detail")
+                (issue, execute, recover), calls, _api = self.service(folder, fault=fault)
+                with self.assertRaises(runner.RunnerError): execute(issue())
+                self.assertEqual(len(calls), expected_calls)
+                before = len(calls)
+                with self.assertRaises(runner.RunnerError): execute(issue())
+                self.assertEqual(len(calls), before)
+                self.assertFalse(recover()["automatic_resume_allowed"])
+
+    def test_result_and_evidence_identities_bind_attempt_boundary_and_ordered_results(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (issue, execute, _recover), _calls, _api = self.service(folder)
+            real_hash = runner._hash; captured = []
+            def recording(value, domain):
+                captured.append((dict(value), domain)); return real_hash(value, domain)
+            with mock.patch.object(runner, "_hash", side_effect=recording):
+                execute(issue())
+            results = [value for value, domain in captured
+                       if domain == "MINIMIZED_SOURCE_RESULT"]
+            evidence = next(value for value, domain in captured
+                            if domain == "SEALED_V2_EVIDENCE")
+            self.assertEqual(len(results), 4)
+            result_ids = [real_hash(value, "MINIMIZED_SOURCE_RESULT") for value in results]
+            for ordinal, value in enumerate(results):
+                self.assertEqual(value["plan_id"], runner.PLAN_ID)
+                self.assertEqual(value["attempt_generation"], 0)
+                self.assertEqual(value["source_ordinal"], ordinal)
+                self.assertRegex(value["attempt_id"], r"^[0-9a-f]{64}$")
+                self.assertRegex(value["request_boundary_id"], r"^[0-9a-f]{64}$")
+                self.assertEqual(value["predicate_policy"], "technocore-runtime-predicates-v2")
+            self.assertEqual([item["result_id"] for item in evidence["sources"]], result_ids)
+            self.assertEqual([item["source_ordinal"] for item in evidence["sources"]], list(range(4)))
+            self.assertRegex(evidence["journal_precommit_head"], r"^[0-9a-f]{64}$")
+            self.assertEqual(evidence["attempt_id"], results[0]["attempt_id"])
 
 
 if __name__ == "__main__": unittest.main()

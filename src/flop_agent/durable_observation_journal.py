@@ -156,6 +156,16 @@ _RECORD_FIELDS = {"schema", "journal_id", "plan_id", "attempt_id", "predicate_po
     "previous_hash", "record_type", "attempt_state", "source_id", "source_ordinal",
     "source_state", "result_id", "evidence_id", "created_at",
     "reconciliation_required", "record_hash"}
+_RECORD_STATES = {
+    "PLAN_PREPARED": {AttemptState.PREPARED.value},
+    "PERMIT_CONSUMED": {AttemptState.PREPARED.value},
+    "ATTEMPT_INTENT": {AttemptState.INTENT_DURABLE.value},
+    "SOURCE_INTENT": {AttemptState.IN_PROGRESS.value},
+    "REQUEST_BOUNDARY": {AttemptState.IN_PROGRESS.value},
+    "SOURCE_RESULT": {AttemptState.IN_PROGRESS.value, AttemptState.RESULTS_COMPLETE.value},
+    "EVIDENCE_COMMIT": {AttemptState.EVIDENCE_COMMITTED.value},
+    "FINALIZE": {AttemptState.FINALIZED.value},
+}
 
 
 def _validate_record(value: Mapping[str, Any], previous: str, sequence: int,
@@ -180,6 +190,9 @@ def _validate_record(value: Mapping[str, Any], previous: str, sequence: int,
     if attempt_id is not None and value.get("attempt_id") != attempt_id: raise JournalError("ATTEMPT_FORK")
     body = dict(value); claimed = body.pop("record_hash")
     if claimed != _strict_hash(body, "JOURNAL_RECORD"): raise JournalError("RECORD_HASH_INVALID")
+    record_type = value.get("record_type")
+    if record_type not in _RECORD_STATES or value.get("attempt_state") not in _RECORD_STATES[record_type]:
+        raise JournalError("RECORD_TRANSITION_INVALID")
     source_id, ordinal = value.get("source_id"), value.get("source_ordinal")
     if source_id is None:
         if ordinal is not None or value.get("source_state") is not None: raise JournalError("SOURCE_BINDING_INVALID")
@@ -187,6 +200,18 @@ def _validate_record(value: Mapping[str, Any], previous: str, sequence: int,
         expected = [source.value for source in FIXED_SOURCES]
         if type(ordinal) is not int or not 0 <= ordinal < 4 or source_id != expected[ordinal]:
             raise JournalError("SOURCE_BINDING_INVALID")
+    source_records = {"SOURCE_INTENT", "REQUEST_BOUNDARY", "SOURCE_RESULT"}
+    if (record_type in source_records) != (source_id is not None):
+        raise JournalError("RECORD_SOURCE_CONTRADICTION")
+    if (record_type == "SOURCE_RESULT") != (value.get("result_id") is not None):
+        raise JournalError("RESULT_BINDING_INVALID")
+    if (record_type == "EVIDENCE_COMMIT") != (value.get("evidence_id") is not None):
+        raise JournalError("EVIDENCE_BINDING_INVALID")
+    for name in ("result_id", "evidence_id"):
+        item = value.get(name)
+        if item is not None and (type(item) is not str or len(item) != 64
+                or any(c not in "0123456789abcdef" for c in item)):
+            raise JournalError("RECORD_ID_INVALID")
     for name in ("reconciliation_required",):
         if type(value.get(name)) is not bool: raise JournalError("BOOLEAN_INVALID")
 
@@ -208,7 +233,39 @@ def _inspect_bytes(data: bytes) -> tuple[Integrity, list[dict[str, Any]]]:
         attempt_id = record["attempt_id"] if attempt_id is None else attempt_id
         previous = record["record_hash"]; records.append(record)
         if len(records) > 256: return Integrity.CORRUPT, []
+    if not _history_valid(records): return Integrity.CORRUPT, []
     return Integrity.VALID, records
+
+
+def _history_valid(records: list[dict[str, Any]]) -> bool:
+    if not records or records[0]["record_type"] != "PLAN_PREPARED": return False
+    index = 1
+    if index < len(records) and records[index]["record_type"] == "PERMIT_CONSUMED": index += 1
+    if index == len(records): return True
+    if records[index]["record_type"] != "ATTEMPT_INTENT": return False
+    index += 1
+    for ordinal in range(4):
+        if index == len(records): return True
+        if (records[index]["record_type"] != "SOURCE_INTENT"
+                or records[index]["source_ordinal"] != ordinal): return False
+        index += 1
+        if index == len(records): return True
+        if records[index]["record_type"] == "REQUEST_BOUNDARY":
+            if records[index]["source_ordinal"] != ordinal: return False
+            index += 1
+            if index == len(records): return True
+        if (records[index]["record_type"] != "SOURCE_RESULT"
+                or records[index]["source_ordinal"] != ordinal): return False
+        expected_state = (AttemptState.RESULTS_COMPLETE.value if ordinal == 3
+                          else AttemptState.IN_PROGRESS.value)
+        if records[index]["attempt_state"] != expected_state: return False
+        index += 1
+    if index == len(records): return True
+    if records[index]["record_type"] != "EVIDENCE_COMMIT": return False
+    index += 1
+    if index == len(records): return True
+    return (index + 1 == len(records)
+            and records[index]["record_type"] == "FINALIZE")
 
 
 def _safe_regular_info(info: os.stat_result) -> None:
@@ -326,7 +383,7 @@ def _build_store(root: Path, *, os_module: Any = os,
     def append(fields: dict[str, Any]) -> dict[str, Any]:
         nonlocal durability_unknown
         with io_lock:
-          lock_fd = dir_fd = -1
+          lock_fd = dir_fd = -1; published_replaced = False
           try:
             if durability_unknown: raise JournalError("DURABILITY_RECONCILIATION_REQUIRED")
             lock_fd, dir_fd = locked(); trip("LOCKED")
@@ -373,7 +430,8 @@ def _build_store(root: Path, *, os_module: Any = os,
                     or stat.S_IMODE(candidate_entry.st_mode) != 0o600
                     or candidate_entry.st_uid != os_module.getuid() or candidate_entry.st_nlink != 1):
                 raise JournalError("TEMP_UNSAFE")
-            os_module.replace(temporary_name, journal_name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd); trip("RENAMED")
+            os_module.replace(temporary_name, journal_name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            published_replaced = True; trip("RENAMED")
             try: os_module.fsync(dir_fd)
             except OSError:
                 durability_unknown = True
@@ -385,6 +443,9 @@ def _build_store(root: Path, *, os_module: Any = os,
                 raise JournalError("PUBLISHED_IDENTITY_INVALID")
             return record
           except OSError:
+            if published_replaced:
+                durability_unknown = True
+                raise JournalError("DIRECTORY_FSYNC_DURABILITY_UNKNOWN") from None
             raise JournalError("LOCAL_PERSISTENCE_FAILED") from None
           finally:
             try:
@@ -444,6 +505,8 @@ def _build_store(root: Path, *, os_module: Any = os,
             "result_id": result_id, "evidence_id": evidence_id,
             "reconciliation_required": reconciliation})
         return MappingProxyType({"sequence": record["sequence"], "state": state.value,
+            "plan_id": handle.plan_id, "attempt_id": handle.attempt_id,
+            "attempt_generation": handle.generation, "record_hash": record["record_hash"],
             "durable": True, "network_invocations": 0})
 
     def durable_intent(token: _AttemptToken) -> Mapping[str, Any]:

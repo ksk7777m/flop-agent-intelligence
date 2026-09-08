@@ -183,6 +183,38 @@ class DurableObservationJournalTests(unittest.TestCase):
                 self.assertTrue(result["manual_investigation_required"])
                 path.write_bytes(original); path.chmod(0o600)
 
+    def test_rehashed_unknown_record_type_and_binding_contradictions_are_corrupt(self):
+        mutations = (
+            lambda row: row.__setitem__("record_type", "UNKNOWN"),
+            lambda row: row.__setitem__("evidence_id", "1" * 64),
+            lambda row: row.__setitem__("result_id", "2" * 64),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as folder:
+                api, _token = self.prepared(folder); path = Path(folder) / "journal.jsonl"
+                row = json.loads(path.read_text()); mutation(row)
+                body = dict(row); body.pop("record_hash")
+                row["record_hash"] = journal._strict_hash(body, "JOURNAL_RECORD")
+                path.write_text(json.dumps(row) + "\n"); path.chmod(0o600)
+                self.assertEqual(api["inspect"]()["journal_integrity"], "CORRUPT")
+
+    def test_rehashed_valid_record_cannot_skip_lifecycle(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api, token = self.prepared(folder); api["intent"](token)
+            api["source_intent"](token, observation_retention.FIXED_SOURCES[0])
+            path = Path(folder) / "journal.jsonl"
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            row = rows[-1]
+            row.update({"record_type": "EVIDENCE_COMMIT",
+                "attempt_state": "EVIDENCE_COMMITTED", "source_id": None,
+                "source_ordinal": None, "source_state": None,
+                "result_id": None, "evidence_id": "3" * 64})
+            body = dict(row); body.pop("record_hash")
+            row["record_hash"] = journal._strict_hash(body, "JOURNAL_RECORD")
+            rows[-1] = row
+            path.write_text("".join(json.dumps(item) + "\n" for item in rows)); path.chmod(0o600)
+            self.assertEqual(api["inspect"]()["journal_integrity"], "CORRUPT")
+
     def test_torn_tail_is_not_repaired_or_counted(self):
         with tempfile.TemporaryDirectory() as folder:
             api, _ = self.prepared(folder); path = Path(folder) / "journal.jsonl"

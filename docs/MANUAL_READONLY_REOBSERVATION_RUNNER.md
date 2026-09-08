@@ -37,8 +37,13 @@ safe retry.
 
 ## Evidence and privacy
 
-Only field-by-field minimized source results are hashed and journaled. The
-runner accepts only the sealed runtime observer result type and exact closed
+Only field-by-field minimized source results are hashed and journaled. Each
+result identity binds the exact plan and attempt, generation, source ordinal,
+durable request-boundary record identity, transport/semantic/version/cache
+outcomes, completeness, minimized body-evidence state and predicate v2. The
+evidence identity binds the four ordered result identities, observation policy,
+attempt identity and the final source-result journal head used as its
+pre-commit point. The runner accepts only the sealed runtime observer result type and exact closed
 projection; arbitrary mappings, nested metadata, raw bodies, headers, errors,
 URLs or provider payloads cannot become evidence. Exception text is not echoed.
 The public schema closes both the descriptive plan and disabled status.

@@ -5,14 +5,19 @@
   "oneOf": [
     {
       "type": "object", "additionalProperties": false,
-      "required": ["schema","record_type","plan_id","operation","predicate_policy","predicate_policy_hash","source_set_id","source_order_hash","source_count","method","request_count_per_source","retry_count","redirects_allowed","fallback_enabled","automatic_resume_allowed","execution_enabled","ready_to_act","authorized_to_act"],
+      "required": ["schema","record_type","plan_id","operation","predicate_policy","predicate_policy_hash","source_set_id","source_order_hash","source_count","sources","method","request_count_per_source","timeout_seconds","body_cap_bytes","retry_count","redirects_allowed","fallback_enabled","alternate_url_enabled","remote_mcp_enabled","signing_enabled","external_write_enabled","scheduler_enabled","automatic_resume_allowed","execution_enabled","ready_to_act","authorized_to_act"],
       "properties": {
         "schema":{"const":"manual-readonly-reobservation-runner-v1"}, "record_type":{"const":"FIXED_PLAN"},
         "plan_id":{"$ref":"#/$defs/hash"}, "operation":{"const":"READ_ONLY_REOBSERVATION"},
         "predicate_policy":{"const":"technocore-runtime-predicates-v2"}, "predicate_policy_hash":{"$ref":"#/$defs/hash"},
         "source_set_id":{"const":"technocore-runtime-fixed-source-set-v1"}, "source_order_hash":{"$ref":"#/$defs/hash"},
         "source_count":{"const":4}, "method":{"const":"GET"}, "request_count_per_source":{"const":1},
+        "sources":{"type":"array","prefixItems":[
+          {"$ref":"#/$defs/llms"},{"$ref":"#/$defs/openapi"},{"$ref":"#/$defs/manifest"},{"$ref":"#/$defs/config"}],"items":false,"minItems":4,"maxItems":4},
+        "timeout_seconds":{"type":"number","exclusiveMinimum":0}, "body_cap_bytes":{"type":"integer","minimum":1},
         "retry_count":{"const":0}, "redirects_allowed":{"const":false}, "fallback_enabled":{"const":false},
+        "alternate_url_enabled":{"const":false}, "remote_mcp_enabled":{"const":false},
+        "signing_enabled":{"const":false}, "external_write_enabled":{"const":false}, "scheduler_enabled":{"const":false},
         "automatic_resume_allowed":{"const":false}, "execution_enabled":{"const":false},
         "ready_to_act":{"const":false}, "authorized_to_act":{"const":false}
       }
@@ -34,5 +39,12 @@
       }
     }
   ],
-  "$defs": {"hash":{"type":"string","pattern":"^[0-9a-f]{64}$"}}
+  "$defs": {
+    "hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "llms":{"$ref":"#/$defs/sourceBase","properties":{"source_id":{"const":"TECHNOCORE_LLMS"},"ordinal":{"const":0}}},
+    "openapi":{"$ref":"#/$defs/sourceBase","properties":{"source_id":{"const":"TECHNOCORE_OPENAPI"},"ordinal":{"const":1}}},
+    "manifest":{"$ref":"#/$defs/sourceBase","properties":{"source_id":{"const":"TECHNOCORE_AGENT_MANIFEST"},"ordinal":{"const":2}}},
+    "config":{"$ref":"#/$defs/sourceBase","properties":{"source_id":{"const":"TECHNOCORE_CONFIG"},"ordinal":{"const":3}}},
+    "sourceBase":{"type":"object","additionalProperties":false,"required":["source_id","ordinal"],"properties":{"source_id":{"type":"string"},"ordinal":{"type":"integer","minimum":0,"maximum":3}}}
+  }
 }

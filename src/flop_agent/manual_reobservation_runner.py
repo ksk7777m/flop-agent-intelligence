@@ -32,6 +32,9 @@ _SOURCE_FIELDS = {"source_id", "source_class", "request_attempted", "request_com
     "cache_policy_observed", "age_state", "cache_control_class", "validator_present",
     "freshness", "body_sha256", "body_bytes", "observed_at",
     "predicate_policy_revision"}
+_BOOL_SOURCE_FIELDS = {"request_attempted", "request_completed", "final_url_matched",
+    "redirect_detected", "response_size_accepted", "content_type_accepted",
+    "cache_policy_observed", "validator_present"}
 
 
 class RunnerError(RuntimeError):
@@ -105,8 +108,14 @@ def fixed_plan_projection() -> Mapping[str, Any]:
         "predicate_policy": PredicatePolicy.V2.value,
         "predicate_policy_hash": PREDICATE_POLICY_HASHES[PredicatePolicy.V2],
         "source_set_id": SOURCE_SET_ID, "source_order_hash": SOURCE_ORDER_HASH,
-        "source_count": 4, "method": "GET", "request_count_per_source": 1,
+        "source_count": 4, "sources": [{"source_id": source.value, "ordinal": ordinal}
+            for ordinal, source in enumerate(FIXED_SOURCES)],
+        "method": "GET", "request_count_per_source": 1,
+        "timeout_seconds": DEFAULT_HTTP_TIMEOUT_SECONDS, "body_cap_bytes": DEFAULT_RESPONSE_LIMIT,
         "retry_count": 0, "redirects_allowed": False, "fallback_enabled": False,
+        "alternate_url_enabled": False, "remote_mcp_enabled": False,
+        "signing_enabled": False, "external_write_enabled": False,
+        "scheduler_enabled": False,
         "automatic_resume_allowed": False, "execution_enabled": False,
         "ready_to_act": False, "authorized_to_act": False}
     if validate_plan(value): raise RunnerError("PLAN_INVALID")
@@ -119,12 +128,24 @@ def validate_plan(value: Mapping[str, Any]) -> tuple[str, ...]:
         "predicate_policy": PredicatePolicy.V2.value,
         "predicate_policy_hash": PREDICATE_POLICY_HASHES[PredicatePolicy.V2],
         "source_set_id": SOURCE_SET_ID, "source_order_hash": SOURCE_ORDER_HASH,
-        "source_count": 4, "method": "GET", "request_count_per_source": 1,
+        "source_count": 4, "sources": [{"source_id": source.value, "ordinal": ordinal}
+            for ordinal, source in enumerate(FIXED_SOURCES)],
+        "method": "GET", "request_count_per_source": 1,
+        "timeout_seconds": DEFAULT_HTTP_TIMEOUT_SECONDS, "body_cap_bytes": DEFAULT_RESPONSE_LIMIT,
         "retry_count": 0, "redirects_allowed": False, "fallback_enabled": False,
+        "alternate_url_enabled": False, "remote_mcp_enabled": False,
+        "signing_enabled": False, "external_write_enabled": False,
+        "scheduler_enabled": False,
         "automatic_resume_allowed": False, "execution_enabled": False,
         "ready_to_act": False, "authorized_to_act": False}
     if not isinstance(value, Mapping) or set(value) != set(expected):
         return ("CLOSED_FIELDS_REQUIRED",)
+    sources = value.get("sources")
+    if (type(sources) is not list or len(sources) != 4
+            or any(type(item) is not dict or set(item) != {"source_id", "ordinal"}
+                   or type(item.get("source_id")) is not str
+                   or type(item.get("ordinal")) is not int for item in sources)):
+        return ("FIXED_SOURCES_INVALID",)
     return (("FIXED_PLAN_INVALID",) if any(
         value.get(key) != item or type(value.get(key)) is not type(item)
         for key, item in expected.items()) else ())
@@ -172,6 +193,26 @@ def validate_status(value: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(errors)
 
 
+def _validate_source(projection: Mapping[str, Any], source: Any) -> None:
+    if (not isinstance(projection, Mapping) or set(projection) != _SOURCE_FIELDS
+            or projection.get("source_id") != source.value
+            or projection.get("predicate_policy_revision") != PredicatePolicy.V2.value
+            or projection.get("observed_at") != _OBSERVED_AT
+            or any(type(projection.get(name)) is not bool for name in _BOOL_SOURCE_FIELDS)
+            or (projection.get("http_status") is not None
+                and type(projection.get("http_status")) is not int)
+            or (projection.get("body_bytes") is not None
+                and (type(projection.get("body_bytes")) is not int
+                     or not 0 <= projection["body_bytes"] <= DEFAULT_RESPONSE_LIMIT))
+            or (projection.get("body_sha256") is not None
+                and (type(projection.get("body_sha256")) is not str
+                     or len(projection["body_sha256"]) != 64
+                     or any(c not in "0123456789abcdef" for c in projection["body_sha256"])))
+            or ((projection.get("body_sha256") is None)
+                != (projection.get("body_bytes") is None))):
+        raise RunnerError("OBSERVER_RESULT_INVALID")
+
+
 def _build_fixture_runner(journal_api: tuple[Callable[..., Any], ...],
                           observer: Callable[[Any, str], Any],
                           *, pid: Callable[[], int] = os.getpid
@@ -204,40 +245,88 @@ def _build_fixture_runner(journal_api: tuple[Callable[..., Any], ...],
         try: attempt = prepare()
         except Exception: raise RunnerError("JOURNAL_PREPARE_BLOCKED") from None
         binding["consumed"] = True
-        try: permit_durable(attempt)
+        try: permit_receipt = permit_durable(attempt)
         except Exception: raise RunnerError("RECONCILIATION_REQUIRED") from None
-        try: attempt_intent(attempt)
+        if (permit_receipt.get("plan_id") != PLAN_ID
+                or permit_receipt.get("attempt_generation") != 0):
+            raise RunnerError("JOURNAL_PLAN_MISMATCH")
+        try: attempt_receipt = attempt_intent(attempt)
         except Exception: raise RunnerError("RECONCILIATION_REQUIRED") from None
+        attempt_id = attempt_receipt.get("attempt_id")
+        if (attempt_receipt.get("plan_id") != PLAN_ID
+                or attempt_receipt.get("attempt_generation") != 0
+                or type(attempt_id) is not str or len(attempt_id) != 64):
+            raise RunnerError("JOURNAL_ATTEMPT_MISMATCH")
         minimized = []
-        for source in FIXED_SOURCES:
-            try: source_intent(attempt, source)
+        journal_head = attempt_receipt.get("record_hash")
+        for ordinal, source in enumerate(FIXED_SOURCES):
+            try: source_receipt = source_intent(attempt, source)
             except Exception: raise RunnerError("RECONCILIATION_REQUIRED") from None
-            try: request_boundary(attempt, source)
+            try: boundary_receipt = request_boundary(attempt, source)
             except Exception: raise RunnerError("RECONCILIATION_REQUIRED") from None
+            if (source_receipt.get("plan_id") != PLAN_ID
+                    or source_receipt.get("attempt_id") != attempt_id
+                    or boundary_receipt.get("plan_id") != PLAN_ID
+                    or boundary_receipt.get("attempt_id") != attempt_id
+                    or boundary_receipt.get("attempt_generation") != 0):
+                raise RunnerError("JOURNAL_BOUNDARY_MISMATCH")
             try: observed = observer(source, _OBSERVED_AT)
             except Exception: raise RunnerError("SOURCE_OUTCOME_UNKNOWN") from None
             if type(observed) is not runtime._SourceObservation:
                 raise RunnerError("SEALED_OBSERVER_RESULT_REQUIRED")
-            projection = observed.public_projection()
-            required = {"source_id", "request_completed", "capability_state", "version_evidence",
-                        "freshness", "body_sha256", "body_bytes", "predicate_policy_revision"}
-            if (not isinstance(projection, Mapping)
-                    or set(projection) != _SOURCE_FIELDS
-                    or projection.get("source_id") != source.value
-                    or projection.get("predicate_policy_revision") != PredicatePolicy.V2.value):
-                raise RunnerError("OBSERVER_RESULT_INVALID")
-            result = {key: projection[key] for key in sorted(required)}
+            try: projection = observed.public_projection()
+            except Exception: raise RunnerError("OBSERVER_RESULT_INVALID") from None
+            _validate_source(projection, source)
+            complete = (projection["request_attempted"] is True
+                and projection["request_completed"] is True
+                and projection["http_status"] == 200
+                and projection["final_url_matched"] is True
+                and projection["redirect_detected"] is False
+                and projection["response_size_accepted"] is True
+                and projection["content_type_accepted"] is True
+                and projection["schema_validation"] == "VALIDATED"
+                and projection["capability_state"] == "OBSERVED_IN_LIVE_DOCUMENT"
+                and projection["body_sha256"] is not None)
+            result = {"schema": EVIDENCE_SCHEMA, "plan_id": PLAN_ID,
+                "attempt_id": attempt_id, "attempt_generation": 0,
+                "source_id": source.value, "source_ordinal": ordinal,
+                "request_boundary_id": boundary_receipt["record_hash"],
+                "request_completed": projection["request_completed"],
+                "http_status": projection["http_status"],
+                "final_url_matched": projection["final_url_matched"],
+                "redirect_detected": projection["redirect_detected"],
+                "response_size_accepted": projection["response_size_accepted"],
+                "content_type_accepted": projection["content_type_accepted"],
+                "schema_validation": projection["schema_validation"],
+                "semantic_result": projection["capability_state"],
+                "version_evidence": projection["version_evidence"],
+                "freshness": projection["freshness"],
+                "cache_control_class": projection["cache_control_class"],
+                "validator_present": projection["validator_present"],
+                "completeness": "COMPLETE" if complete else "INCOMPLETE",
+                "body_evidence": "MINIMIZED_SHA256_AND_LENGTH" if projection["body_sha256"] else "NOT_AVAILABLE",
+                "body_sha256": projection["body_sha256"], "body_bytes": projection["body_bytes"],
+                "predicate_policy": PredicatePolicy.V2.value,
+                "predicate_policy_hash": PREDICATE_POLICY_HASHES[PredicatePolicy.V2]}
             result_id = _hash(result, "MINIMIZED_SOURCE_RESULT")
-            try: result_durable(attempt, source, issue_result(source, result_id))
+            try: result_receipt = result_durable(attempt, source, issue_result(source, result_id))
             except Exception: raise RunnerError("SOURCE_OUTCOME_UNKNOWN") from None
-            minimized.append({"source_id": source.value, "result_id": result_id,
+            if (result_receipt.get("plan_id") != PLAN_ID
+                    or result_receipt.get("attempt_id") != attempt_id
+                    or result_receipt.get("attempt_generation") != 0):
+                raise RunnerError("JOURNAL_RESULT_MISMATCH")
+            journal_head = result_receipt.get("record_hash")
+            minimized.append({"source_id": source.value, "source_ordinal": ordinal,
+                "result_id": result_id,
                 "semantic": projection.get("capability_state"),
                 "version": projection.get("version_evidence"),
                 "freshness": projection.get("freshness")})
-            if (projection.get("request_completed") is not True
-                    or projection.get("capability_state") != "OBSERVED_IN_LIVE_DOCUMENT"):
+            if not complete:
                 raise RunnerError("SEMANTIC_OR_TRANSPORT_GAP")
         evidence_material = {"schema": EVIDENCE_SCHEMA, "plan_id": PLAN_ID,
+            "attempt_id": attempt_id, "attempt_generation": 0,
+            "journal_precommit_head": journal_head,
+            "observation_policy": OBSERVATION_POLICY,
             "predicate_policy": PredicatePolicy.V2.value,
             "predicate_policy_hash": PREDICATE_POLICY_HASHES[PredicatePolicy.V2],
             "source_set_id": SOURCE_SET_ID, "source_order_hash": SOURCE_ORDER_HASH,
