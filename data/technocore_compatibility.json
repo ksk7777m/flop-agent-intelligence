@@ -74,7 +74,10 @@
     "current_predicate_policy_revision": "technocore-runtime-predicates-v2",
     "llms_result": "OBSERVED_UNDER_SUPERSEDED_POLICY",
     "reobservation_status": "REOBSERVATION_REQUIRED",
-    "source_set_complete": false
+    "source_set_complete": false,
+    "evidence_retention": "RETAINED",
+    "currentness": "CURRENTNESS_UNKNOWN",
+    "retention_policy": "RETENTION_POLICY_REQUIRED"
   },
   "freshness": {
     "status": "REVIEW_REQUIRED",

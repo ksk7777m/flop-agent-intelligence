@@ -581,6 +581,9 @@ class RemoteContentPolicyTests(unittest.TestCase):
             "llms_result": "OBSERVED_UNDER_SUPERSEDED_POLICY",
             "reobservation_status": "REOBSERVATION_REQUIRED",
             "source_set_complete": False,
+            "evidence_retention": "RETAINED",
+            "currentness": "CURRENTNESS_UNKNOWN",
+            "retention_policy": "RETENTION_POLICY_REQUIRED",
         })
         self.assertIsNone(manifest["deployment_observations"]["limits"])
 

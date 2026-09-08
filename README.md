@@ -113,6 +113,13 @@ minimal semantic/cache state. It performs no retry or persistence and cannot
 create action authority. See
 [Runtime Read-only Observation](docs/TECHNOCORE_RUNTIME_READONLY_OBSERVATION.md).
 
+## Observation Retention and Predicate Migration
+
+The offline ceremony retains superseded observation evidence, binds predicate
+generations, prepares a fixed manual reobservation plan, and journals fixture
+attempt states without executing network requests or granting authority. See
+[Observation Retention and Predicate Migration](docs/OBSERVATION_RETENTION_PREDICATE_MIGRATION.md).
+
 ## Wire Evidence, Signer, and Verifier Hardening V1
 
 The offline hardening layer preserves nonce values as exact decimal strings,

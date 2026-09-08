@@ -104,7 +104,7 @@ Final public-effect API inventory (reviewed 2026-09-08):
   receipt signing, and the sensitive-action router
 - `SAFE_STATIC`: remote classifiers/minimized evidence/receipt verification,
   dashboard text rendering, offline Technocore 0.13.0 transport evidence
-  classification, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
+  classification, observation retention/predicate-migration ceremony, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
   payment/Presence-write adapters
 - `DEPRECATED_INTERNAL`: underscore-prefixed fixture mechanisms and their
   private dependency-injecting factories only

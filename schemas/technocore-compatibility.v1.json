@@ -76,13 +76,16 @@
     },
     "observation_policy_binding": {
       "type": "object", "additionalProperties": false,
-      "required": ["observed_predicate_policy_revision", "current_predicate_policy_revision", "llms_result", "reobservation_status", "source_set_complete"],
+      "required": ["observed_predicate_policy_revision", "current_predicate_policy_revision", "llms_result", "reobservation_status", "source_set_complete", "evidence_retention", "currentness", "retention_policy"],
       "properties": {
         "observed_predicate_policy_revision": {"const": "technocore-runtime-predicates-v1"},
         "current_predicate_policy_revision": {"const": "technocore-runtime-predicates-v2"},
         "llms_result": {"const": "OBSERVED_UNDER_SUPERSEDED_POLICY"},
         "reobservation_status": {"const": "REOBSERVATION_REQUIRED"},
-        "source_set_complete": {"const": false}
+        "source_set_complete": {"const": false},
+        "evidence_retention": {"const": "RETAINED"},
+        "currentness": {"const": "CURRENTNESS_UNKNOWN"},
+        "retention_policy": {"const": "RETENTION_POLICY_REQUIRED"}
       }
     },
     "freshness": {
