@@ -120,6 +120,12 @@ generations, prepares a fixed manual reobservation plan, and journals fixture
 attempt states without executing network requests or granting authority. See
 [Observation Retention and Predicate Migration](docs/OBSERVATION_RETENTION_PREDICATE_MIGRATION.md).
 
+## Durable Observation Attempt Journal
+
+The local-only durable journal records write-ahead observation intent, detects
+crash ambiguity and corruption, and never resumes or retries automatically. See
+[Durable Observation Attempt Journal](docs/DURABLE_OBSERVATION_ATTEMPT_JOURNAL.md).
+
 ## Wire Evidence, Signer, and Verifier Hardening V1
 
 The offline hardening layer preserves nonce values as exact decimal strings,

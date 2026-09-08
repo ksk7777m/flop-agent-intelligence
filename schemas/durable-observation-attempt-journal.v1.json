@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/durable-observation-attempt-journal.v1.json",
+  "title": "Durable Observation Attempt Journal V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema","status","durable_state_found","journal_integrity","attempt_state","record_count","last_sequence","attempt_generation","predicate_policy","source_set_id","source_order_hash","sources","evidence_committed","finalized","reconciliation_required","execution_blocked","automatic_resume_allowed","automatic_retry_allowed","new_human_review_required","new_plan_required","manual_investigation_required","retry_count","raw_content_retained","live_action_enabled","ready_to_act","authorized_to_act","policy_version"],
+  "properties": {
+    "schema": {"const": "durable-observation-attempt-journal-v1"},
+    "status": {"const": "DESCRIPTIVE_ONLY"},
+    "durable_state_found": {"type": "boolean"},
+    "journal_integrity": {"enum": ["ABSENT","VALID","TORN_TAIL","CORRUPT"]},
+    "attempt_state": {"enum": ["PREPARED","INTENT_DURABLE","IN_PROGRESS","INTERRUPTED","OUTCOME_UNKNOWN","RESULTS_COMPLETE","EVIDENCE_COMMITTED","FINALIZED","ABANDONED","RECONCILIATION_REQUIRED"]},
+    "record_count": {"type": "integer", "minimum": 0, "maximum": 256},
+    "last_sequence": {"type": ["integer","null"], "minimum": 0, "maximum": 255},
+    "attempt_generation": {"type": ["integer","null"], "minimum": 0, "maximum": 0},
+    "predicate_policy": {"const": "technocore-runtime-predicates-v2"},
+    "source_set_id": {"const": "technocore-runtime-fixed-source-set-v1"},
+    "source_order_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sources": {"type": "array", "minItems": 4, "maxItems": 4,
+      "prefixItems": [
+        {"$ref": "#/$defs/llms"}, {"$ref": "#/$defs/openapi"},
+        {"$ref": "#/$defs/manifest"}, {"$ref": "#/$defs/config"}
+      ], "items": false},
+    "evidence_committed": {"type": "boolean"},
+    "finalized": {"type": "boolean"},
+    "reconciliation_required": {"type": "boolean"},
+    "execution_blocked": {"type": "boolean"},
+    "automatic_resume_allowed": {"const": false},
+    "automatic_retry_allowed": {"const": false},
+    "new_human_review_required": {"type": "boolean"},
+    "new_plan_required": {"type": "boolean"},
+    "manual_investigation_required": {"type": "boolean"},
+    "retry_count": {"const": 0},
+    "raw_content_retained": {"const": false},
+    "live_action_enabled": {"const": false},
+    "ready_to_act": {"const": false},
+    "authorized_to_act": {"const": false},
+    "policy_version": {"const": "local-durable-observation-journal-policy-v1"}
+  },
+  "$defs": {
+    "source": {"type": "object", "additionalProperties": false,
+      "required": ["source_id","ordinal","state"], "properties": {
+        "source_id": {"type": "string"}, "ordinal": {"type": "integer", "minimum": 0, "maximum": 3},
+        "state": {"enum": ["NOT_ATTEMPTED","INTENT_DURABLE","REQUEST_MAY_HAVE_STARTED","RESULT_DURABLE","OUTCOME_UNKNOWN","FAILED_CONFIRMED"]}
+      }},
+    "llms": {"allOf": [{"$ref": "#/$defs/source"}, {"properties": {"source_id": {"const": "TECHNOCORE_LLMS"}, "ordinal": {"const": 0}}}]},
+    "openapi": {"allOf": [{"$ref": "#/$defs/source"}, {"properties": {"source_id": {"const": "TECHNOCORE_OPENAPI"}, "ordinal": {"const": 1}}}]},
+    "manifest": {"allOf": [{"$ref": "#/$defs/source"}, {"properties": {"source_id": {"const": "TECHNOCORE_AGENT_MANIFEST"}, "ordinal": {"const": 2}}}]},
+    "config": {"allOf": [{"$ref": "#/$defs/source"}, {"properties": {"source_id": {"const": "TECHNOCORE_CONFIG"}, "ordinal": {"const": 3}}}]}
+  }
+}

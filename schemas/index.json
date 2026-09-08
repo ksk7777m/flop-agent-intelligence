@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "Durable Observation Attempt Journal V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/durable-observation-attempt-journal.v1.json",
+      "path": "schemas/durable-observation-attempt-journal.v1.json",
+      "purpose": "Validates minimized crash-reconciliation state for the fixed local observation attempt journal.",
+      "related_endpoint": null
+    },
+    {
       "name": "Observation Retention and Predicate Migration Ceremony V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/observation-retention-ceremony.v1.json",
       "path": "schemas/observation-retention-ceremony.v1.json",
