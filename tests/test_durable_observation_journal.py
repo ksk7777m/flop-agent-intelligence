@@ -20,7 +20,7 @@ class DurableObservationJournalTests(unittest.TestCase):
     def service(self, root, fault=None):
         values = journal._build_store(Path(root), fault=fault, fixture_issuers=True)
         return dict(zip(("prepare", "intent", "source_intent", "started", "result",
-            "commit", "finalize", "inspect", "issue_result", "issue_evidence"), values))
+            "commit", "finalize", "inspect", "permit", "issue_result", "issue_evidence"), values))
 
     def prepared(self, root):
         api = self.service(root); token = api["prepare"](); return api, token
@@ -39,7 +39,7 @@ class DurableObservationJournalTests(unittest.TestCase):
         for name in journal.__all__:
             self.assertNotIn(name, {"_build_store", "_fixture_result", "_fixture_evidence"})
         with tempfile.TemporaryDirectory() as folder:
-            self.assertEqual(len(journal._build_store(Path(folder))), 8)
+            self.assertEqual(len(journal._build_store(Path(folder))), 9)
         source = inspect.getsource(journal)
         for forbidden in ("import urllib", "import requests", "import httpx", "import socket",
                           "import subprocess", "invoke_mcp(", "invoke_signer(", "use_wallet("):
@@ -243,6 +243,21 @@ class DurableObservationJournalTests(unittest.TestCase):
             api["source_intent"](token, first)
             with self.assertRaisesRegex(journal.JournalError, "SOURCE_ORDER_OR_PRIOR_OUTCOME_INVALID"):
                 api["source_intent"](token, second)
+
+    def test_permit_consumption_is_durable_once_and_precedes_attempt_intent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            api, token = self.prepared(folder)
+            api["permit"](token); api["intent"](token)
+            with self.assertRaisesRegex(journal.JournalError, "DUPLICATE_PERMIT_CONSUMPTION"):
+                api["permit"](token)
+            rows = [json.loads(line) for line in
+                    (Path(folder) / "journal.jsonl").read_text().splitlines()]
+            self.assertEqual([row["record_type"] for row in rows[:3]],
+                             ["PLAN_PREPARED", "PERMIT_CONSUMED", "ATTEMPT_INTENT"])
+        with tempfile.TemporaryDirectory() as folder:
+            api, token = self.prepared(folder); api["intent"](token)
+            with self.assertRaisesRegex(journal.JournalError, "PERMIT_CONSUMPTION_ORDER_INVALID"):
+                api["permit"](token)
 
     def test_four_results_need_sealed_evidence_then_finalize_once(self):
         with tempfile.TemporaryDirectory() as folder:

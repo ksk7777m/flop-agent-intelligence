@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "Manual One-shot Read-only Reobservation Runner V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/manual-readonly-reobservation-runner.v1.json",
+      "path": "schemas/manual-readonly-reobservation-runner.v1.json",
+      "purpose": "Validates the fixed descriptive plan and implemented-disabled production runner boundary.",
+      "related_endpoint": null
+    },
+    {
       "name": "Durable Observation Attempt Journal V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/durable-observation-attempt-journal.v1.json",
       "path": "schemas/durable-observation-attempt-journal.v1.json",

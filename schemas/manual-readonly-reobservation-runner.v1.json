@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/manual-readonly-reobservation-runner.v1.json",
+  "title": "Manual One-shot Read-only Reobservation Runner V1",
+  "oneOf": [
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema","record_type","plan_id","operation","predicate_policy","predicate_policy_hash","source_set_id","source_order_hash","source_count","method","request_count_per_source","retry_count","redirects_allowed","fallback_enabled","automatic_resume_allowed","execution_enabled","ready_to_act","authorized_to_act"],
+      "properties": {
+        "schema":{"const":"manual-readonly-reobservation-runner-v1"}, "record_type":{"const":"FIXED_PLAN"},
+        "plan_id":{"$ref":"#/$defs/hash"}, "operation":{"const":"READ_ONLY_REOBSERVATION"},
+        "predicate_policy":{"const":"technocore-runtime-predicates-v2"}, "predicate_policy_hash":{"$ref":"#/$defs/hash"},
+        "source_set_id":{"const":"technocore-runtime-fixed-source-set-v1"}, "source_order_hash":{"$ref":"#/$defs/hash"},
+        "source_count":{"const":4}, "method":{"const":"GET"}, "request_count_per_source":{"const":1},
+        "retry_count":{"const":0}, "redirects_allowed":{"const":false}, "fallback_enabled":{"const":false},
+        "automatic_resume_allowed":{"const":false}, "execution_enabled":{"const":false},
+        "ready_to_act":{"const":false}, "authorized_to_act":{"const":false}
+      }
+    },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema","status","runner_state","plan_id","predicate_policy","source_set_id","source_order_hash","source_count","production_permit_issuer","cli_command","scheduler","live_execution_path","retry_count","automatic_resume_allowed","automatic_retry_allowed","live_get_count","currentness","freshness","compatibility","runtime_nonce_status","ready_to_act","authorized_to_act","live_action_enabled"],
+      "properties": {
+        "schema":{"const":"manual-readonly-reobservation-runner-v1"}, "status":{"const":"IMPLEMENTED_DISABLED"},
+        "runner_state":{"const":"DISABLED_NO_PERMIT_ISSUER"}, "plan_id":{"$ref":"#/$defs/hash"},
+        "predicate_policy":{"const":"technocore-runtime-predicates-v2"}, "source_set_id":{"const":"technocore-runtime-fixed-source-set-v1"},
+        "source_order_hash":{"$ref":"#/$defs/hash"}, "source_count":{"const":4},
+        "production_permit_issuer":{"const":"ABSENT"}, "cli_command":{"const":"ABSENT"}, "scheduler":{"const":"ABSENT"},
+        "live_execution_path":{"const":"UNREACHABLE"}, "retry_count":{"const":0},
+        "automatic_resume_allowed":{"const":false}, "automatic_retry_allowed":{"const":false}, "live_get_count":{"const":0},
+        "currentness":{"const":"CURRENTNESS_UNKNOWN"}, "freshness":{"const":"FRESHNESS_NOT_CONFIRMED"},
+        "compatibility":{"const":"COMPATIBILITY_REVIEW_REQUIRED"}, "runtime_nonce_status":{"const":"BLOCKED_BY_LIVE_SIGNED_WRITE"},
+        "ready_to_act":{"const":false}, "authorized_to_act":{"const":false}, "live_action_enabled":{"const":false}
+      }
+    }
+  ],
+  "$defs": {"hash":{"type":"string","pattern":"^[0-9a-f]{64}$"}}
+}

@@ -19,7 +19,9 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from .observation_retention import (CANONICAL_ENCODING, FIXED_SOURCES,
-    HASH_ALGORITHM, PredicatePolicy, SOURCE_ORDER_HASH, SOURCE_SET_ID)
+    HASH_ALGORITHM, OBSERVATION_POLICY, PREDICATE_POLICY_HASHES, PredicatePolicy,
+    SOURCE_ORDER_HASH, SOURCE_SET_ID)
+from .remote_content_policy import DEFAULT_HTTP_TIMEOUT_SECONDS, DEFAULT_RESPONSE_LIMIT
 
 SCHEMA_VERSION = "durable-observation-attempt-journal-v1"
 POLICY_VERSION = "local-durable-observation-journal-policy-v1"
@@ -109,6 +111,30 @@ def _strict_hash(value: Mapping[str, Any], domain: str) -> str:
     encoded = json.dumps(envelope, sort_keys=True, separators=(",", ":"),
         ensure_ascii=True, allow_nan=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+_FIXED_PLAN_MATERIAL = {
+    "schema": "manual-readonly-reobservation-runner-v1",
+    "operation": "READ_ONLY_REOBSERVATION", "observation_policy": OBSERVATION_POLICY,
+    "predicate_policy": PredicatePolicy.V2.value,
+    "predicate_policy_hash": PREDICATE_POLICY_HASHES[PredicatePolicy.V2],
+    "source_set_id": SOURCE_SET_ID, "source_order_hash": SOURCE_ORDER_HASH,
+    "sources": [source.value for source in FIXED_SOURCES], "method": "GET",
+    "request_count_per_source": 1, "retry_count": 0,
+    "timeout_policy": {"seconds": DEFAULT_HTTP_TIMEOUT_SECONDS,
+                       "body_bytes": DEFAULT_RESPONSE_LIMIT},
+    "redirects_allowed": False, "alternate_url": None, "fallback": None,
+    "remote_mcp_enabled": False, "signing_enabled": False,
+    "external_write_enabled": False, "scheduler_enabled": False,
+    "automatic_resume_allowed": False,
+    "evidence_schema": "manual-reobservation-evidence-v1",
+    "journal_schema": SCHEMA_VERSION, "generation": 0}
+FIXED_REOBSERVATION_PLAN_ID = hashlib.sha256(json.dumps({
+    "canonical_encoding": CANONICAL_ENCODING,
+    "domain": "FLOP_MANUAL_READONLY_REOBSERVATION_RUNNER_V1",
+    "hash_algorithm": HASH_ALGORITHM, "record_domain": "FIXED_PLAN",
+    "value": _FIXED_PLAN_MATERIAL}, sort_keys=True, separators=(",", ":"),
+    ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
 
 
 def _decode_line(raw: bytes) -> dict[str, Any]:
@@ -384,9 +410,7 @@ def _build_store(root: Path, *, os_module: Any = os,
         if durability_unknown: raise JournalError("DURABILITY_RECONCILIATION_REQUIRED")
         integrity, records = read()
         if integrity is not Integrity.ABSENT: raise JournalError("JOURNAL_ALREADY_EXISTS")
-        plan_id = _strict_hash({"predicate_policy": PredicatePolicy.V2.value,
-            "source_set_id": SOURCE_SET_ID, "source_order_hash": SOURCE_ORDER_HASH,
-            "operation": "GET_ONLY_MANUAL_FUTURE", "retry_count": 0}, "PLAN")
+        plan_id = FIXED_REOBSERVATION_PLAN_ID
         attempt_id = _strict_hash({"journal_id": JOURNAL_ID, "plan_id": plan_id,
             "generation": 0}, "ATTEMPT")
         trip("BEFORE_CREATE")
@@ -430,6 +454,16 @@ def _build_store(root: Path, *, os_module: Any = os,
             value = transition(token, "ATTEMPT_INTENT", AttemptState.INTENT_DURABLE)
             trip("ATTEMPT_INTENT_DURABLE"); return value
 
+    def permit_consumed(token: _AttemptToken) -> Mapping[str, Any]:
+        with io_lock:
+            resolve(token); integrity, records = read(); assert integrity is Integrity.VALID
+            if any(item["record_type"] == "PERMIT_CONSUMED" for item in records):
+                raise JournalError("DUPLICATE_PERMIT_CONSUMPTION")
+            if any(item["record_type"] == "ATTEMPT_INTENT" for item in records):
+                raise JournalError("PERMIT_CONSUMPTION_ORDER_INVALID")
+            value = transition(token, "PERMIT_CONSUMED", AttemptState.PREPARED)
+            trip("PERMIT_CONSUMED_DURABLE"); return value
+
     def source_intent(token: _AttemptToken, source: Any) -> Mapping[str, Any]:
         with io_lock:
             trip("BEFORE_SOURCE_INTENT")
@@ -458,12 +492,16 @@ def _build_store(root: Path, *, os_module: Any = os,
                                SourceState.REQUEST_MAY_HAVE_STARTED)
             trip("REQUEST_MAY_HAVE_STARTED"); return value
 
-    def issue_result(source: Any) -> _ResultToken:
+    def issue_result(source: Any, minimized_result_id: str | None = None) -> _ResultToken:
         if not fixture_issuers: raise JournalError("LIVE_EVIDENCE_ISSUER_UNAVAILABLE")
         if type(source) is not type(FIXED_SOURCES[0]) or source not in FIXED_SOURCES:
             raise JournalError("SOURCE_INVALID")
-        token = object.__new__(_ResultToken); results[token] = _strict_hash(
-            {"source_id": source.value, "fixture": True}, "FIXTURE_RESULT")
+        if minimized_result_id is not None and (type(minimized_result_id) is not str
+                or len(minimized_result_id) != 64
+                or any(c not in "0123456789abcdef" for c in minimized_result_id)):
+            raise JournalError("RESULT_ID_INVALID")
+        token = object.__new__(_ResultToken); results[token] = (minimized_result_id
+            or _strict_hash({"source_id": source.value, "fixture": True}, "FIXTURE_RESULT"))
         return token
 
     def result_durable(token: _AttemptToken, source: Any, result: _ResultToken) -> Mapping[str, Any]:
@@ -486,10 +524,15 @@ def _build_store(root: Path, *, os_module: Any = os,
                  else "SOURCE_RESULT_DURABLE")
             return value
 
-    def issue_evidence() -> _EvidenceToken:
+    def issue_evidence(minimized_evidence_id: str | None = None) -> _EvidenceToken:
         if not fixture_issuers: raise JournalError("LIVE_EVIDENCE_ISSUER_UNAVAILABLE")
-        token = object.__new__(_EvidenceToken); evidence[token] = _strict_hash(
-            {"predicate_policy": PredicatePolicy.V2.value, "fixture": True}, "FIXTURE_EVIDENCE")
+        if minimized_evidence_id is not None and (type(minimized_evidence_id) is not str
+                or len(minimized_evidence_id) != 64
+                or any(c not in "0123456789abcdef" for c in minimized_evidence_id)):
+            raise JournalError("EVIDENCE_ID_INVALID")
+        token = object.__new__(_EvidenceToken); evidence[token] = (minimized_evidence_id
+            or _strict_hash({"predicate_policy": PredicatePolicy.V2.value,
+                             "fixture": True}, "FIXTURE_EVIDENCE"))
         return token
 
     def commit(token: _AttemptToken, sealed: _EvidenceToken) -> Mapping[str, Any]:
@@ -554,7 +597,7 @@ def _build_store(root: Path, *, os_module: Any = os,
         return MappingProxyType(projection)
 
     production = (prepare, durable_intent, source_intent, request_may_have_started,
-                  result_durable, commit, finalize, inspect)
+                  result_durable, commit, finalize, inspect, permit_consumed)
     return production + ((issue_result, issue_evidence) if fixture_issuers else ())
 
 
@@ -652,7 +695,7 @@ def validate_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
 
 (_prepare_attempt, _record_attempt_intent, _record_source_intent,
  _record_request_boundary, _record_source_result, _commit_evidence,
- _finalize_attempt, inspect_journal) = _build_store(_PRODUCTION_ROOT)
+ _finalize_attempt, inspect_journal, _record_permit_consumed) = _build_store(_PRODUCTION_ROOT)
 
 prepare_attempt = _prepare_attempt
 record_attempt_intent = _record_attempt_intent

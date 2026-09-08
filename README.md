@@ -126,6 +126,13 @@ The local-only durable journal records write-ahead observation intent, detects
 crash ambiguity and corruption, and never resumes or retries automatically. See
 [Durable Observation Attempt Journal](docs/DURABLE_OBSERVATION_ATTEMPT_JOURNAL.md).
 
+## Manual One-shot Read-only Reobservation Runner
+
+The fixed runner boundary composes the sealed four-source observer with the
+durable journal only in fixture tests. Production is implemented-disabled: it
+has no permit issuer, execute API, CLI, scheduler or activation switch, and
+performs zero live GETs. See [Manual Read-only Reobservation Runner](docs/MANUAL_READONLY_REOBSERVATION_RUNNER.md).
+
 ## Wire Evidence, Signer, and Verifier Hardening V1
 
 The offline hardening layer preserves nonce values as exact decimal strings,

@@ -1,8 +1,8 @@
 # Durable Observation Attempt Journal / Crash Reconciliation Boundary
 
 Status: local-journal-only, fixture crash-tested, review-ready. No Technocore
-GET/write, MCP, signing, nonce, wallet, scheduler, polling, retry, or runner is
-connected.
+GET/write, MCP, signing, nonce, wallet, scheduler, polling, or retry is
+connected in production. A private fixture-only runner exercises the journal.
 
 ## Existing coverage reconciliation
 
@@ -88,7 +88,8 @@ Fixture result/evidence issuers are returned only by the private test factory;
 the production factory returns no issuer, and a fixture token belongs to a
 different sealed registry and cannot commit into a production-shaped service.
 
-Only local journal persistence is added. Manual reobservation runner remains
-unconnected. Retention/rotation/repair policy is absent. Runtime nonce remains
+Only local journal persistence is added to production. Manual reobservation is
+implemented-disabled and connected only by a private fixture seam.
+Retention/rotation/repair policy is absent. Runtime nonce remains
 blocked by live signed write; public KV cache observation remains blocked;
 continuous compatibility is unproved; Testnet activation remains blocked.
