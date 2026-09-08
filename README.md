@@ -105,6 +105,14 @@ enables no retry or live action. Live 0.13.0 compatibility remains unobserved
 and `COMPATIBILITY_REVIEW_REQUIRED`. See
 [Technocore 0.13.0 Transport Semantics](docs/TECHNOCORE_0130_TRANSPORT_SEMANTICS.md).
 
+## Technocore Runtime Read-only Observation
+
+The sealed one-shot observer fetches only fixed official source IDs, rejects
+redirects and oversized or unsupported responses, and projects hashes plus
+minimal semantic/cache state. It performs no retry or persistence and cannot
+create action authority. See
+[Runtime Read-only Observation](docs/TECHNOCORE_RUNTIME_READONLY_OBSERVATION.md).
+
 ## Wire Evidence, Signer, and Verifier Hardening V1
 
 The offline hardening layer preserves nonce values as exact decimal strings,

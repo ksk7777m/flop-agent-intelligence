@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "Technocore Runtime Read-only Observation V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/technocore-runtime-observation.v1.json",
+      "path": "schemas/technocore-runtime-observation.v1.json",
+      "purpose": "Validates minimized one-shot observations from fixed official Technocore read-only sources without action authority.",
+      "related_endpoint": null
+    },
+    {
       "name": "Technocore 0.13.0 Transport Semantics V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/technocore-transport-semantics.v1.json",
       "path": "schemas/technocore-transport-semantics.v1.json",

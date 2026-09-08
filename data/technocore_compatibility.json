@@ -53,20 +53,24 @@
     },
     "runtime_observed": {
       "kind": "RUNTIME_OBSERVED_CAPABILITY",
-      "status": "NOT_OBSERVED_OFFLINE",
-      "capabilities": []
+      "status": "ONE_SHOT_PARTIAL_SEMANTIC_OBSERVATION",
+      "capabilities": [
+        "OpenAPI 3.1 read route structure",
+        "agent manifest limits and capability structure",
+        "deployment config service and settings structure"
+      ]
     }
   },
   "deployment_observations": {
-    "status": "UNKNOWN_UNTIL_SEPARATELY_APPROVED_READ_ONLY_CHECK",
+    "status": "ONE_SHOT_READ_ONLY_OBSERVATION",
     "capacity": null,
     "counts": null,
     "limits": null,
-    "deployment_version": null,
-    "observed_at": null
+    "deployment_version": "0.13.0",
+    "observed_at": "2026-09-08T04:34:36Z"
   },
   "freshness": {
     "status": "REVIEW_REQUIRED",
-    "reason": "A local reviewed manifest does not establish current live compatibility"
+    "reason": "One-shot cache metadata was potentially stale and does not establish latest state or continuing live compatibility"
   }
 }

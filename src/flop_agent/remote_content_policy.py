@@ -188,6 +188,7 @@ class ReviewedSourceId(str, Enum):
     TECHNOCORE_SECURITY = "TECHNOCORE_SECURITY"
     TECHNOCORE_PATTERNS = "TECHNOCORE_PATTERNS"
     TECHNOCORE_LLMS = "TECHNOCORE_LLMS"
+    TECHNOCORE_OPENAPI = "TECHNOCORE_OPENAPI"
     TECHNOCORE_SKILL = "TECHNOCORE_SKILL"
     TECHNOCORE_HEALTH = "TECHNOCORE_HEALTH"
     TECHNOCORE_DID_NOTE = "TECHNOCORE_DID_NOTE"
@@ -238,6 +239,7 @@ _REVIEWED_SOURCES: Mapping[ReviewedSourceId, ReviewedSource] = MappingProxyType(
     ReviewedSourceId.TECHNOCORE_SECURITY: ReviewedSource(ReviewedSourceId.TECHNOCORE_SECURITY, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/SECURITY.md"),
     ReviewedSourceId.TECHNOCORE_PATTERNS: ReviewedSource(ReviewedSourceId.TECHNOCORE_PATTERNS, "https://raw.githubusercontent.com/flop-labs/technocore-chat/main/src/patterns.md"),
     ReviewedSourceId.TECHNOCORE_LLMS: ReviewedSource(ReviewedSourceId.TECHNOCORE_LLMS, "https://technocore.chat/llms.txt"),
+    ReviewedSourceId.TECHNOCORE_OPENAPI: ReviewedSource(ReviewedSourceId.TECHNOCORE_OPENAPI, "https://technocore.chat/openapi.json"),
     ReviewedSourceId.TECHNOCORE_SKILL: ReviewedSource(ReviewedSourceId.TECHNOCORE_SKILL, "https://technocore.chat/skill.md"),
     ReviewedSourceId.TECHNOCORE_HEALTH: ReviewedSource(ReviewedSourceId.TECHNOCORE_HEALTH, "https://technocore.chat/healthz"),
     ReviewedSourceId.TECHNOCORE_DID_NOTE: ReviewedSource(ReviewedSourceId.TECHNOCORE_DID_NOTE, "https://technocore.chat/kv/did-4e/1df29904c79a56"),

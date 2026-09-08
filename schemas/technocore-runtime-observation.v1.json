@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/technocore-runtime-observation.v1.json",
+  "title": "Technocore Runtime Read-only Observation V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema","status","documented_version","documented_revision","observation_policy_version","observed_at","source_set_complete","sources","deployment_version_evidence","compatibility","runtime_nonce_status","drift_status","ready_to_act","authorized_to_act","live_action_enabled"],
+  "properties": {
+    "schema": {"const": "technocore-runtime-observation-v1"},
+    "status": {"const": "DESCRIPTIVE_ONLY"},
+    "documented_version": {"const": "0.13.0"},
+    "documented_revision": {"const": "45921c3e3699e01a55cde391674815367e0cff6b"},
+    "observation_policy_version": {"const": "technocore-runtime-readonly-observation-v1"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source_set_complete": {"type": "boolean"},
+    "sources": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/$defs/source"}},
+    "deployment_version_evidence": {"enum": ["VERSION_EXPLICITLY_OBSERVED","VERSION_NOT_EXPOSED","VERSION_EVIDENCE_CONFLICTING","VERSION_UNKNOWN"]},
+    "compatibility": {"const": "COMPATIBILITY_REVIEW_REQUIRED"},
+    "runtime_nonce_status": {"const": "BLOCKED_BY_LIVE_SIGNED_WRITE"},
+    "drift_status": {"enum": ["CONFLICTING","COVERAGE_GAP","SEMANTIC_GAP","DRIFT_NOT_ESTABLISHED"]},
+    "ready_to_act": {"const": false},
+    "authorized_to_act": {"const": false},
+    "live_action_enabled": {"const": false}
+  },
+  "$defs": {
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id","source_class","request_attempted","request_completed","http_status","final_url_matched","redirect_detected","response_size_accepted","content_type_accepted","schema_validation","capability_state","version_evidence","cache_policy_observed","age_state","cache_control_class","validator_present","freshness","body_sha256","body_bytes","observed_at"],
+      "properties": {
+        "source_id": {"enum": ["TECHNOCORE_LLMS","TECHNOCORE_OPENAPI","TECHNOCORE_AGENT_MANIFEST","TECHNOCORE_CONFIG"]},
+        "source_class": {"enum": ["TEXT_DOCUMENT","OPENAPI_DOCUMENT","AGENT_MANIFEST","CONFIG_DOCUMENT"]},
+        "request_attempted": {"const": true},
+        "request_completed": {"type": "boolean"},
+        "http_status": {"type": ["integer","null"], "minimum": 100, "maximum": 599},
+        "final_url_matched": {"type": "boolean"},
+        "redirect_detected": {"const": false},
+        "response_size_accepted": {"type": "boolean"},
+        "content_type_accepted": {"type": "boolean"},
+        "schema_validation": {"enum": ["VALIDATED","NOT_VALIDATED"]},
+        "capability_state": {"enum": ["OBSERVED_IN_LIVE_DOCUMENT","NOT_OBSERVED","OBSERVATION_INCOMPLETE","CONFLICTING","UNKNOWN"]},
+        "version_evidence": {"enum": ["VERSION_EXPLICITLY_OBSERVED","VERSION_NOT_EXPOSED","VERSION_EVIDENCE_CONFLICTING","VERSION_UNKNOWN"]},
+        "cache_policy_observed": {"type": "boolean"},
+        "age_state": {"enum": ["ABSENT","VALID","INVALID"]},
+        "cache_control_class": {"enum": ["ABSENT","NO_STORE","REVALIDATION_REQUIRED","CACHEABLE","UNCLASSIFIED"]},
+        "validator_present": {"type": "boolean"},
+        "freshness": {"enum": ["FRESHNESS_UNKNOWN","POTENTIALLY_STALE","CONFLICTING_CACHE_EVIDENCE"]},
+        "body_sha256": {"type": ["string","null"], "pattern": "^[0-9a-f]{64}$"},
+        "body_bytes": {"type": ["integer","null"], "minimum": 0, "maximum": 2097152},
+        "observed_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

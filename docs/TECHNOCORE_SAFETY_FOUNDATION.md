@@ -99,7 +99,7 @@ Production API classification:
 Final public-effect API inventory (reviewed 2026-09-08):
 
 - `SEALED_SERVICE`: reviewed HTTP/Technocore readers, readiness and monitor
-  services, fixed-root monitor/KV persistence, fixed-ID receipt and fixture
+  services, fixed-source runtime observation, fixed-root monitor/KV persistence, fixed-ID receipt and fixture
   stores, local identity operations, Presence operations, activity append,
   receipt signing, and the sensitive-action router
 - `SAFE_STATIC`: remote classifiers/minimized evidence/receipt verification,

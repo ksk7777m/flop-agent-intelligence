@@ -573,7 +573,8 @@ class RemoteContentPolicyTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "COMPATIBILITY_REVIEW_REQUIRED")
         self.assertEqual(manifest["reviewed_technocore_agent_version"], "0.13.0")
         self.assertEqual(
-            manifest["capability_evidence"]["runtime_observed"]["capabilities"], [])
+            manifest["capability_evidence"]["runtime_observed"]["status"],
+            "ONE_SHOT_PARTIAL_SEMANTIC_OBSERVATION")
         self.assertIsNone(manifest["deployment_observations"]["limits"])
 
 

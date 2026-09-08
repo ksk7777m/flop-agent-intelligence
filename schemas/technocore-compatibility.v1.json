@@ -53,10 +53,10 @@
           "required": ["kind", "status", "capabilities"],
           "properties": {
             "kind": {"const": "RUNTIME_OBSERVED_CAPABILITY"},
-            "status": {"const": "NOT_OBSERVED_OFFLINE"},
+            "status": {"const": "ONE_SHOT_PARTIAL_SEMANTIC_OBSERVATION"},
             "capabilities": {
-              "type": "array", "maxItems": 0,
-              "items": {"type": "string"}
+              "type": "array", "minItems": 1,
+              "items": {"type": "string", "minLength": 1}
             }
           }
         }
@@ -66,7 +66,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["status", "capacity", "counts", "limits", "deployment_version", "observed_at"],
       "properties": {
-        "status": {"const": "UNKNOWN_UNTIL_SEPARATELY_APPROVED_READ_ONLY_CHECK"},
+        "status": {"const": "ONE_SHOT_READ_ONLY_OBSERVATION"},
         "capacity": {"type": ["integer", "null"]},
         "counts": {"type": ["object", "null"]},
         "limits": {"type": ["object", "null"]},
