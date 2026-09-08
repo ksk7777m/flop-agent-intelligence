@@ -1,6 +1,7 @@
 import copy
 import inspect
 import json
+import math
 import unittest
 from pathlib import Path
 
@@ -43,6 +44,35 @@ class ObservationRetentionTests(unittest.TestCase):
         self.assertEqual(after["semantic_result"], "LLMS_SEMANTIC_GAP")
         self.assertEqual(after["supersession"], "SUPERSEDED")
         self.assertEqual(api["project"](migration)["semantic_result"], "RE_EVALUATION_PROHIBITED")
+
+    def test_evidence_identity_has_strict_domain_and_complete_semantic_binding(self):
+        api = self.authority(); value = api["project"](api["historical"]())
+        self.assertEqual(value["identity_domain"], retention.IDENTITY_DOMAIN)
+        self.assertEqual(value["canonical_encoding"], retention.CANONICAL_ENCODING)
+        self.assertEqual(value["hash_algorithm"], "SHA-256")
+        self.assertEqual(value["predicate_policy_hash"],
+                         retention.PREDICATE_POLICY_HASHES[retention.PredicatePolicy.V1])
+        self.assertEqual(value["source_count"], 4)
+        self.assertEqual(value["source_order_hash"], retention.SOURCE_ORDER_HASH)
+        self.assertEqual(value["body_evidence"], "NOT_RETAINED")
+        self.assertEqual(value["deployment_version_evidence"],
+                         "VERSION_EXPLICITLY_OBSERVED_ONE_SHOT")
+        source = inspect.getsource(retention)
+        for binding in ("timeout_seconds", "body_byte_limit", "redirects_allowed",
+                        "alternate_url_allowed", "fallback_allowed", "remote_mcp_enabled",
+                        "signing_enabled", "write_enabled", "scheduler_enabled"):
+            self.assertIn(binding, source)
+
+        base = {"flag": True, "count": 1, "text": "e\N{COMBINING ACUTE ACCENT}"}
+        self.assertNotEqual(retention._canonical_hash(base, "TEST"),
+                            retention._canonical_hash({**base, "flag": 1}, "TEST"))
+        self.assertNotEqual(retention._canonical_hash(base, "TEST"),
+                            retention._canonical_hash({**base, "text": "\N{LATIN SMALL LETTER E WITH ACUTE}"}, "TEST"))
+        self.assertNotEqual(retention._canonical_hash(base, "TEST"),
+                            retention._canonical_hash(base, "OTHER"))
+        for invalid in (1.0, math.nan, math.inf):
+            with self.assertRaisesRegex(retention.RetentionError, "CANONICAL_TYPE_INVALID"):
+                retention._canonical_hash({"value": invalid}, "TEST")
 
     def test_retention_currentness_freshness_and_compatibility_are_independent(self):
         api = self.authority(); value = api["project"](api["historical"]())
@@ -155,7 +185,14 @@ class ObservationRetentionTests(unittest.TestCase):
         self.validate(value)
         for change in ({"authorized_to_act": True}, {"retry_count": 1},
                        {"metadata": {"url": "REMOTE_VALUE"}},
-                       {"currentness": "CURRENT"}):
+                       {"currentness": "CURRENT"}, {"source_count": True},
+                       {"record_generation": True},
+                       {"body_evidence": {"raw": "REMOTE_VALUE"}},
+                       {"predicate_policy": retention.PredicatePolicy.V2.value},
+                       {"predicate_policy_hash": "0" * 64},
+                       {"semantic_result": "COMPLETED"}, {"completeness": "COMPLETE"},
+                       {"schema": "observation-retention-ceremony-v2"},
+                       {"runtime_nonce_status": "AVAILABLE"}):
             forged = dict(value); forged.update(change)
             self.assertTrue(retention.validate_projection(forged))
         with self.assertRaises(retention.RetentionError) as caught:

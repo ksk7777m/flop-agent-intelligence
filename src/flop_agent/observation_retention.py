@@ -15,7 +15,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .remote_content_policy import ReviewedSourceId
+from .remote_content_policy import (DEFAULT_HTTP_TIMEOUT_SECONDS,
+                                    DEFAULT_RESPONSE_LIMIT, ReviewedSourceId)
 
 SCHEMA_VERSION = "observation-retention-ceremony-v1"
 POLICY_VERSION = "local-observation-retention-policy-v1"
@@ -23,8 +24,14 @@ OBSERVATION_POLICY = "technocore-runtime-readonly-observation-v1"
 SOURCE_SET_ID = "technocore-runtime-fixed-source-set-v1"
 MIGRATION_REASON = "LLMS_PREDICATE_ALIGNED_TO_PINNED_REVISION"
 EVENT_TIME = "2026-09-08T05:00:00Z"
+IDENTITY_DOMAIN = "FLOP_OBSERVATION_RETENTION_RECORD_ID_V1"
+CANONICAL_ENCODING = "STRICT_TYPED_UTF8_JSON_V1"
+HASH_ALGORITHM = "SHA-256"
 FIXED_SOURCES = (ReviewedSourceId.TECHNOCORE_LLMS, ReviewedSourceId.TECHNOCORE_OPENAPI,
                  ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST, ReviewedSourceId.TECHNOCORE_CONFIG)
+SOURCE_ORDER_HASH = hashlib.sha256(json.dumps(
+    [source.value for source in FIXED_SOURCES], separators=(",", ":"),
+    ensure_ascii=True).encode("utf-8")).hexdigest()
 _TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 
 
@@ -37,6 +44,11 @@ class RetentionError(ValueError):
 class PredicatePolicy(str, Enum):
     V1 = "technocore-runtime-predicates-v1"
     V2 = "technocore-runtime-predicates-v2"
+
+
+PREDICATE_POLICY_HASHES = MappingProxyType({policy: hashlib.sha256(
+    ("FLOP_PREDICATE_POLICY_ID_V1:" + policy.value).encode("utf-8")).hexdigest()
+    for policy in PredicatePolicy})
 
 
 class SourceAttemptState(str, Enum):
@@ -126,8 +138,29 @@ class _Attempt:
     result_evidence_id: str | None
 
 
-def _canonical_hash(value: Mapping[str, Any]) -> str:
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+def _canonical_hash(value: Mapping[str, Any], record_domain: str) -> str:
+    """Hash an internally-built, strict typed JSON tree with domain separation."""
+    def check(item: Any) -> None:
+        if item is None or type(item) in {str, bool, int}:
+            return
+        if type(item) is list:
+            for child in item:
+                check(child)
+            return
+        if type(item) is dict:
+            if any(type(key) is not str for key in item):
+                raise RetentionError("CANONICAL_KEY_INVALID", "identity")
+            for child in item.values():
+                check(child)
+            return
+        raise RetentionError("CANONICAL_TYPE_INVALID", "identity")
+
+    envelope = {"canonical_encoding": CANONICAL_ENCODING, "domain": IDENTITY_DOMAIN,
+                "hash_algorithm": HASH_ALGORITHM, "record_domain": record_domain,
+                "value": dict(value)}
+    check(envelope)
+    raw = json.dumps(envelope, sort_keys=True, separators=(",", ":"),
+                     ensure_ascii=True, allow_nan=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -148,16 +181,35 @@ def _build_authority() -> tuple[Any, ...]:
         (ReviewedSourceId.TECHNOCORE_OPENAPI, "COMPLETED", "OBSERVED"),
         (ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST, "COMPLETED", "OBSERVED"),
         (ReviewedSourceId.TECHNOCORE_CONFIG, "COMPLETED", "OBSERVED"))
-    material = {"source_set_id": SOURCE_SET_ID, "observed_at": "2026-09-08T04:34:36Z",
+    identity_sources = [{"source_id": source.value, "source_ordinal": ordinal,
+        "transport_result": transport, "semantic_result": semantic,
+        "version_evidence": ("VERSION_EXPLICITLY_OBSERVED" if source in {
+            ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST, ReviewedSourceId.TECHNOCORE_CONFIG}
+            else "VERSION_NOT_EXPOSED"),
+        "cache_classification": "POTENTIALLY_STALE",
+        "body_sha256": None, "body_bytes": None,
+        "body_evidence": "NOT_RETAINED", "response_size_accepted": True,
+        "body_byte_limit": DEFAULT_RESPONSE_LIMIT}
+        for ordinal, (source, transport, semantic) in enumerate(source_results)]
+    material = {"schema": SCHEMA_VERSION, "record_generation": 0,
+                "source_set_id": SOURCE_SET_ID, "source_order_hash": SOURCE_ORDER_HASH,
+                "observed_at": "2026-09-08T04:34:36Z",
                 "predicate_policy": PredicatePolicy.V1.value,
+                "predicate_policy_hash": PREDICATE_POLICY_HASHES[PredicatePolicy.V1],
                 "observation_policy": OBSERVATION_POLICY,
                 "transport_result": "FOUR_OF_FOUR_COMPLETED",
                 "semantic_result": "LLMS_SEMANTIC_GAP",
-                "source_results": [(source.value, transport, semantic)
-                                   for source, transport, semantic in source_results]}
-    evidence_id = _canonical_hash(material)
+                "source_set_complete": False,
+                "deployment_version_evidence": "VERSION_EXPLICITLY_OBSERVED_ONE_SHOT",
+                "freshness": "FRESHNESS_NOT_CONFIRMED",
+                "retention": "RETAINED", "supersession": "SUPERSEDED",
+                "currentness": "CURRENTNESS_UNKNOWN",
+                "compatibility": "COMPATIBILITY_REVIEW_REQUIRED",
+                "previous_evidence_id": None, "source_results": identity_sources}
+    evidence_id = _canonical_hash(material, "EVIDENCE")
     fixed_evidence = _Evidence(evidence_id, SOURCE_SET_ID, material["observed_at"],
-        PredicatePolicy.V1, OBSERVATION_POLICY, _canonical_hash({"evidence": material}), None,
+        PredicatePolicy.V1, OBSERVATION_POLICY,
+        _canonical_hash({"evidence": material}, "MINIMIZED_EVIDENCE"), None,
         "FOUR_OF_FOUR_COMPLETED", "LLMS_SEMANTIC_GAP", False, source_results)
 
     def issue(token_type: type[_Token], registry: Any, record: Any) -> Any:
@@ -190,9 +242,14 @@ def _build_authority() -> tuple[Any, ...]:
             if record.evidence_id in migrated_evidence:
                 raise RetentionError("MIGRATION_ALREADY_RECORDED", "evidence")
             material = {"evidence_id": record.evidence_id, "from": record.predicate_policy.value,
-                        "to": to_policy.value, "reason": MIGRATION_REASON,
-                        "affected": [ReviewedSourceId.TECHNOCORE_LLMS.value], "at": EVENT_TIME}
-            migration = _Migration(_canonical_hash(material), record.evidence_id,
+                        "from_hash": PREDICATE_POLICY_HASHES[record.predicate_policy],
+                        "to": to_policy.value, "to_hash": PREDICATE_POLICY_HASHES[to_policy],
+                        "reason": MIGRATION_REASON,
+                        "affected": [ReviewedSourceId.TECHNOCORE_LLMS.value],
+                        "source_set_id": SOURCE_SET_ID, "raw_evidence_available": False,
+                        "reevaluation_permitted": False,
+                        "reobservation": "REOBSERVATION_REQUIRED", "at": EVENT_TIME}
+            migration = _Migration(_canonical_hash(material, "PREDICATE_MIGRATION"), record.evidence_id,
                 record.predicate_policy, to_policy, (ReviewedSourceId.TECHNOCORE_LLMS,), EVENT_TIME)
             migrated_evidence.add(record.evidence_id)
             return issue(PredicateMigration, migration_registry, migration)
@@ -203,8 +260,16 @@ def _build_authority() -> tuple[Any, ...]:
             if record.migration_id in planned_migrations:
                 raise RetentionError("PLAN_ALREADY_PREPARED", "migration")
             material = {"migration_id": record.migration_id, "policy": record.to_policy.value,
-                        "source_set_id": SOURCE_SET_ID, "method": "GET", "retry_count": 0}
-            plan = _Plan(_canonical_hash(material), record.migration_id, record.to_policy, SOURCE_SET_ID)
+                        "predicate_policy_hash": PREDICATE_POLICY_HASHES[record.to_policy],
+                        "source_set_id": SOURCE_SET_ID, "source_order_hash": SOURCE_ORDER_HASH,
+                        "method": "GET", "retry_count": 0,
+                        "timeout_seconds": DEFAULT_HTTP_TIMEOUT_SECONDS,
+                        "body_byte_limit": DEFAULT_RESPONSE_LIMIT, "redirects_allowed": False,
+                        "alternate_url_allowed": False, "fallback_allowed": False,
+                        "remote_mcp_enabled": False, "signing_enabled": False,
+                        "write_enabled": False, "scheduler_enabled": False,
+                        "action_authorization": False}
+            plan = _Plan(_canonical_hash(material, "REOBSERVATION_PLAN"), record.migration_id, record.to_policy, SOURCE_SET_ID)
             planned_migrations.add(record.migration_id)
             return issue(ReobservationPlan, plan_registry, plan)
 
@@ -214,7 +279,7 @@ def _build_authority() -> tuple[Any, ...]:
             if record.plan_id in reviewed_plans:
                 raise RetentionError("HUMAN_REVIEW_ALREADY_RECORDED", "plan")
             reviewed_plans.add(record.plan_id)
-            item = _Review(_canonical_hash({"plan_id": record.plan_id, "at": EVENT_TIME}),
+            item = _Review(_canonical_hash({"plan_id": record.plan_id, "at": EVENT_TIME}, "HUMAN_REVIEW"),
                            record.plan_id, EVENT_TIME)
             return issue(HumanReviewRecord, review_registry, item)
 
@@ -224,9 +289,15 @@ def _build_authority() -> tuple[Any, ...]:
             if review_record.plan_id in attempted_plans:
                 raise RetentionError("DUPLICATE_ATTEMPT", "plan")
             attempted_plans.add(review_record.plan_id)
-            attempt_id = _canonical_hash({"plan_id": review_record.plan_id, "ordinal": 1})
+            attempt_id = _canonical_hash({"plan_id": review_record.plan_id,
+                "predicate_policy": PredicatePolicy.V2.value, "source_set_id": SOURCE_SET_ID,
+                "source_order_hash": SOURCE_ORDER_HASH, "retry_count": 0, "ordinal": 1},
+                "OBSERVATION_ATTEMPT")
             sources = tuple((source, SourceAttemptState.NOT_ATTEMPTED) for source in FIXED_SOURCES)
-            record_id = _canonical_hash({"attempt_id": attempt_id, "generation": 0})
+            record_id = _canonical_hash({"attempt_id": attempt_id, "generation": 0,
+                "previous_record_id": None, "status": AttemptStatus.STARTED.value,
+                "sources": [[source.value, state.value] for source, state in sources]},
+                "ATTEMPT_GENERATION")
             item = _Attempt(attempt_id, review_record.plan_id, 0, AttemptStatus.STARTED,
                             sources, None, record_id, False, None)
             active_attempt_record[attempt_id] = record_id
@@ -257,7 +328,8 @@ def _build_authority() -> tuple[Any, ...]:
                       else AttemptStatus.PARTIAL)
             generation = record.generation + 1
             record_id = _canonical_hash({"attempt_id": record.attempt_id, "generation": generation,
-                "sources": [(s.value, v.value) for s, v in values]})
+                "previous_record_id": record.record_id, "status": status.value,
+                "sources": [[s.value, v.value] for s, v in values]}, "ATTEMPT_GENERATION")
             item = _Attempt(record.attempt_id, record.plan_id, generation, status, values,
                 record.record_id, record_id, terminal, None)
             active_attempt_record[record.attempt_id] = record_id
@@ -332,8 +404,8 @@ def _build_authority() -> tuple[Any, ...]:
              "affected_source_id": None})
         attempt_fields = ({"attempt_id": record.attempt_id, "observation_plan_id": record.plan_id,
             "attempt_generation": record.generation,
-            "source_attempts_hash": _canonical_hash({"sources": [(source.value, state.value)
-                for source, state in record.sources]}),
+            "source_attempts_hash": _canonical_hash({"sources": [[source.value, state.value]
+                for source, state in record.sources]}, "SOURCE_ATTEMPT_STATES"),
             "reconciliation_required": record.reconciliation_required,
             "result_evidence_id": record.result_evidence_id}
             if value["record_type"] == "ATTEMPT" else
@@ -341,14 +413,21 @@ def _build_authority() -> tuple[Any, ...]:
              "source_attempts_hash": None, "reconciliation_required": False,
              "result_evidence_id": None})
         projection = {"schema": SCHEMA_VERSION, "status": "DESCRIPTIVE_ONLY", **value,
-            "observation_policy": OBSERVATION_POLICY, **migration_fields,
+            "observation_policy": OBSERVATION_POLICY,
+            "predicate_policy_hash": PREDICATE_POLICY_HASHES[PredicatePolicy(value["predicate_policy"])],
+            **migration_fields,
             **attempt_fields,
             "raw_evidence_available": False, "reevaluation_permitted": False,
             "planned_operation": "GET_ONLY_MANUAL_FUTURE", "execution_enabled": False,
             "retention_policy": "RETENTION_POLICY_REQUIRED", "compatibility": "COMPATIBILITY_REVIEW_REQUIRED",
             "retry_count": 0, "ready_to_act": False, "authorized_to_act": False,
             "live_action_enabled": False, "runtime_nonce_status": "BLOCKED_BY_LIVE_SIGNED_WRITE",
-            "policy_version": POLICY_VERSION}
+            "policy_version": POLICY_VERSION, "identity_domain": IDENTITY_DOMAIN,
+            "canonical_encoding": CANONICAL_ENCODING, "hash_algorithm": HASH_ALGORITHM,
+            "record_generation": record.generation if value["record_type"] == "ATTEMPT" else 0,
+            "source_count": len(FIXED_SOURCES), "source_order_hash": SOURCE_ORDER_HASH,
+            "deployment_version_evidence": "VERSION_EXPLICITLY_OBSERVED_ONE_SHOT",
+            "body_evidence": "NOT_RETAINED"}
         if validate_projection(projection):
             raise RetentionError("PROJECTION_INVALID", "record")
         return MappingProxyType(projection)
@@ -360,14 +439,17 @@ def validate_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
     fields = {"schema", "status", "record_type", "record_id", "previous_record_id",
         "predicate_policy", "source_set_id", "observed_at", "retention", "supersession",
         "currentness", "freshness", "completeness", "semantic_result", "reobservation",
-        "minimized_evidence_hash", "observation_policy", "from_predicate_policy",
+        "minimized_evidence_hash", "observation_policy", "predicate_policy_hash",
+        "from_predicate_policy",
         "migration_reason", "affected_source_id", "raw_evidence_available",
         "reevaluation_permitted", "planned_operation", "execution_enabled",
         "attempt_id", "observation_plan_id", "attempt_generation",
         "source_attempts_hash", "reconciliation_required", "result_evidence_id",
         "retention_policy", "compatibility", "retry_count",
         "ready_to_act", "authorized_to_act", "live_action_enabled", "runtime_nonce_status",
-        "policy_version"}
+        "policy_version", "identity_domain", "canonical_encoding", "hash_algorithm",
+        "record_generation", "source_count", "source_order_hash",
+        "deployment_version_evidence", "body_evidence"}
     errors = []
     if not isinstance(value, Mapping) or set(value) != fields:
         return ("CLOSED_FIELDS_REQUIRED",)
@@ -383,12 +465,32 @@ def validate_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
         errors.append("OBSERVATION_TIME_INVALID")
     if value.get("record_type") not in {"EVIDENCE", "MIGRATION", "PLAN", "REVIEW", "ATTEMPT"}:
         errors.append("RECORD_TYPE_INVALID")
+    if value.get("schema") != SCHEMA_VERSION or value.get("status") != "DESCRIPTIVE_ONLY":
+        errors.append("SCHEMA_STATUS_INVALID")
     if value.get("predicate_policy") not in {item.value for item in PredicatePolicy}:
         errors.append("PREDICATE_POLICY_INVALID")
+    else:
+        policy = PredicatePolicy(value["predicate_policy"])
+        if value.get("predicate_policy_hash") != PREDICATE_POLICY_HASHES[policy]:
+            errors.append("PREDICATE_POLICY_HASH_INVALID")
     if value.get("source_set_id") != SOURCE_SET_ID:
         errors.append("SOURCE_SET_INVALID")
     if value.get("observation_policy") != OBSERVATION_POLICY:
         errors.append("OBSERVATION_POLICY_INVALID")
+    if (value.get("identity_domain") != IDENTITY_DOMAIN
+            or value.get("canonical_encoding") != CANONICAL_ENCODING
+            or value.get("hash_algorithm") != HASH_ALGORITHM):
+        errors.append("IDENTITY_ENCODING_INVALID")
+    if (type(value.get("record_generation")) is not int
+            or not 0 <= value.get("record_generation") <= 4):
+        errors.append("RECORD_GENERATION_INVALID")
+    if (type(value.get("source_count")) is not int or value.get("source_count") != len(FIXED_SOURCES)
+            or value.get("source_order_hash") != SOURCE_ORDER_HASH):
+        errors.append("SOURCE_ORDER_INVALID")
+    if value.get("deployment_version_evidence") != "VERSION_EXPLICITLY_OBSERVED_ONE_SHOT":
+        errors.append("VERSION_EVIDENCE_INVALID")
+    if value.get("body_evidence") != "NOT_RETAINED":
+        errors.append("BODY_EVIDENCE_INVALID")
     if value.get("raw_evidence_available") is not False or value.get("reevaluation_permitted") is not False:
         errors.append("RAW_REEVALUATION_PROHIBITED")
     if value.get("planned_operation") != "GET_ONLY_MANUAL_FUTURE" or value.get("execution_enabled") is not False:
@@ -416,11 +518,55 @@ def validate_projection(value: Mapping[str, Any]) -> tuple[str, ...]:
             errors.append("ATTEMPT_BINDING_INVALID")
     elif attempt_values != (None, None, None, None) or value.get("reconciliation_required") is not False:
         errors.append("ATTEMPT_FIELDS_PROHIBITED")
+    result_id = value.get("result_evidence_id")
+    if result_id is not None and (not isinstance(result_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", result_id) is None):
+        errors.append("RESULT_EVIDENCE_ID_INVALID")
+    record_type = value.get("record_type")
+    expected = {
+        "EVIDENCE": (PredicatePolicy.V1.value, "SUPERSEDED", "INCOMPLETE",
+                     "LLMS_SEMANTIC_GAP", "REOBSERVATION_REQUIRED"),
+        "MIGRATION": (PredicatePolicy.V2.value, "SUPERSEDED", "INCOMPLETE",
+                      "RE_EVALUATION_PROHIBITED", "REOBSERVATION_REQUIRED"),
+        "PLAN": (PredicatePolicy.V2.value, "NOT_SUPERSEDED", "INCOMPLETE",
+                 "MANUAL_EXECUTION_PENDING", "PLAN_PREPARED"),
+        "REVIEW": (PredicatePolicy.V2.value, "NOT_SUPERSEDED", "INCOMPLETE",
+                   "HUMAN_REVIEW_RECORDED", "HUMAN_REVIEW_RECORDED")}
+    if record_type in expected:
+        actual = (value.get("predicate_policy"), value.get("supersession"),
+                  value.get("completeness"), value.get("semantic_result"),
+                  value.get("reobservation"))
+        if actual != expected[record_type] or value.get("record_generation") != 0:
+            errors.append("RECORD_STATE_CONTRADICTION")
+        if (record_type == "EVIDENCE") != (value.get("previous_record_id") is None):
+            errors.append("PREVIOUS_ID_CONTRADICTION")
+        expected_time = "2026-09-08T04:34:36Z" if record_type == "EVIDENCE" else EVENT_TIME
+        if value.get("observed_at") != expected_time:
+            errors.append("RECORD_TIME_CONTRADICTION")
+    elif record_type == "ATTEMPT":
+        semantic = value.get("semantic_result")
+        if (value.get("predicate_policy") != PredicatePolicy.V2.value
+                or value.get("reobservation") != "ATTEMPT_RECORDED"
+                or semantic not in {item.value for item in AttemptStatus}
+                or value.get("record_generation") != value.get("attempt_generation")
+                or (value.get("completeness") == "COMPLETE") != (semantic == "COMPLETED")
+                or ((value.get("previous_record_id") is None)
+                    != (value.get("attempt_generation") == 0))
+                or (semantic == "STARTED") != (value.get("attempt_generation") == 0)
+                or value.get("reconciliation_required")
+                    != (semantic in {"FAILED", "INTERRUPTED"})
+                or value.get("observed_at") != EVENT_TIME
+                or result_id is not None):
+            errors.append("ATTEMPT_STATE_CONTRADICTION")
     if value.get("currentness") != "CURRENTNESS_UNKNOWN": errors.append("CURRENTNESS_UNKNOWN_REQUIRED")
     if value.get("freshness") != "FRESHNESS_NOT_CONFIRMED": errors.append("FRESHNESS_UNPROVEN")
     if value.get("retention_policy") != "RETENTION_POLICY_REQUIRED": errors.append("RETENTION_POLICY_REQUIRED")
     if value.get("compatibility") != "COMPATIBILITY_REVIEW_REQUIRED": errors.append("COMPATIBILITY_REVIEW_REQUIRED")
     if value.get("retry_count") != 0: errors.append("RETRY_PROHIBITED")
+    if value.get("policy_version") != POLICY_VERSION:
+        errors.append("POLICY_VERSION_INVALID")
+    if value.get("runtime_nonce_status") != "BLOCKED_BY_LIVE_SIGNED_WRITE":
+        errors.append("RUNTIME_NONCE_STATUS_INVALID")
     for name in ("ready_to_act", "authorized_to_act", "live_action_enabled"):
         if type(value.get(name)) is not bool or value.get(name) is not False:
             errors.append("LIVE_ACTION_PROHIBITED")

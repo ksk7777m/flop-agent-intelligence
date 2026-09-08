@@ -29,6 +29,19 @@ The retained one-shot evidence is bound to source set
 `technocore-runtime-predicates-v1`. Its LLMS result remains
 `LLMS_SEMANTIC_GAP`; its raw response was not retained.
 
+Its SHA-256 identity uses the domain `FLOP_OBSERVATION_RETENTION_RECORD_ID_V1`
+and the repository-defined `STRICT_TYPED_UTF8_JSON_V1` encoding: sorted JSON
+object keys, preserved array order, explicit UTF-8, escaped Unicode code points,
+no Unicode normalization, and no floats or non-JSON types. The identity binds
+the schema, generation, previous identity, fixed source IDs and ordinals,
+observation time and policy, predicate revision and domain-separated identity
+hash, transport/semantic outcomes,
+completeness, one-shot version evidence, minimized freshness/cache state,
+retention/currentness/supersession, and compatibility. The historical body
+hashes and exact lengths were not retained; each source therefore binds explicit
+null values plus `body_evidence=NOT_RETAINED`, the accepted bounded-size result,
+and the fixed byte cap. No digest or length is reconstructed or guessed.
+
 The descriptive migration binds v1 to `technocore-runtime-predicates-v2`, the
 fixed reason `LLMS_PREDICATE_ALIGNED_TO_PINNED_REVISION`, the LLMS source ID,
 the previous evidence identity and a fixed local event time. It cannot change
@@ -60,6 +73,8 @@ package intentionally has no issuer for such live evidence.
 The ledger is fixture-only and process-local. There is no persistence API, so a
 crash cannot trigger automatic recovery or retry. A failed/interrupted attempt
 requires a future separately reviewed plan; it never deletes earlier evidence.
+Connecting any live observer or runner remains blocked until a durable journal
+and explicit restart reconciliation policy are implemented and reviewed.
 
 ## Public and production boundary
 

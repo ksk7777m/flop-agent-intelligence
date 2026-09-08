@@ -4,7 +4,7 @@
   "title": "Observation Retention and Predicate Migration Ceremony V1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema","status","record_type","record_id","previous_record_id","predicate_policy","source_set_id","observed_at","retention","supersession","currentness","freshness","completeness","semantic_result","reobservation","minimized_evidence_hash","observation_policy","from_predicate_policy","migration_reason","affected_source_id","raw_evidence_available","reevaluation_permitted","planned_operation","execution_enabled","attempt_id","observation_plan_id","attempt_generation","source_attempts_hash","reconciliation_required","result_evidence_id","retention_policy","compatibility","retry_count","ready_to_act","authorized_to_act","live_action_enabled","runtime_nonce_status","policy_version"],
+  "required": ["schema","status","record_type","record_id","previous_record_id","predicate_policy","predicate_policy_hash","source_set_id","observed_at","retention","supersession","currentness","freshness","completeness","semantic_result","reobservation","minimized_evidence_hash","observation_policy","from_predicate_policy","migration_reason","affected_source_id","raw_evidence_available","reevaluation_permitted","planned_operation","execution_enabled","attempt_id","observation_plan_id","attempt_generation","source_attempts_hash","reconciliation_required","result_evidence_id","retention_policy","compatibility","retry_count","ready_to_act","authorized_to_act","live_action_enabled","runtime_nonce_status","policy_version","identity_domain","canonical_encoding","hash_algorithm","record_generation","source_count","source_order_hash","deployment_version_evidence","body_evidence"],
   "properties": {
     "schema": {"const": "observation-retention-ceremony-v1"},
     "status": {"const": "DESCRIPTIVE_ONLY"},
@@ -12,6 +12,7 @@
     "record_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "previous_record_id": {"type": ["string","null"], "pattern": "^[0-9a-f]{64}$"},
     "predicate_policy": {"enum": ["technocore-runtime-predicates-v1","technocore-runtime-predicates-v2"]},
+    "predicate_policy_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "source_set_id": {"const": "technocore-runtime-fixed-source-set-v1"},
     "observed_at": {"type": "string", "format": "date-time"},
     "retention": {"const": "RETAINED"},
@@ -43,7 +44,15 @@
     "authorized_to_act": {"const": false},
     "live_action_enabled": {"const": false},
     "runtime_nonce_status": {"const": "BLOCKED_BY_LIVE_SIGNED_WRITE"},
-    "policy_version": {"const": "local-observation-retention-policy-v1"}
+    "policy_version": {"const": "local-observation-retention-policy-v1"},
+    "identity_domain": {"const": "FLOP_OBSERVATION_RETENTION_RECORD_ID_V1"},
+    "canonical_encoding": {"const": "STRICT_TYPED_UTF8_JSON_V1"},
+    "hash_algorithm": {"const": "SHA-256"},
+    "record_generation": {"type": "integer", "minimum": 0, "maximum": 4},
+    "source_count": {"const": 4},
+    "source_order_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "deployment_version_evidence": {"const": "VERSION_EXPLICITLY_OBSERVED_ONE_SHOT"},
+    "body_evidence": {"const": "NOT_RETAINED"}
   },
   "allOf": [
     {"if": {"properties": {"record_type": {"const": "MIGRATION"}}, "required": ["record_type"]},
@@ -54,6 +63,14 @@
        "affected_source_id": {"const": "TECHNOCORE_LLMS"}
      }},
      "else": {"properties": {"from_predicate_policy": {"const": null}, "migration_reason": {"const": null}, "affected_source_id": {"const": null}}}},
+    {"if": {"properties": {"record_type": {"const": "EVIDENCE"}}, "required": ["record_type"]},
+     "then": {"properties": {"previous_record_id": {"const": null}, "predicate_policy": {"const": "technocore-runtime-predicates-v1"}, "supersession": {"const": "SUPERSEDED"}, "completeness": {"const": "INCOMPLETE"}, "semantic_result": {"const": "LLMS_SEMANTIC_GAP"}, "reobservation": {"const": "REOBSERVATION_REQUIRED"}, "record_generation": {"const": 0}}}},
+    {"if": {"properties": {"record_type": {"const": "MIGRATION"}}, "required": ["record_type"]},
+     "then": {"properties": {"previous_record_id": {"type": "string"}, "supersession": {"const": "SUPERSEDED"}, "completeness": {"const": "INCOMPLETE"}, "semantic_result": {"const": "RE_EVALUATION_PROHIBITED"}, "reobservation": {"const": "REOBSERVATION_REQUIRED"}, "record_generation": {"const": 0}}}},
+    {"if": {"properties": {"record_type": {"const": "PLAN"}}, "required": ["record_type"]},
+     "then": {"properties": {"previous_record_id": {"type": "string"}, "predicate_policy": {"const": "technocore-runtime-predicates-v2"}, "supersession": {"const": "NOT_SUPERSEDED"}, "completeness": {"const": "INCOMPLETE"}, "semantic_result": {"const": "MANUAL_EXECUTION_PENDING"}, "reobservation": {"const": "PLAN_PREPARED"}, "record_generation": {"const": 0}}}},
+    {"if": {"properties": {"record_type": {"const": "REVIEW"}}, "required": ["record_type"]},
+     "then": {"properties": {"previous_record_id": {"type": "string"}, "predicate_policy": {"const": "technocore-runtime-predicates-v2"}, "supersession": {"const": "NOT_SUPERSEDED"}, "completeness": {"const": "INCOMPLETE"}, "semantic_result": {"const": "HUMAN_REVIEW_RECORDED"}, "reobservation": {"const": "HUMAN_REVIEW_RECORDED"}, "record_generation": {"const": 0}}}},
     {"if": {"properties": {"record_type": {"const": "ATTEMPT"}}, "required": ["record_type"]},
      "then": {"properties": {"attempt_id": {"type": "string"}, "observation_plan_id": {"type": "string"}, "attempt_generation": {"type": "integer"}, "source_attempts_hash": {"type": "string"}}},
      "else": {"properties": {"attempt_id": {"const": null}, "observation_plan_id": {"const": null}, "attempt_generation": {"const": null}, "source_attempts_hash": {"const": null}, "reconciliation_required": {"const": false}, "result_evidence_id": {"const": null}}}}
