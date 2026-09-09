@@ -176,5 +176,14 @@
     "winner": "GLOBAL_WINNER_UNRESOLVED",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "tclk_authenticated_winner": {
+    "schema": "tclk-authenticated-winner-v1",
+    "classification": "SAFE_PURE_VALIDATOR",
+    "authority": "PINNED_WINNER_AUTHORITY_REQUIRED",
+    "winner": "CONDITIONALLY_ISSUABLE",
+    "race_loss": "NOT_ISSUED",
+    "network": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }

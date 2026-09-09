@@ -24,7 +24,7 @@ def _parse(raw:bytes)->Any:
  return v
 def _base(values:tuple[Any,...])->dict[str,Any]:
  return {"schema":SCHEMA,"domain":DOMAIN,"content_label":"PUBLIC_MINIMIZED_EVIDENCE","artifact_id":"","policy_revision":POLICY,
-  "input_byte_lengths":[len(v) if type(v) is bytes else None for v in values],"stages":[{"ordinal":i+1,"stage_id":n,"state":"NOT_EVALUATED"} for i,n in enumerate(STAGES)],"errors":[],
+  "input_byte_lengths":[len(v) if type(v) is bytes else None for v in values],"input_commitments":{"offer_sha256":_hash(values[0]) if type(values[0]) is bytes else "UNAVAILABLE","transcript_sha256":_hash(values[1]) if type(values[1]) is bytes else "UNAVAILABLE","role":"LINKABLE_FINGERPRINT_NOT_WINNER_AUTHORITY"},"stages":[{"ordinal":i+1,"stage_id":n,"state":"NOT_EVALUATED"} for i,n in enumerate(STAGES)],"errors":[],
   "source_attestation":"SOURCE_ATTESTATION_INVALID","source_scope":"SOURCE_SCOPE_INSUFFICIENT","generation":"GENERATION_UNRESOLVED","cursor":"CURSOR_INTEGRITY_FAILED","lower_boundary":"LOWER_BOUNDARY_UNRESOLVED","upper_boundary":"UPPER_BOUNDARY_UNRESOLVED","gap":"GAP_UNRESOLVED","truncation":"TRUNCATION_UNRESOLVED","malformed":"MALFORMED_SCOPE_IMPACT_UNRESOLVED","retention":"RETENTION_UNRESOLVED","artifact_conflict":"SOURCE_CONFLICT_UNRESOLVED","completeness":"COMPLETENESS_NOT_ESTABLISHED",
   "record_count":0,"winner":"GLOBAL_WINNER_UNRESOLVED","race_loss":"NOT_ISSUED","chronology":"CHRONOLOGY_OBSERVED_NOT_AUTHORITATIVE","lock":"NOT_VERIFIED","settlement":"NOT_VERIFIED","ready_to_act":False,"authorized_to_act":False,"live_action_enabled":False,
   "production_api":{"classification":"SAFE_PURE_VALIDATOR","network":"NONE","technocore":"NONE","remote_mcp":"NONE","signer":"NONE","wallet":"NONE","settlement":"NONE","completeness_issuance_reachable":True,"winner_issuance_reachable":False}}
@@ -100,6 +100,8 @@ def _validate(v:Any)->None:
  except Exception:raise ValueError("RESULT_SCHEMA_INVALID") from None
  expected=_hash(_canon({k:x for k,x in v.items() if k!="artifact_id"}))
  if not hmac.compare_digest(v["artifact_id"],expected):raise ValueError("ARTIFACT_IDENTITY_MISMATCH")
+ commitments=v["input_commitments"]
+ if set(commitments)!={"offer_sha256","transcript_sha256","role"} or commitments["role"]!="LINKABLE_FINGERPRINT_NOT_WINNER_AUTHORITY":raise ValueError("INPUT_COMMITMENT_INVALID")
  complete=v["completeness"]=="OFFER_WIDE_COMPLETENESS_VERIFIED"
  gates=(v["source_attestation"]=="SOURCE_ATTESTATION_VERIFIED",v["source_scope"]=="OFFER_WIDE_SCOPE_VERIFIED",v["generation"]=="GENERATION_VERIFIED",v["cursor"]=="CURSOR_INTEGRITY_VERIFIED",v["lower_boundary"]=="LOWER_BOUNDARY_VERIFIED",v["upper_boundary"]=="UPPER_BOUNDARY_VERIFIED",v["gap"]=="NO_GAP_VERIFIED",v["truncation"]=="NO_TRUNCATION_ATTESTED",v["malformed"]=="NO_MALFORMED_SCOPE_IMPACT",v["retention"]=="NO_RETENTION_LOSS_ATTESTED",v["artifact_conflict"]=="NO_SOURCE_CONFLICT_ATTESTED")
  if complete != (not v["errors"] and all(gates)):raise ValueError("COMPLETENESS_STATE_CONTRADICTION")

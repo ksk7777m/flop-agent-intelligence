@@ -1,0 +1,1 @@
+{"algorithm":"SEALED_CHRONOLOGY_FIRST_V1","candidate_set_order":"LEXICOGRAPHIC_COMMITMENT_SET_ONLY","chronology_order":"AUTHORITY_ATTESTED_ONLY","policy_id":"tclk-winner-selection","policy_version":"1","schema":"tclk-winner-policy-v1","tie_rule":"UNRESOLVED"}

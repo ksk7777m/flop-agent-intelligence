@@ -163,6 +163,12 @@ can issue completeness only from a verified sealed authority plus exact offer
 scope, generation/cursor continuity, explicit boundaries, no gaps/truncation/
 malformed impact/retention loss/conflict. Winner and every action remain blocked.
 
+The [authenticated winner issuance boundary](docs/TCLK_AUTHENTICATED_WINNER.md)
+requires exact completeness/offer/transcript binding, the complete valid
+candidate set, a hash-pinned policy, and signed chronology plus winner decision.
+It issues coordination winner evidence only; race loss, lock, settlement, and
+all live actions remain blocked.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects
