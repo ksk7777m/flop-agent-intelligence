@@ -26,6 +26,23 @@ unsigned local venue/export metadata. Changing any unsigned metadata can leave
 signature verification unchanged, but changes the exact transcript hash,
 per-record metadata hash, and artifact identity.
 
+The actual signature input is the strict UTF-8 encoding of the exact stored
+room string, one ASCII `|` byte, the exact canonical decimal Technocore nonce,
+one ASCII `|` byte, and the exact stored text bytes. There is no domain prefix,
+length prefix, trailing delimiter, or newline. Room and nonce grammars exclude
+`|`; text is the final field and may contain it without ambiguity. Text is
+verified before frame parsing or reserialization and is never NFC/NFD
+normalized. The frame's canonical ASCII JSON and sender equality are separate
+checks. This transport signature construction is pinned by the TCLK SPEC's
+Technocore binding and the existing Wire Evidence policy, not by the TCLK JSON
+schema.
+
+The Ed25519 key is decoded from the canonical `did:key` Ed25519 multicodec and
+re-encoded for equality. Wrong multicodecs, X25519 identifiers, malformed
+base58, wrong key/signature lengths, invalid keys, and invalid signatures fail
+closed. Equality between the transcript sender field and frame `from` does not
+attest the export source: `TRANSPORT_SENDER_AUTHENTICITY` remains `UNKNOWN`.
+
 ## Dimensions and completeness
 
 The closed result independently represents transport completion, parsing,
@@ -54,7 +71,12 @@ The local resource policy caps the transcript at 262144 bytes, records at 256,
 and each record at 8192 bytes. UTF-8 is strict; BOM, CRLF, empty lines,
 non-terminated final records, duplicate keys, float/exponent/NaN/Infinity,
 negative zero, unsafe integers, excessive nesting/members/arrays/strings, and
-unknown record fields fail closed. A missing terminal LF is explicit truncation.
+unknown record fields fail closed. Terminal LF, CRLF, and blank-line rules are
+the local JSONL export profile, not an attested venue format. A structurally
+complete final record without LF reports `FINAL_RECORD_TERMINATOR_MISSING`,
+`POSSIBLE_TAIL_TRUNCATION`, and `ACTUAL_TRUNCATION_UNPROVEN`; it does not claim
+the record was cut. A non-parseable final fragment reports
+`PARTIAL_FINAL_RECORD` and `TRUNCATION_STRUCTURALLY_DETECTED`.
 Depth, member, array, node, and decoded-string checks occur after the standard
 strict JSON decode; the 8192-byte per-record and 262144-byte transcript gates
 bound that work before parsing.
@@ -80,6 +102,35 @@ venue authenticity, final state, the offer-global winner, or settlement. These
 remain `REPLAY_EVIDENCE_REQUIRED`, `FINAL_STATE_DERIVATION_BLOCKED`,
 `WINNER_UNRESOLVED`, and `SETTLEMENT_UNVERIFIED`. Readiness, authorization, and
 live action are always false.
+
+Nonce reuse indicators are scoped to the exact signer DID and room. Equal
+nonces across different DIDs or rooms are not counted together. Repeated signed
+payloads indicate duplicate export evidence, not a Replay attack; reordered
+records and scoped nonce reuse remain descriptive indicators with
+`REPLAY_VALIDATION_UNKNOWN`, `REPLAY_EVIDENCE_REQUIRED`, and
+`MALICIOUSNESS_NOT_INFERRED`. Unsigned generation labels never define Replay
+scope or cursor authority.
+
+Input, record, signed-payload, and minimized-metadata SHA-256 values are content
+fingerprints with linkability. They are not completeness, authenticity,
+currentness, or signing proofs and do not select which conflicting transcript
+is correct.
+
+## A-class backlog: KOL readiness
+
+`KOL Referral Attribution / KOL Program Readiness` is recorded as backlog only;
+it does not change this package's API or schema. Current descriptive states are:
+`KOL_PROGRAM_STATUS=FOUNDER_ANNOUNCED_DETAILS_PENDING`,
+`KOL_PROGRAM_RULES=NOT_PUBLISHED`, `KOL_LEADERBOARD=NOT_OBSERVED`,
+`KOL_APPLICATION_STATUS=SUBMITTED`, `KOL_ACCEPTANCE_STATUS=NOT_CONFIRMED`,
+`KOL_REFERRAL_LINK=NOT_ISSUED`, `REFERRAL_ATTRIBUTION_SCHEMA=UNRESOLVED`,
+`REFERRED_WALLET_CREATION=NOT_OBSERVED`,
+`REFERRED_NETWORK_USAGE=NOT_OBSERVED`, `FLOP_USAGE_ATTRIBUTION=NOT_OBSERVED`,
+`LOTTERY_RULES=UNRESOLVED`, and `AIRDROP_SCORING_IMPACT=UNRESOLVED`.
+The referenced social post is unverified backlog data and is not fetched or
+made clickable. No referral link, wallet action, secret collection,
+self-referral, Sybil/farming optimization, lottery inference, or SUBMITTED to
+ACCEPTED promotion is permitted.
 
 Next package candidate: **Offer-global Winner Verification / Accept Race Classification**, fixture/offline only while completeness and venue ordering evidence are absent.
 

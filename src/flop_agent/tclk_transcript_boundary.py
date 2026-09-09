@@ -11,9 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+import base64
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from jsonschema import Draft202012Validator
 
-from .identity import verify_message
+from .identity import did_from_public_key, public_key_from_did
 from .tclk_schema_evidence import (COMMIT, SCHEMA_BLOB, SCHEMA_SHA256, SCHEMA_SIZE,
     SPEC_BLOB, SPEC_SHA256, SPEC_SIZE, load_pinned_evidence)
 
@@ -142,8 +146,28 @@ def _policy() -> Draft202012Validator:
     return Draft202012Validator(schema)
 
 
+def _verify(did: str, signature: str, payload: bytes) -> bool:
+    try:
+        public = public_key_from_did(did)
+        if not hmac.compare_digest(did, did_from_public_key(public)):
+            return False
+        raw_signature = base64.urlsafe_b64decode(signature + "==")
+        if len(raw_signature) != 64:
+            return False
+        Ed25519PublicKey.from_public_bytes(public).verify(raw_signature, payload)
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+    return True
+
+
 def _dimensions() -> list[dict[str, str]]:
-    return [{"dimension": name, "state": "NOT_EVALUATED"} for name in DIMENSION_IDS]
+    fixed = {
+        0: "UNKNOWN", 7: "EVIDENCE_REQUIRED", 12: "UNKNOWN", 13: "UNKNOWN",
+        14: "UNKNOWN", 16: "EVIDENCE_REQUIRED", 18: "EVIDENCE_REQUIRED",
+        19: "EVIDENCE_REQUIRED", 20: "EVIDENCE_REQUIRED", 21: "NOT_EVALUATED",
+    }
+    return [{"dimension": name, "state": fixed.get(index, "NOT_EVALUATED")}
+            for index, name in enumerate(DIMENSION_IDS)]
 
 
 def _base(raw: Any) -> dict[str, Any]:
@@ -163,18 +187,27 @@ def _base(raw: Any) -> dict[str, Any]:
             "max_record_bytes": MAX_RECORD_BYTES, "max_records": MAX_RECORDS},
         "format": {"encoding": "STRICT_UTF8", "framing": "LF_TERMINATED_JSON_LINES",
             "bom": "REJECTED", "empty_lines": "REJECTED", "crlf": "REJECTED",
-            "partial_final_line": "TRUNCATION_DETECTED"},
+            "partial_final_line": "STRUCTURAL_PARSE_REQUIRED"},
         "dimensions": _dimensions(), "errors": [], "record_count": 0, "frame_evidence": [],
         "metadata_evidence": {"seq_presence": "NOT_EVALUATED", "timestamp_presence": "NOT_EVALUATED",
             "duplicate_state": "NOT_EVALUATED", "seq_state": "NOT_EVALUATED",
             "timestamp_state": "NOT_EVALUATED", "equal_timestamp_count": 0,
             "generation_state": "NOT_EVALUATED", "authenticity": "UNKNOWN", "signed": False},
-        "replay_indicators": {"repeated_signed_payload_count": 0, "repeated_nonce_count": 0,
-            "reordered_records": False, "authority": "DESCRIPTIVE_ONLY_NOT_DURABLE_REPLAY_STATE"},
+        "sender_boundary": {"frame_from_matches_signing_key": "NOT_EVALUATED",
+            "transport_sender_matches_frame_from": "NOT_EVALUATED",
+            "transport_sender_authenticity": "UNKNOWN"},
+        "replay_indicators": {"duplicate_export_indicator_count": 0,
+            "nonce_scope_reuse_indicator_count": 0, "reordered_records": False,
+            "replay_validation": "UNKNOWN", "maliciousness": "NOT_INFERRED",
+            "authority": "DESCRIPTIVE_ONLY_NOT_DURABLE_REPLAY_STATE"},
+        "termination_evidence": {"local_profile": "NOT_EVALUATED", "tail_state": "NOT_EVALUATED",
+            "actual_truncation": "UNPROVEN"},
         "boundary_evidence": {"lower": "LOWER_BOUNDARY_UNKNOWN", "upper": "UPPER_BOUNDARY_UNKNOWN",
             "prefix_truncation": "EXPORT_MAY_BE_PREFIX_TRUNCATED",
             "suffix_truncation": "EXPORT_MAY_BE_SUFFIX_TRUNCATED"},
         "completeness": "NOT_EVALUATED", "replay": "REPLAY_EVIDENCE_REQUIRED",
+        "omission_judgment": "ACTUAL_EVENT_OMISSION_UNPROVEN",
+        "chronology": "NOT_VERIFIED", "generation_authenticity": "UNKNOWN",
         "final_state": "FINAL_STATE_DERIVATION_BLOCKED", "winner": "WINNER_UNRESOLVED",
         "settlement": "SETTLEMENT_UNVERIFIED", "currentness": "CURRENTNESS_NOT_EVALUATED",
         "reference_time": "REFERENCE_TIME_NOT_PROVIDED", "compatibility": "COMPATIBILITY_REVIEW_REQUIRED",
@@ -214,20 +247,32 @@ def assess_tclk_transcript(transcript_bytes: bytes) -> Mapping[str, Any]:
         return fail("BOM_REJECTED", 1)
     if b"\r" in transcript_bytes:
         return fail("CRLF_REJECTED", 1)
-    if not transcript_bytes.endswith(b"\n"):
-        state(15, "INCOMPLETE")
-        return fail("TRUNCATED_FINAL_RECORD", 1)
-    lines = transcript_bytes[:-1].split(b"\n")
+    terminator_missing = not transcript_bytes.endswith(b"\n")
+    if terminator_missing:
+        result["termination_evidence"] = {"local_profile": "FINAL_RECORD_TERMINATOR_MISSING",
+            "tail_state": "POSSIBLE_TAIL_TRUNCATION", "actual_truncation": "UNPROVEN"}
+        result["errors"] = ["FINAL_RECORD_TERMINATOR_MISSING"]
+        lines = transcript_bytes.split(b"\n")
+    else:
+        result["termination_evidence"] = {"local_profile": "CONFORMANT",
+            "tail_state": "NO_STRUCTURAL_TRUNCATION_OBSERVED", "actual_truncation": "UNPROVEN"}
+        lines = transcript_bytes[:-1].split(b"\n")
     if any(not line for line in lines): return fail("EMPTY_RECORD", 1)
     if len(lines) > MAX_RECORDS: return fail("RECORD_COUNT_EXCEEDED", 2)
     records: list[Mapping[str, Any]] = []
     try:
         for line in lines: records.append(_strict_object(line))
     except _BoundaryError as error:
+        if terminator_missing and error.code == "MALFORMED_JSON":
+            result["termination_evidence"] = {"local_profile": "FAILED",
+                "tail_state": "TRUNCATION_STRUCTURALLY_DETECTED",
+                "actual_truncation": "STRUCTURALLY_DETECTED"}
+            return fail("PARTIAL_FINAL_RECORD", 1)
         return fail(error.code, 1)
     state(1, "VERIFIED"); result["record_count"] = len(records)
     seqs: list[int] = []; times: list[datetime] = []; signed_hashes: list[str] = []
-    signature_states: list[str] = []; nonces: list[str] = []; generations: set[str] = set()
+    signature_states: list[str] = []; nonce_scopes: list[tuple[str, str, str]] = []
+    generations: set[str] = set()
     for index, record in enumerate(records):
         if set(record) - RECORD_FIELDS or not REQUIRED_RECORD_FIELDS.issubset(record):
             return fail("RECORD_FIELD_SET_INVALID", 1)
@@ -254,11 +299,7 @@ def assess_tclk_transcript(transcript_bytes: bytes) -> Mapping[str, Any]:
         frame_type = frame.get("type")
         if not isinstance(frame_type, str): return fail("SIGNED_FRAME_INVALID", 3)
         payload = f'{record["room"]}|{record["nonce"]}|{text}'.encode("utf-8")
-        try:
-            verify_message(record["from"], record["sig"], record["room"], record["nonce"], text)
-            sig_state = "VERIFIED"
-        except Exception:
-            sig_state = "FAILED"
+        sig_state = "VERIFIED" if _verify(record["from"], record["sig"], payload) else "FAILED"
         signed_hash = _digest(payload)
         metadata = {key: record[key] for key in ("seq", "ts", "generation") if key in record}
         metadata_hash = _digest(_canonical(metadata))
@@ -269,8 +310,12 @@ def assess_tclk_transcript(transcript_bytes: bytes) -> Mapping[str, Any]:
             "venue_metadata_binding": "UNKNOWN"})
         seqs.append(seq); times.append(timestamp); signed_hashes.append(signed_hash)
         signature_states.append(sig_state)
-        nonces.append(record["nonce"])
+        nonce_scopes.append((record["from"], record["room"], record["nonce"]))
     state(3, "VERIFIED"); state(5, "VERIFIED")
+    result["sender_boundary"] = {"frame_from_matches_signing_key":
+        "VERIFIED" if all(item == "VERIFIED" for item in signature_states) else "FAILED",
+        "transport_sender_matches_frame_from": "VERIFIED",
+        "transport_sender_authenticity": "UNKNOWN"}
     state(4, "VERIFIED" if all(item == "VERIFIED" for item in signature_states) else "FAILED")
     if "FAILED" in signature_states: result["errors"].append("SIGNATURE_INVALID")
     result["metadata_evidence"]["seq_presence"] = "PRESENT_ALL"
@@ -289,14 +334,16 @@ def assess_tclk_transcript(transcript_bytes: bytes) -> Mapping[str, Any]:
     result["metadata_evidence"]["timestamp_state"] = "TIMESTAMP_REGRESSION" if time_regression else "INTERNAL_TIMESTAMP_NONDECREASING"
     result["metadata_evidence"]["equal_timestamp_count"] = equal_times
     state(11, "FAILED" if time_regression else "VERIFIED")
-    result["metadata_evidence"]["generation_state"] = ("MULTIPLE_GENERATIONS_OBSERVED" if len(generations) > 1
+    result["metadata_evidence"]["generation_state"] = ("MULTIPLE_UNSIGNED_GENERATION_LABELS_OBSERVED" if len(generations) > 1
         else "SINGLE_GENERATION_OBSERVED" if generations else "GENERATION_ABSENT")
-    result["replay_indicators"] = {"repeated_signed_payload_count": len(signed_hashes) - len(set(signed_hashes)),
-        "repeated_nonce_count": len(nonces) - len(set(nonces)), "reordered_records": regression,
-        "authority": "DESCRIPTIVE_ONLY_NOT_DURABLE_REPLAY_STATE"}
+    result["replay_indicators"] = {"duplicate_export_indicator_count": len(signed_hashes) - len(set(signed_hashes)),
+        "nonce_scope_reuse_indicator_count": len(nonce_scopes) - len(set(nonce_scopes)),
+        "reordered_records": regression, "replay_validation": "UNKNOWN",
+        "maliciousness": "NOT_INFERRED", "authority": "DESCRIPTIVE_ONLY_NOT_DURABLE_REPLAY_STATE"}
     state(12, "UNKNOWN"); state(13, "UNKNOWN"); state(14, "UNKNOWN"); state(15, "UNKNOWN")
     state(0, "UNKNOWN"); state(7, "EVIDENCE_REQUIRED"); state(16, "EVIDENCE_REQUIRED")
-    incomplete = duplicate_seq or duplicate_frame or regression or gap or time_regression or len(generations) > 1
+    incomplete = (terminator_missing or duplicate_seq or duplicate_frame or regression or gap
+        or time_regression or len(generations) > 1)
     result["completeness"] = "INCOMPLETE" if incomplete else "UNKNOWN"
     state(17, "INCOMPLETE" if incomplete else "UNKNOWN")
     for index in (18, 19, 20): state(index, "EVIDENCE_REQUIRED")
@@ -310,7 +357,8 @@ __all__ = ["assess_tclk_transcript"]
 class _SealedModule(types.ModuleType):
     _protected = frozenset({"SCHEMA", "DOMAIN", "POLICY", "ROOT", "SNAPSHOT", "RECORD_FIELDS",
         "REQUIRED_RECORD_FIELDS", "MAX_TRANSCRIPT_BYTES", "MAX_RECORD_BYTES", "MAX_RECORDS",
-        "verify_message", "load_pinned_evidence", "_policy", "_strict_object", "_timestamp",
+        "did_from_public_key", "public_key_from_did", "Ed25519PublicKey", "load_pinned_evidence",
+        "_verify", "_policy", "_strict_object", "_timestamp",
         "_canonical", "_digest", "_base", "_seal", "assess_tclk_transcript", "__all__"})
     def __setattr__(self, name: str, value: Any) -> None:
         if name in self._protected and name in self.__dict__:

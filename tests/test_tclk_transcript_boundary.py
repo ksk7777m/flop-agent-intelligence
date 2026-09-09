@@ -1,5 +1,6 @@
 import base64
 import copy
+import hashlib
 import inspect
 import json
 import unittest
@@ -21,15 +22,17 @@ KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
 DID = did_from_public_key(KEY.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
 
 
-def signed_record(seq, ts, frame_type="heartbeat", transport_nonce=None, generation="gen-1"):
+def signed_record(seq, ts, frame_type="heartbeat", transport_nonce=None, generation="gen-1",
+                  key=KEY, did=DID, room="tclk-offers", note=None):
     nonce = transport_nonce or str(seq + 10)
-    frame = {"type": frame_type, "from": DID, "contract": "0x" + "ab" * 32,
+    frame = {"type": frame_type, "from": did, "contract": "0x" + "ab" * 32,
              "nonce": "00112233"}
     if frame_type == "refund": frame.pop("nonce")
+    if note is not None: frame["note"] = note
     text = "tclk1 " + canonical(frame)
-    payload = f"tclk-offers|{nonce}|{text}".encode()
-    sig = base64.urlsafe_b64encode(KEY.sign(payload)).decode().rstrip("=")
-    value = {"room": "tclk-offers", "seq": seq, "ts": ts, "from": DID,
+    payload = f"{room}|{nonce}|{text}".encode()
+    sig = base64.urlsafe_b64encode(key.sign(payload)).decode().rstrip("=")
+    value = {"room": room, "seq": seq, "ts": ts, "from": did,
              "nonce": nonce, "sig": sig, "text": text}
     if generation is not None: value["generation"] = generation
     return value
@@ -67,6 +70,7 @@ class TclkTranscriptBoundaryTests(unittest.TestCase):
         self.assertEqual(dims["SIGNATURE_VERIFICATION"], "VERIFIED")
         self.assertEqual(dims["SIGNED_PAYLOAD_BINDING"], "VERIFIED")
         self.assertEqual(dims["VENUE_METADATA_AUTHENTICITY"], "UNKNOWN")
+        self.assertEqual(result["sender_boundary"]["transport_sender_authenticity"], "UNKNOWN")
         self.assertEqual(result["completeness"], "UNKNOWN")
         self.assertEqual(result["replay"], "REPLAY_EVIDENCE_REQUIRED")
         self.assertEqual(result["final_state"], "FINAL_STATE_DERIVATION_BLOCKED")
@@ -84,6 +88,27 @@ class TclkTranscriptBoundaryTests(unittest.TestCase):
             self.assertNotEqual(changed["input_evidence"]["sha256"], original["input_evidence"]["sha256"])
             self.assertTrue(all(item["venue_metadata_binding"] == "UNKNOWN" for item in changed["frame_evidence"]))
 
+    def test_transcript_byte_mutations_change_identity_without_proving_authority(self):
+        original_raw = transcript(self.records)
+        original = boundary.assess_tclk_transcript(original_raw)
+        mutations = []
+        for field, value in (("sig", "A" * 86), ("seq", 201),
+                             ("ts", "2026-09-09T00:00:09Z"), ("generation", "gen-2")):
+            records = copy.deepcopy(self.records); records[1][field] = value
+            mutations.append(transcript(records))
+        mutations.extend((transcript(list(reversed(self.records))),
+                          transcript(self.records + [self.records[0]]),
+                          transcript(self.records[1:]), transcript(self.records[:-1]),
+                          transcript([self.records[0], self.records[2]]),
+                          transcript(self.records, False)))
+        for raw in mutations:
+            changed = boundary.assess_tclk_transcript(raw)
+            self.assertNotEqual(changed["artifact_id"], original["artifact_id"])
+            self.assertNotEqual(changed["input_evidence"]["sha256"],
+                                original["input_evidence"]["sha256"])
+            self.assertFalse(changed["ready_to_act"])
+            self.assertEqual(changed["winner"], "WINNER_UNRESOLVED")
+
     def test_middle_prefix_suffix_deletion_boundaries(self):
         middle = boundary.assess_tclk_transcript(transcript([self.records[0], self.records[2]]))
         self.assertEqual(middle["completeness"], "INCOMPLETE")
@@ -95,12 +120,16 @@ class TclkTranscriptBoundaryTests(unittest.TestCase):
             self.assertEqual(result["boundary_evidence"]["upper"], "UPPER_BOUNDARY_UNKNOWN")
 
     def test_truncated_duplicate_reordered_and_replay_indicators(self):
-        truncated = boundary.assess_tclk_transcript(transcript(self.records, False))
-        self.assertEqual(truncated["errors"], ["TRUNCATED_FINAL_RECORD"])
-        self.assertEqual(truncated["completeness"], "INCOMPLETE")
+        unterminated = boundary.assess_tclk_transcript(transcript(self.records, False))
+        self.assertEqual(unterminated["errors"], ["FINAL_RECORD_TERMINATOR_MISSING"])
+        self.assertEqual(unterminated["termination_evidence"]["actual_truncation"], "UNPROVEN")
+        self.assertEqual(unterminated["completeness"], "INCOMPLETE")
+        partial = boundary.assess_tclk_transcript(b'{"room":')
+        self.assertEqual(partial["errors"], ["PARTIAL_FINAL_RECORD"])
+        self.assertEqual(partial["termination_evidence"]["actual_truncation"], "STRUCTURALLY_DETECTED")
         duplicate = boundary.assess_tclk_transcript(transcript([self.records[0], self.records[0]]))
         self.assertEqual(duplicate["metadata_evidence"]["duplicate_state"], "DUPLICATE_DETECTED")
-        self.assertEqual(duplicate["replay_indicators"]["repeated_signed_payload_count"], 1)
+        self.assertEqual(duplicate["replay_indicators"]["duplicate_export_indicator_count"], 1)
         reordered = boundary.assess_tclk_transcript(transcript([self.records[1], self.records[0]]))
         self.assertEqual(reordered["metadata_evidence"]["seq_state"], "INTERNAL_SEQ_REGRESSION")
         self.assertTrue(reordered["replay_indicators"]["reordered_records"])
@@ -109,11 +138,57 @@ class TclkTranscriptBoundaryTests(unittest.TestCase):
     def test_same_frame_different_metadata_and_same_metadata_different_frame(self):
         same_frame = copy.deepcopy(self.records[0]); same_frame["seq"] = 101; same_frame["ts"] = "2026-09-09T00:00:01Z"
         result = boundary.assess_tclk_transcript(transcript([self.records[0], same_frame]))
-        self.assertEqual(result["replay_indicators"]["repeated_signed_payload_count"], 1)
+        self.assertEqual(result["replay_indicators"]["duplicate_export_indicator_count"], 1)
         different = signed_record(100, self.records[0]["ts"], frame_type="refund", transport_nonce="12")
         result = boundary.assess_tclk_transcript(transcript([self.records[0], different]))
         self.assertEqual(result["metadata_evidence"]["duplicate_state"], "DUPLICATE_DETECTED")
         self.assertNotEqual(result["frame_evidence"][0]["signed_payload_sha256"], result["frame_evidence"][1]["signed_payload_sha256"])
+
+    def test_exact_signature_bytes_unicode_delimiter_and_private_room(self):
+        records = [signed_record(1, "2026-09-09T00:00:00Z", note="a|caf\u00e9",
+                                 room="mb-p-tclk-0123456789abcdef"),
+                   signed_record(2, "2026-09-09T00:00:01Z", note="a|cafe\u0301",
+                                 room="mb-p-tclk-0123456789abcdef")]
+        result = boundary.assess_tclk_transcript(transcript(records))
+        self.assertEqual(dimensions(result)["SIGNATURE_VERIFICATION"], "VERIFIED")
+        exact = (records[0]["room"].encode() + b"|" + records[0]["nonce"].encode()
+                 + b"|" + records[0]["text"].encode())
+        self.assertEqual(result["frame_evidence"][0]["signed_payload_sha256"],
+                         hashlib.sha256(exact).hexdigest())
+        self.assertNotEqual(result["frame_evidence"][0]["signed_payload_sha256"],
+                            result["frame_evidence"][1]["signed_payload_sha256"])
+        changed = copy.deepcopy(records); changed[0]["text"] += " "
+        self.assertEqual(boundary.assess_tclk_transcript(transcript(changed))["errors"],
+                         ["FRAME_SCHEMA_OR_SENDER_BINDING_FAILED"])
+
+    def test_replay_nonce_indicator_is_scoped_to_sender_and_room(self):
+        other_key = Ed25519PrivateKey.from_private_bytes(bytes(range(1, 33)))
+        other_did = did_from_public_key(other_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw))
+        records = [signed_record(1, "2026-09-09T00:00:00Z", transport_nonce="55"),
+                   signed_record(2, "2026-09-09T00:00:01Z", transport_nonce="55",
+                                 key=other_key, did=other_did)]
+        result = boundary.assess_tclk_transcript(transcript(records))
+        self.assertEqual(result["replay_indicators"]["nonce_scope_reuse_indicator_count"], 0)
+        records[1] = signed_record(2, "2026-09-09T00:00:01Z", transport_nonce="55",
+                                   room="mb-p-tclk-0123456789abcdef")
+        result = boundary.assess_tclk_transcript(transcript(records))
+        self.assertEqual(result["replay_indicators"]["nonce_scope_reuse_indicator_count"], 0)
+        records[1] = signed_record(2, "2026-09-09T00:00:01Z", transport_nonce="55")
+        result = boundary.assess_tclk_transcript(transcript(records))
+        self.assertEqual(result["replay_indicators"]["nonce_scope_reuse_indicator_count"], 1)
+        self.assertEqual(result["replay_indicators"]["replay_validation"], "UNKNOWN")
+        self.assertEqual(result["replay_indicators"]["maliciousness"], "NOT_INFERRED")
+
+    def test_did_algorithm_canonicality_and_sender_binding(self):
+        records = copy.deepcopy(self.records); records[0]["from"] = "did:key:z6LS" + "f" * 44
+        self.assertEqual(boundary.assess_tclk_transcript(transcript(records))["errors"],
+                         ["SIGNED_RECORD_FIELD_INVALID"])
+        records = copy.deepcopy(self.records); records[0]["from"] = DID[:-1] + "0"
+        self.assertEqual(boundary.assess_tclk_transcript(transcript(records))["errors"],
+                         ["SIGNED_RECORD_FIELD_INVALID"])
+        records = copy.deepcopy(self.records); records[0]["sig"] = records[0]["sig"][:-1]
+        self.assertEqual(boundary.assess_tclk_transcript(transcript(records))["errors"],
+                         ["SIGNED_RECORD_FIELD_INVALID"])
 
     def test_seq_timestamp_generation_and_signature_fail_closed(self):
         cases = [("seq", True, "SEQ_INVALID"), ("seq", -1, "SEQ_INVALID"),
@@ -127,10 +202,14 @@ class TclkTranscriptBoundaryTests(unittest.TestCase):
         records = copy.deepcopy(self.records); records[0]["sig"] = "A" * 86
         result = boundary.assess_tclk_transcript(transcript(records))
         self.assertEqual(dimensions(result)["SIGNATURE_VERIFICATION"], "FAILED")
+        self.assertEqual(result["sender_boundary"]["frame_from_matches_signing_key"], "FAILED")
+        self.assertEqual(result["sender_boundary"]["transport_sender_matches_frame_from"], "VERIFIED")
+        self.assertEqual(result["sender_boundary"]["transport_sender_authenticity"], "UNKNOWN")
         self.assertEqual(result["completeness"], "UNKNOWN")
         records = copy.deepcopy(self.records); records[1]["generation"] = "gen-2"
         result = boundary.assess_tclk_transcript(transcript(records))
-        self.assertEqual(result["metadata_evidence"]["generation_state"], "MULTIPLE_GENERATIONS_OBSERVED")
+        self.assertEqual(result["metadata_evidence"]["generation_state"],
+                         "MULTIPLE_UNSIGNED_GENERATION_LABELS_OBSERVED")
         self.assertEqual(result["completeness"], "INCOMPLETE")
 
     def test_timestamp_equal_future_and_currentness_are_descriptive(self):
@@ -189,6 +268,13 @@ class TclkTranscriptBoundaryTests(unittest.TestCase):
         self.assertEqual(item["action"], "NO_LIVE_ACTION")
         forged = boundary.assess_tclk_transcript(transcript(self.records))
         forged["completeness"] = "COMPLETE"
+        with self.assertRaises(Exception): Draft202012Validator(self.schema).validate(forged)
+        forged = boundary.assess_tclk_transcript(transcript(self.records))
+        forged["dimensions"][12]["state"] = "VERIFIED"
+        with self.assertRaises(Exception): Draft202012Validator(self.schema).validate(forged)
+        forged = boundary.assess_tclk_transcript(transcript(self.records))
+        forged["dimensions"][0], forged["dimensions"][1] = (
+            forged["dimensions"][1], forged["dimensions"][0])
         with self.assertRaises(Exception): Draft202012Validator(self.schema).validate(forged)
 
 

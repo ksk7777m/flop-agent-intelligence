@@ -3,7 +3,7 @@
   "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-transcript-boundary.v1.json",
   "title": "TCLK Transcript Completeness and Unsigned Venue Metadata Boundary V1",
   "type": "object", "additionalProperties": false,
-  "required": ["schema", "domain", "content_label", "artifact_id", "policy_identity", "input_evidence", "resource_policy", "format", "dimensions", "errors", "record_count", "frame_evidence", "metadata_evidence", "replay_indicators", "boundary_evidence", "completeness", "replay", "final_state", "winner", "settlement", "currentness", "reference_time", "compatibility", "ready_to_act", "authorized_to_act", "live_action_enabled", "production_api"],
+  "required": ["schema", "domain", "content_label", "artifact_id", "policy_identity", "input_evidence", "resource_policy", "format", "dimensions", "errors", "record_count", "frame_evidence", "metadata_evidence", "sender_boundary", "replay_indicators", "termination_evidence", "boundary_evidence", "completeness", "replay", "omission_judgment", "chronology", "generation_authenticity", "final_state", "winner", "settlement", "currentness", "reference_time", "compatibility", "ready_to_act", "authorized_to_act", "live_action_enabled", "production_api"],
   "properties": {
     "schema": {"const": "tclk-transcript-completeness-boundary-v1"},
     "domain": {"const": "TCLK_TRANSCRIPT_COMPLETENESS_BOUNDARY\u0000V1"},
@@ -22,32 +22,32 @@
     },
     "input_evidence": {"$ref": "#/$defs/inputIdentity"},
     "resource_policy": {"const": {"basis": "LOCAL_RESOURCE_SAFETY_POLICY", "max_transcript_bytes": 262144, "max_record_bytes": 8192, "max_records": 256}},
-    "format": {"const": {"encoding": "STRICT_UTF8", "framing": "LF_TERMINATED_JSON_LINES", "bom": "REJECTED", "empty_lines": "REJECTED", "crlf": "REJECTED", "partial_final_line": "TRUNCATION_DETECTED"}},
+    "format": {"const": {"encoding": "STRICT_UTF8", "framing": "LF_TERMINATED_JSON_LINES", "bom": "REJECTED", "empty_lines": "REJECTED", "crlf": "REJECTED", "partial_final_line": "STRUCTURAL_PARSE_REQUIRED"}},
     "dimensions": {
       "type": "array", "minItems": 22, "maxItems": 22, "items": false,
       "prefixItems": [
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "TRANSPORT_COMPLETION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "TRANSPORT_COMPLETION"}, "state": {"const": "UNKNOWN"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "TRANSCRIPT_PARSE"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "RECORD_COUNT_BOUNDS"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "FRAME_SCHEMA_CONFORMANCE"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SIGNATURE_VERIFICATION"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SIGNED_PAYLOAD_BINDING"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "DUPLICATE_DETECTION"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "REPLAY_VALIDATION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "REPLAY_VALIDATION"}, "state": {"const": "EVIDENCE_REQUIRED"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "VENUE_METADATA_PRESENCE"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "VENUE_METADATA_TYPE_VALIDITY"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "INTERNAL_SEQ_CONTINUITY"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "INTERNAL_TIMESTAMP_ORDERING"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "VENUE_METADATA_AUTHENTICITY"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "LOWER_BOUND_COVERAGE"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "UPPER_BOUND_COVERAGE"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "VENUE_METADATA_AUTHENTICITY"}, "state": {"const": "UNKNOWN"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "LOWER_BOUND_COVERAGE"}, "state": {"const": "UNKNOWN"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "UPPER_BOUND_COVERAGE"}, "state": {"const": "UNKNOWN"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "EXPORT_TRUNCATION"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SOURCE_SET_COMPLETENESS"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SOURCE_SET_COMPLETENESS"}, "state": {"const": "EVIDENCE_REQUIRED"}}},
         {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "TRANSCRIPT_COMPLETENESS"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "FINAL_STATE_DERIVATION"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "WINNER_VERIFICATION"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SETTLEMENT_VERIFICATION"}}},
-        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "CURRENTNESS_FRESHNESS"}}}
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "FINAL_STATE_DERIVATION"}, "state": {"const": "EVIDENCE_REQUIRED"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "WINNER_VERIFICATION"}, "state": {"const": "EVIDENCE_REQUIRED"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SETTLEMENT_VERIFICATION"}, "state": {"const": "EVIDENCE_REQUIRED"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "CURRENTNESS_FRESHNESS"}, "state": {"const": "NOT_EVALUATED"}}}
       ]
     },
     "errors": {"type": "array", "maxItems": 2, "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"}},
@@ -62,18 +62,26 @@
         "seq_state": {"enum": ["NOT_EVALUATED", "INTERNAL_SEQ_CONTIGUOUS", "INTERNAL_SEQ_GAP_DETECTED", "INTERNAL_SEQ_REGRESSION"]},
         "timestamp_state": {"enum": ["NOT_EVALUATED", "INTERNAL_TIMESTAMP_NONDECREASING", "TIMESTAMP_REGRESSION"]},
         "equal_timestamp_count": {"type": "integer", "minimum": 0, "maximum": 255},
-        "generation_state": {"enum": ["NOT_EVALUATED", "GENERATION_ABSENT", "SINGLE_GENERATION_OBSERVED", "MULTIPLE_GENERATIONS_OBSERVED"]},
+        "generation_state": {"enum": ["NOT_EVALUATED", "GENERATION_ABSENT", "SINGLE_GENERATION_OBSERVED", "MULTIPLE_UNSIGNED_GENERATION_LABELS_OBSERVED"]},
         "authenticity": {"const": "UNKNOWN"}, "signed": {"const": false}
       }
     },
+    "sender_boundary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["frame_from_matches_signing_key", "transport_sender_matches_frame_from", "transport_sender_authenticity"],
+      "properties": {"frame_from_matches_signing_key": {"enum": ["NOT_EVALUATED", "VERIFIED", "FAILED"]}, "transport_sender_matches_frame_from": {"enum": ["NOT_EVALUATED", "VERIFIED"]}, "transport_sender_authenticity": {"const": "UNKNOWN"}}
+    },
     "replay_indicators": {
       "type": "object", "additionalProperties": false,
-      "required": ["repeated_signed_payload_count", "repeated_nonce_count", "reordered_records", "authority"],
-      "properties": {"repeated_signed_payload_count": {"type": "integer", "minimum": 0, "maximum": 255}, "repeated_nonce_count": {"type": "integer", "minimum": 0, "maximum": 255}, "reordered_records": {"type": "boolean"}, "authority": {"const": "DESCRIPTIVE_ONLY_NOT_DURABLE_REPLAY_STATE"}}
+      "required": ["duplicate_export_indicator_count", "nonce_scope_reuse_indicator_count", "reordered_records", "replay_validation", "maliciousness", "authority"],
+      "properties": {"duplicate_export_indicator_count": {"type": "integer", "minimum": 0, "maximum": 255}, "nonce_scope_reuse_indicator_count": {"type": "integer", "minimum": 0, "maximum": 255}, "reordered_records": {"type": "boolean"}, "replay_validation": {"const": "UNKNOWN"}, "maliciousness": {"const": "NOT_INFERRED"}, "authority": {"const": "DESCRIPTIVE_ONLY_NOT_DURABLE_REPLAY_STATE"}}
     },
+    "termination_evidence": {"type": "object", "additionalProperties": false, "required": ["local_profile", "tail_state", "actual_truncation"], "properties": {"local_profile": {"enum": ["NOT_EVALUATED", "CONFORMANT", "FINAL_RECORD_TERMINATOR_MISSING", "FAILED"]}, "tail_state": {"enum": ["NOT_EVALUATED", "NO_STRUCTURAL_TRUNCATION_OBSERVED", "POSSIBLE_TAIL_TRUNCATION", "TRUNCATION_STRUCTURALLY_DETECTED"]}, "actual_truncation": {"enum": ["UNPROVEN", "STRUCTURALLY_DETECTED"]}}},
     "boundary_evidence": {"const": {"lower": "LOWER_BOUNDARY_UNKNOWN", "upper": "UPPER_BOUNDARY_UNKNOWN", "prefix_truncation": "EXPORT_MAY_BE_PREFIX_TRUNCATED", "suffix_truncation": "EXPORT_MAY_BE_SUFFIX_TRUNCATED"}},
     "completeness": {"enum": ["NOT_EVALUATED", "COMPLETE", "INCOMPLETE", "PARTIAL", "UNKNOWN"], "not": {"const": "COMPLETE"}},
-    "replay": {"const": "REPLAY_EVIDENCE_REQUIRED"}, "final_state": {"const": "FINAL_STATE_DERIVATION_BLOCKED"},
+    "replay": {"const": "REPLAY_EVIDENCE_REQUIRED"}, "omission_judgment": {"const": "ACTUAL_EVENT_OMISSION_UNPROVEN"},
+    "chronology": {"const": "NOT_VERIFIED"}, "generation_authenticity": {"const": "UNKNOWN"},
+    "final_state": {"const": "FINAL_STATE_DERIVATION_BLOCKED"},
     "winner": {"const": "WINNER_UNRESOLVED"}, "settlement": {"const": "SETTLEMENT_UNVERIFIED"},
     "currentness": {"const": "CURRENTNESS_NOT_EVALUATED"}, "reference_time": {"const": "REFERENCE_TIME_NOT_PROVIDED"},
     "compatibility": {"const": "COMPATIBILITY_REVIEW_REQUIRED"}, "ready_to_act": {"const": false},
