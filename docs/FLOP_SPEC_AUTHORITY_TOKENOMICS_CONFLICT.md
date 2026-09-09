@@ -20,6 +20,9 @@ only the retained teaser allocation extraction `VERIFIED_LOCAL_EVIDENCE`. The
 other candidates are `SOURCE_EVIDENCE_REQUIRED`; the Yellow Paper candidate is
 also an `UNVERIFIED_SOURCE` with `REVISION_UNVERIFIED` and `HASH_UNVERIFIED`.
 These labels verify neither the values nor their ratification.
+Registering `YELLOW_PAPER` means only that the source type is recognized. The
+reported v0.5.0 identity remains unverified and its content is `NOT_ATTESTED`;
+it is not an official-document registration.
 
 ## Authority, parameter, and conflict axes
 
@@ -40,6 +43,7 @@ and artifact identities use canonical JSON with fixed domains, never delimiter
 concatenation. Mutation of a value, source, evidence state, conflict state,
 scoring state, compatibility state, readiness, or authorization invalidates
 the relevant identity. A caller-provided digest is not evidence authority.
+The encoding revision is explicitly bound as `SORTED_ASCII_JSON_V1`.
 
 ## Scoring and action isolation
 
@@ -90,3 +94,28 @@ Next packages, not implemented here:
 7. A: Cursor Integrity / Generation Checkpoint
 8. A: Local Signer Nonce Durability
 9. A: Operator Probe Traffic Classification
+
+Latest untrusted monitoring material adds, without implementation:
+
+- S: **TCLK Accept Schema Conformance / Observatory Historical
+  Reclassification Boundary**. Exact official schema revision and whether
+  `contract` is required remain unverified. Issue #142 is only a
+  `HIGH_SIGNAL_FIELD_REPORT`; maintainer ratification is unconfirmed and mixed
+  pull/issue references require reconciliation. Reported counts and percentages
+  (1,022 / 922 / 90.2% / 711 / 666 / 93.7% / 56 / 55) are not source-bound or
+  evergreen runtime facts. Candidate classification
+  separates `INVALID_ACCEPT_MISSING_CONTRACT`, `INVALID_ACCEPT_SCHEMA`,
+  `INVALID_ACCEPT_CONTRACT_MISMATCH`, `ACCEPT_RACE_LOST`, `REPLAY`, `MALFORMED`,
+  `POLICY_REJECTED`, `WINNER_UNRESOLVED`, `VALID_ACCEPT_LOCK_NOT_OBSERVED`, and
+  `PAYER_ABANDONMENT_UNPROVEN`. `ACCEPT_SCHEMA_VALID` is a candidate gate before
+  `ACCEPTED`; historical accepted-but-unlocked records remain
+  `HISTORICAL_CLASSIFICATION_UNRESOLVED` without complete raw evidence.
+- A: **Offline TCLK Accept Preflight Validator**. A future pure validator would
+  require an exact pinned schema, required-field and semantic validation,
+  contract ID re-derivation, canonical encoding, and all-rails validation, with
+  no posting, signing, network, or action authority.
+
+Current classification: `CURRENT_PACKAGE=NOT_APPLICABLE`,
+`NEXT_S_PACKAGE=RECORDED`, `FIELD_REPORT=UNRATIFIED`, and
+`OFFICIAL_SCHEMA=EXACT_REVISION_VERIFICATION_REQUIRED`. No TCLK schema,
+validator, or runtime model is introduced here.

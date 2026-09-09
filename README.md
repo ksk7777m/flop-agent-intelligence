@@ -103,6 +103,9 @@ preserves conflicting tokenomics claims without choosing a current value. A
 source's authority is separate from parameter ratification; Airdrop scoring,
 spend-to-unlock, and final Agent allocation remain unresolved. The artifact is
 descriptive-only, compatibility-blocked, and cannot create action authority.
+`YELLOW_PAPER` is only a recognized source type: the reported v0.5.0 candidate's
+official identity is unverified, its content is not attested, and source
+evidence is required.
 
 ## Technocore 0.13.0 Transport Semantics
 

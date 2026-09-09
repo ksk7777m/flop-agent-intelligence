@@ -87,6 +87,9 @@
     "schema": "flop-spec-authority-v1",
     "artifact": "data/spec_authority.json",
     "status": "SOURCE_EVIDENCE_REQUIRED",
+    "yellow_paper_source_type": "REGISTERED",
+    "yellow_paper_identity": "UNVERIFIED",
+    "yellow_paper_content": "NOT_ATTESTED",
     "ratification": "RATIFICATION_UNRESOLVED",
     "scoring": "UNRESOLVED",
     "action": "NO_LIVE_ACTION"

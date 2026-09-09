@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 SCHEMA_VERSION = "flop-spec-authority-v1"
 DOMAIN = "FLOP_SPEC_AUTHORITY\x00V1"
 POLICY_VERSION = "flop-spec-authority-policy-v1"
+CANONICAL_ENCODING_REVISION = "SORTED_ASCII_JSON_V1"
 
 SOURCE_TYPES = frozenset({"YELLOW_PAPER", "TEASER", "WORKBOOK", "RATIFIED_PARAMS"})
 AUTHORITIES = frozenset({"AUTHORITATIVE_REFERENCE", "OFFICIAL_CONTEXT",
@@ -27,15 +28,18 @@ CONFLICT_STATES = frozenset({"NO_CONFLICT", "SPEC_CONFLICT", "CONFLICT_ACKNOWLED
     "RATIFICATION_REQUIRED", "SOURCE_EVIDENCE_REQUIRED", "RESOLVED_BY_RATIFIED_PARAMS"})
 SCORING_FIELDS = ("airdrop_scoring", "testnet_mainnet_conversion", "scoring_cap",
     "scoring_curve", "minimum_activity", "agent_vesting", "spend_to_unlock",
-    "final_agent_allocation")
-SOURCE_FIELDS = frozenset({"source_id", "source_type", "authority", "revision",
-    "document_hash", "identity_verified", "revision_verified", "hash_verified"})
+    "final_agent_allocation", "inference_spend_allocation_relationship")
+SOURCE_FIELDS = frozenset({"source_id", "source_type", "authority", "material_status",
+    "revision", "document_hash", "identity_verified", "revision_verified",
+    "hash_verified", "content_attested"})
 CLAIM_FIELDS = frozenset({"claim_id", "category", "value", "unit", "approximation",
     "source_id", "source_type", "authority", "source_revision", "document_hash",
-    "evidence_status", "parameter_status", "ratification_state", "conflict_set_id"})
+    "source_identity_verified", "revision_verified", "hash_verified",
+    "extraction_verified", "claim_kind", "evidence_status", "parameter_status",
+    "ratification_state", "conflict_set_id", "canonical_encoding_revision"})
 CONFLICT_FIELDS = frozenset({"conflict_set_id", "category", "claim_ids", "state",
     "ratification_evidence_present", "current_parameter_resolved"})
-TOP_FIELDS = frozenset({"schema", "domain", "status", "content_label", "artifact_id",
+TOP_FIELDS = frozenset({"schema", "domain", "canonical_encoding_revision", "status", "content_label", "artifact_id",
     "source_set_complete", "sources", "claims_extracted", "claims", "conflicts",
     "scoring_uncertainty", "runtime_compatibility", "action_state", "policy_version"})
 _ID = re.compile(r"^[A-Z0-9][A-Z0-9._:-]{0,127}$")
@@ -48,6 +52,8 @@ _SOURCE_AUTHORITY = {
     "WORKBOOK": {"SUPPORTING_WORKBOOK", "UNVERIFIED_SOURCE"},
     "RATIFIED_PARAMS": {"RATIFICATION_RECORD", "UNVERIFIED_SOURCE"},
 }
+_RETAINED_TEASER_REVISION = "teaser-capture-2026-08-27"
+_RETAINED_TEASER_HASH = "f93b07c83d71f09926ee536f4e704b52336e4f8c3e6f0a3752d45224a39d3fde"
 
 
 class SpecAuthorityError(ValueError):
@@ -90,7 +96,10 @@ def _source(value: Any) -> dict[str, Any]:
         raise SpecAuthorityError("SOURCE_AUTHORITY_CONTRADICTION", "authority")
     revision = item["revision"]
     document_hash = item["document_hash"]
-    for name in ("identity_verified", "revision_verified", "hash_verified"):
+    if item["material_status"] not in {"OFFICIAL_DRAFT", "UNVERIFIED_CANDIDATE",
+                                      "RATIFIED_RECORD", "SUPPORTING_MATERIAL"}:
+        raise SpecAuthorityError("SOURCE_STATUS_INVALID", "material_status")
+    for name in ("identity_verified", "revision_verified", "hash_verified", "content_attested"):
         if type(item[name]) is not bool:
             raise SpecAuthorityError("BOOLEAN_INVALID", name)
     if item["revision_verified"]:
@@ -105,8 +114,23 @@ def _source(value: Any) -> dict[str, Any]:
         raise SpecAuthorityError("HASH_CONTRADICTION", "document_hash")
     if authority == "UNVERIFIED_SOURCE" and item["identity_verified"]:
         raise SpecAuthorityError("SOURCE_IDENTITY_CONTRADICTION", "identity_verified")
-    return {name: item[name] for name in ("source_id", "source_type", "authority", "revision",
-        "document_hash", "identity_verified", "revision_verified", "hash_verified")}
+    if item["content_attested"] and not (item["identity_verified"] and
+            item["revision_verified"] and item["hash_verified"]):
+        raise SpecAuthorityError("CONTENT_ATTESTATION_CONTRADICTION", "content_attested")
+    if item["material_status"] == "UNVERIFIED_CANDIDATE" and (authority != "UNVERIFIED_SOURCE"
+            or item["content_attested"]):
+        raise SpecAuthorityError("SOURCE_STATUS_CONTRADICTION", "material_status")
+    verified_tuple = (source_id, source_type, authority, item["material_status"], revision,
+        document_hash, item["identity_verified"], item["revision_verified"],
+        item["hash_verified"], item["content_attested"])
+    retained_tuple = ("FLOP_TEASER_CAPTURE", "TEASER", "OFFICIAL_CONTEXT",
+        "OFFICIAL_DRAFT", _RETAINED_TEASER_REVISION, _RETAINED_TEASER_HASH,
+        True, True, True, True)
+    if any(verified_tuple[-4:]) and verified_tuple != retained_tuple:
+        raise SpecAuthorityError("SEALED_SOURCE_EVIDENCE_REQUIRED", "source")
+    return {name: item[name] for name in ("source_id", "source_type", "authority",
+        "material_status", "revision", "document_hash", "identity_verified",
+        "revision_verified", "hash_verified", "content_attested")}
 
 
 def _claim_identity(item: Mapping[str, Any]) -> str:
@@ -128,6 +152,14 @@ def _claim(value: Any, sources: Mapping[str, Mapping[str, Any]]) -> dict[str, An
             raise SpecAuthorityError("SOURCE_BINDING_MISMATCH", name)
     if item["source_revision"] != source["revision"] or item["document_hash"] != source["document_hash"]:
         raise SpecAuthorityError("SOURCE_EVIDENCE_MISMATCH", "source_evidence")
+    for claim_name, source_name in (("source_identity_verified", "identity_verified"),
+            ("revision_verified", "revision_verified"), ("hash_verified", "hash_verified")):
+        if type(item[claim_name]) is not bool or item[claim_name] != source[source_name]:
+            raise SpecAuthorityError("SOURCE_EVIDENCE_MISMATCH", claim_name)
+    if type(item["extraction_verified"]) is not bool:
+        raise SpecAuthorityError("BOOLEAN_INVALID", "extraction_verified")
+    if item["canonical_encoding_revision"] != CANONICAL_ENCODING_REVISION:
+        raise SpecAuthorityError("CANONICAL_ENCODING_INVALID", "canonical_encoding_revision")
     if not isinstance(item["value"], str) or _DECIMAL.fullmatch(item["value"]) is None:
         raise SpecAuthorityError("DECIMAL_INVALID", "value")
     if item["unit"] != "FLOP" or type(item["approximation"]) is not bool:
@@ -136,6 +168,21 @@ def _claim(value: Any, sources: Mapping[str, Mapping[str, Any]]) -> dict[str, An
         raise SpecAuthorityError("CLAIM_STATUS_INVALID", "claim")
     if item["ratification_state"] not in RATIFICATION_STATES:
         raise SpecAuthorityError("RATIFICATION_STATE_INVALID", "ratification_state")
+    if item["claim_kind"] not in {"VERIFIED_SOURCE_BOUND_CLAIM", "UNVERIFIED_REPORTED_CLAIM"}:
+        raise SpecAuthorityError("CLAIM_KIND_INVALID", "claim_kind")
+    if not isinstance(item["claim_id"], str) or item["claim_id"] != _claim_identity(item):
+        raise SpecAuthorityError("CLAIM_IDENTITY_MISMATCH", "claim_id")
+    fully_verified = (item["source_identity_verified"] and item["revision_verified"]
+        and item["hash_verified"] and item["extraction_verified"]
+        and item["evidence_status"] == "VERIFIED_LOCAL_EVIDENCE")
+    if (item["claim_kind"] == "VERIFIED_SOURCE_BOUND_CLAIM") != fully_verified:
+        raise SpecAuthorityError("CLAIM_VERIFICATION_CONTRADICTION", "claim_kind")
+    if fully_verified and not (item["source_id"] == "FLOP_TEASER_CAPTURE"
+            and item["category"] == "AGENT_ALLOCATION" and item["value"] == "1200000000"
+            and item["unit"] == "FLOP" and item["approximation"] is True
+            and item["parameter_status"] == "CONFLICTING"
+            and item["ratification_state"] == "RATIFICATION_UNRESOLVED"):
+        raise SpecAuthorityError("SEALED_EXTRACTION_EVIDENCE_REQUIRED", "claim")
     ratified = (item["parameter_status"] == "RATIFIED" or
                 item["ratification_state"] == "SEALED_VALIDATED")
     if ratified and not (item["source_type"] == "RATIFIED_PARAMS" and
@@ -146,10 +193,9 @@ def _claim(value: Any, sources: Mapping[str, Mapping[str, Any]]) -> dict[str, An
         raise SpecAuthorityError("RATIFICATION_EVIDENCE_REQUIRED", "parameter_status")
     result = {name: item[name] for name in ("claim_id", "category", "value", "unit",
         "approximation", "source_id", "source_type", "authority", "source_revision",
-        "document_hash", "evidence_status", "parameter_status", "ratification_state",
-        "conflict_set_id")}
-    if not isinstance(result["claim_id"], str) or result["claim_id"] != _claim_identity(result):
-        raise SpecAuthorityError("CLAIM_IDENTITY_MISMATCH", "claim_id")
+        "document_hash", "source_identity_verified", "revision_verified", "hash_verified",
+        "extraction_verified", "claim_kind", "evidence_status", "parameter_status",
+        "ratification_state", "conflict_set_id", "canonical_encoding_revision")}
     return result
 
 
@@ -198,7 +244,7 @@ def artifact_identity(value: Mapping[str, Any]) -> str:
 
 def validate_public_projection(value: Any) -> Mapping[str, Any]:
     item = _exact_keys(value, TOP_FIELDS, "projection")
-    if item["schema"] != SCHEMA_VERSION or item["domain"] != DOMAIN or item["status"] != "DESCRIPTIVE_ONLY" or item["content_label"] != "UNTRUSTED_CONTENT":
+    if item["schema"] != SCHEMA_VERSION or item["domain"] != DOMAIN or item["canonical_encoding_revision"] != CANONICAL_ENCODING_REVISION or item["status"] != "DESCRIPTIVE_ONLY" or item["content_label"] != "UNTRUSTED_CONTENT":
         raise SpecAuthorityError("HEADER_INVALID", "projection")
     if type(item["source_set_complete"]) is not bool or type(item["claims_extracted"]) is not bool:
         raise SpecAuthorityError("BOOLEAN_INVALID", "projection")
@@ -261,6 +307,7 @@ def build_projection(*, source_set_complete: bool, sources: Sequence[Mapping[str
                      claims: Sequence[Mapping[str, Any]], conflicts: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
     """Reconstruct every public field and compute identity locally."""
     value: dict[str, Any] = {"schema": SCHEMA_VERSION, "domain": DOMAIN,
+        "canonical_encoding_revision": CANONICAL_ENCODING_REVISION,
         "status": "DESCRIPTIVE_ONLY", "content_label": "UNTRUSTED_CONTENT",
         "artifact_id": "", "source_set_complete": source_set_complete,
         "sources": [{name: x[name] for name in SOURCE_FIELDS} for x in sources],

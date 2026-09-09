@@ -34,7 +34,29 @@ class SpecificationAuthorityTests(unittest.TestCase):
         self.assertEqual(teaser["authority"], "OFFICIAL_CONTEXT")
         self.assertEqual(yellow["authority"], "UNVERIFIED_SOURCE")
         self.assertFalse(yellow["identity_verified"])
+        self.assertFalse(yellow["content_attested"])
+        self.assertEqual(yellow["material_status"], "UNVERIFIED_CANDIDATE")
+        self.assertEqual(teaser["material_status"], "OFFICIAL_DRAFT")
         self.assertTrue(all(x["parameter_status"] != "RATIFIED" for x in self.value["claims"]))
+
+    def test_reported_candidates_are_explicitly_unverified_and_cannot_promote(self):
+        candidates = [x for x in self.value["claims"] if x["value"] in
+                      {"596030000", "3500000000", "2483460000"}]
+        self.assertEqual(len(candidates), 3)
+        for claim in candidates:
+            self.assertEqual(claim["claim_kind"], "UNVERIFIED_REPORTED_CLAIM")
+            self.assertEqual(claim["evidence_status"], "SOURCE_EVIDENCE_REQUIRED")
+            self.assertFalse(claim["extraction_verified"])
+            self.assertEqual(claim["ratification_state"], "RATIFICATION_UNRESOLVED")
+        forged = copy.deepcopy(self.value)
+        source = forged["sources"][1]
+        source.update({"authority": "AUTHORITATIVE_REFERENCE", "material_status": "OFFICIAL_DRAFT",
+            "revision": "v0.5.0", "document_hash": "0" * 64, "identity_verified": True,
+            "revision_verified": True, "hash_verified": True, "content_attested": True})
+        forged["artifact_id"] = spec.artifact_identity(forged)
+        self.assertRejected(forged, "SEALED_SOURCE_EVIDENCE_REQUIRED")
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(self.schema).validate(forged)
 
     def test_conflicting_claims_are_preserved_without_single_value(self):
         by_category = {}
@@ -95,6 +117,21 @@ class SpecificationAuthorityTests(unittest.TestCase):
         artifact = copy.deepcopy(self.value); artifact["scoring_uncertainty"]["scoring_cap"] = "FINAL"
         self.assertRejected(artifact, "SCORING_MUST_BE_UNRESOLVED")
 
+    def test_claim_identity_binds_every_security_field_and_artifact_order(self):
+        original = self.value["claims"][0]
+        mutations = {"value": "1200000001", "approximation": False, "unit": "OTHER",
+            "source_type": "YELLOW_PAPER", "evidence_status": "SOURCE_EVIDENCE_REQUIRED",
+            "source_identity_verified": False, "revision_verified": False,
+            "hash_verified": False, "conflict_set_id": "OTHER_CONFLICT",
+            "ratification_state": "SEALED_VALIDATED",
+            "canonical_encoding_revision": "OTHER_ENCODING"}
+        for field, replacement in mutations.items():
+            with self.subTest(field=field):
+                changed = copy.deepcopy(original); changed[field] = replacement
+                self.assertNotEqual(spec._claim_identity(changed), original["claim_id"])
+        reordered = copy.deepcopy(self.value); reordered["claims"].reverse()
+        self.assertRejected(reordered, "ARTIFACT_IDENTITY_MISMATCH")
+
     def test_all_scoring_items_are_unresolved_and_cannot_authorize(self):
         self.assertEqual(set(self.value["scoring_uncertainty"]), set(spec.SCORING_FIELDS))
         self.assertEqual(set(self.value["scoring_uncertainty"].values()), {"UNRESOLVED"})
@@ -110,6 +147,20 @@ class SpecificationAuthorityTests(unittest.TestCase):
         for constant in ("NaN", "Infinity", "-Infinity"):
             with self.assertRaisesRegex(spec.SpecAuthorityError, "NUMBER_INVALID"):
                 spec.parse_public_json('{"value":' + constant + '}')
+
+    def test_bool_unicode_and_delimiter_ambiguity_fail_closed(self):
+        forged = copy.deepcopy(self.value); forged["sources"][0]["identity_verified"] = 1; forged["artifact_id"] = spec.artifact_identity(forged)
+        self.assertRejected(forged, "BOOLEAN_INVALID")
+        forged = copy.deepcopy(self.value); forged["claims"][0]["category"] = "AGENT|ALLOCATION\u2603"; forged["artifact_id"] = spec.artifact_identity(forged)
+        self.assertRejected(forged, "IDENTIFIER_INVALID")
+        self.assertNotEqual(spec._digest(["A|B", "C"]), spec._digest(["A", "B|C"]))
+
+    def test_no_ratification_evidence_issuer_or_selection_api_exists(self):
+        self.assertFalse(any(word in name.lower() for name in spec.__all__
+            for word in ("issuer", "ratify", "resolve", "current", "select")))
+        for name in ("issue_ratification", "verify_ratification", "current_value",
+                     "select_claim", "calculate_unlock", "score_spend"):
+            self.assertFalse(hasattr(spec, name))
 
     def test_validation_error_omits_rejected_content_and_cause(self):
         marker = "sensitive-rejected-marker"

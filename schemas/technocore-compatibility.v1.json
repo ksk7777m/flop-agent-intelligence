@@ -99,11 +99,14 @@
     },
     "flop_specification_authority": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema", "artifact", "status", "ratification", "scoring", "action"],
+      "required": ["schema", "artifact", "status", "yellow_paper_source_type", "yellow_paper_identity", "yellow_paper_content", "ratification", "scoring", "action"],
       "properties": {
         "schema": {"const": "flop-spec-authority-v1"},
         "artifact": {"const": "data/spec_authority.json"},
         "status": {"const": "SOURCE_EVIDENCE_REQUIRED"},
+        "yellow_paper_source_type": {"const": "REGISTERED"},
+        "yellow_paper_identity": {"const": "UNVERIFIED"},
+        "yellow_paper_content": {"const": "NOT_ATTESTED"},
         "ratification": {"const": "RATIFICATION_UNRESOLVED"},
         "scoring": {"const": "UNRESOLVED"},
         "action": {"const": "NO_LIVE_ACTION"}
