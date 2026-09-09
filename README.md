@@ -96,6 +96,14 @@ evidence-ledger interfaces. All official endpoints and runtime parameters remain
 unresolved; no runtime observation, readiness, authorization, signer, or live
 effect is introduced.
 
+## FLOP Specification Authority and Tokenomics Conflict
+
+The closed [specification authority registry](docs/FLOP_SPEC_AUTHORITY_TOKENOMICS_CONFLICT.md)
+preserves conflicting tokenomics claims without choosing a current value. A
+source's authority is separate from parameter ratification; Airdrop scoring,
+spend-to-unlock, and final Agent allocation remain unresolved. The artifact is
+descriptive-only, compatibility-blocked, and cannot create action authority.
+
 ## Technocore 0.13.0 Transport Semantics
 
 The offline transport reconciliation model separates MCP listing truncation,

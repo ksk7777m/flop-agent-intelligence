@@ -82,5 +82,13 @@
   "freshness": {
     "status": "REVIEW_REQUIRED",
     "reason": "One-shot cache metadata was potentially stale and does not establish latest state or continuing live compatibility"
+  },
+  "flop_specification_authority": {
+    "schema": "flop-spec-authority-v1",
+    "artifact": "data/spec_authority.json",
+    "status": "SOURCE_EVIDENCE_REQUIRED",
+    "ratification": "RATIFICATION_UNRESOLVED",
+    "scoring": "UNRESOLVED",
+    "action": "NO_LIVE_ACTION"
   }
 }
