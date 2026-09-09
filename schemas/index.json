@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "TCLK Offer-global Winner and Accept Race Boundary V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-offer-global-winner-boundary.v1.json",
+      "path": "schemas/tclk-offer-global-winner-boundary.v1.json",
+      "purpose": "Validates minimized offline candidate evidence while keeping contract-local validity, global winner, race loss, ordering, completeness, lock, settlement, and action authority independent.",
+      "related_endpoint": null
+    },
+    {
       "name": "TCLK Transcript Completeness and Unsigned Venue Metadata Boundary V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-transcript-boundary.v1.json",
       "path": "schemas/tclk-transcript-boundary.v1.json",

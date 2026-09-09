@@ -26,6 +26,7 @@ Machine-readable URLs:
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-official-schema-evidence.v1.json — immutable offline evidence for an exact official TCLK schema commit
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/offline-tclk-accept-preflight.v1.json — closed result schema for pure offline offer/accept preflight validation
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-transcript-boundary.v1.json — minimized signed-frame/unsigned-metadata transcript evidence boundary
+- https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-offer-global-winner-boundary.v1.json — offline contract-local candidate and unresolved offer-global winner/race boundary
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/status.json — KV allowlist coverage and empty-state status
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/namespaces.json — configured versus successfully observed namespaces
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/changes.json — observer-derived hash changes; no raw values

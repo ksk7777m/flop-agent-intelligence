@@ -136,5 +136,17 @@
     "network": "NONE",
     "side_effect": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "tclk_offer_global_winner_boundary": {
+    "schema": "tclk-offer-global-winner-boundary-v1",
+    "policy": "tclk-offer-global-winner-policy-v1",
+    "classification": "SAFE_PURE_VALIDATOR",
+    "winner": "GLOBAL_WINNER_UNRESOLVED",
+    "race_loss": "CANDIDATE_ONLY",
+    "venue_ordering": "AUTHENTICITY_UNKNOWN",
+    "field_report_currentness": "NOT_CONFIRMED",
+    "network": "NONE",
+    "side_effect": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }

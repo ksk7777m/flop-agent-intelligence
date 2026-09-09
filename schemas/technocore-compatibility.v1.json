@@ -9,7 +9,8 @@
     "source_evidence", "semantic_invariants", "capability_evidence",
     "deployment_observations", "observation_policy_binding", "freshness",
     "flop_specification_authority", "tclk_accept_conformance",
-    "tclk_official_schema_evidence", "offline_tclk_accept_preflight", "tclk_transcript_boundary"
+    "tclk_official_schema_evidence", "offline_tclk_accept_preflight", "tclk_transcript_boundary",
+    "tclk_offer_global_winner_boundary"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -167,6 +168,21 @@
         "venue_metadata": {"const": "SEQ_TS_GENERATION_UNSIGNED_UNTRUSTED"},
         "completeness": {"const": "FAIL_CLOSED"},
         "replay": {"const": "EVIDENCE_REQUIRED"},
+        "network": {"const": "NONE"}, "side_effect": {"const": "NONE"},
+        "action": {"const": "NO_LIVE_ACTION"}
+      }
+    },
+    "tclk_offer_global_winner_boundary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "policy", "classification", "winner", "race_loss", "venue_ordering", "field_report_currentness", "network", "side_effect", "action"],
+      "properties": {
+        "schema": {"const": "tclk-offer-global-winner-boundary-v1"},
+        "policy": {"const": "tclk-offer-global-winner-policy-v1"},
+        "classification": {"const": "SAFE_PURE_VALIDATOR"},
+        "winner": {"const": "GLOBAL_WINNER_UNRESOLVED"},
+        "race_loss": {"const": "CANDIDATE_ONLY"},
+        "venue_ordering": {"const": "AUTHENTICITY_UNKNOWN"},
+        "field_report_currentness": {"const": "NOT_CONFIRMED"},
         "network": {"const": "NONE"}, "side_effect": {"const": "NONE"},
         "action": {"const": "NO_LIVE_ACTION"}
       }

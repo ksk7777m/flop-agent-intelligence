@@ -141,6 +141,13 @@ verifies signed `room|nonce|text` independently from unsigned venue/export
 metadata, detects internal gaps and mutations, and keeps boundary completeness,
 Replay, final state, winner, settlement, and currentness fail-closed.
 
+The [offer-global winner boundary](docs/TCLK_OFFER_GLOBAL_WINNER_BOUNDARY.md)
+reuses pinned accept preflight and transcript signature evidence to classify
+contract-local candidates. Unsigned ordering, incomplete offer-wide coverage,
+and absent Replay authority keep global winner and definitive race loss
+unresolved; lock, settlement, reputation, readiness, and authorization remain
+blocked.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects
