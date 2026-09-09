@@ -158,6 +158,11 @@ verifies a locally pinned acquisition authority, exact-byte evidence/source/
 context digests, generation, freshness, and offline replay evidence. Provenance
 does not establish completeness, winner, lock, settlement, or action authority.
 
+The [offer-wide completeness issuance boundary](docs/TCLK_OFFER_WIDE_COMPLETENESS.md)
+can issue completeness only from a verified sealed authority plus exact offer
+scope, generation/cursor continuity, explicit boundaries, no gaps/truncation/
+malformed impact/retention loss/conflict. Winner and every action remain blocked.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects

@@ -14,8 +14,8 @@ class SourceAttestationTests(unittest.TestCase):
         self.key = Ed25519PrivateKey.generate()
         self.evidence = b"opaque exact evidence\n"
         self.descriptor = canon({"source_type":"DIRECT_EXPORT","source_id":"reviewed-export-1","generation":"gen-7"})
-        self.context = canon({"source_type":"DIRECT_EXPORT","source_id":"reviewed-export-1","generation":"gen-7","acquisition_mode":"OFFLINE_IMPORT","acquired_at":100})
-        self.manifest = canon({"schema":"tclk-source-authorities-v1","policy_revision":att.POLICY,"authorities":[{"authority_id":"fixture-authority","authority_version":"1","policy_id":att.POLICY,"key_id":"fixture-key","public_key_b64url":b64(self.key.public_key().public_bytes_raw()),"allowed_source_types":["DIRECT_EXPORT"]}]})
+        self.context = canon({"source_type":"DIRECT_EXPORT","source_id":"reviewed-export-1","generation":"gen-7","acquisition_mode":"OFFLINE_IMPORT","acquired_at":100,"acquisition_scope":"OFFER_WIDE","offer_sha256":"0"*64,"first_seq":1,"high_water_seq":2,"lower_boundary":True,"upper_boundary":True,"truncated":False,"dropped_count":0,"bounded_page":False,"retention_loss":False,"artifact_set_status":"NO_CONFLICTS"})
+        self.manifest = canon({"schema":"tclk-source-authorities-v1","policy_revision":att.POLICY,"authorities":[{"authority_id":"fixture-authority","authority_version":"1","policy_id":att.POLICY,"key_id":"fixture-key","public_key_b64url":b64(self.key.public_key().public_bytes_raw()),"allowed_source_types":["DIRECT_EXPORT"],"allowed_source_ids":["reviewed-export-1"]}]})
 
     def artifact(self, **changes):
         value={"version":att.ARTIFACT_VERSION,"authority_id":"fixture-authority","authority_version":"1","policy_id":att.POLICY,"key_id":"fixture-key","source_type":"DIRECT_EXPORT","source_binding_sha256":hashlib.sha256(self.descriptor).hexdigest(),"generation":"gen-7","acquired_at":100,"issued_at":110,"expires_at":200,"evidence_sha256":hashlib.sha256(self.evidence).hexdigest(),"context_sha256":hashlib.sha256(self.context).hexdigest(),"attestation_nonce":"17"}
@@ -33,7 +33,7 @@ class SourceAttestationTests(unittest.TestCase):
         self.assertEqual(self.verify(self.artifact(authority_version="0"))["errors"],["SOURCE_ATTESTATION_UNKNOWN_AUTHORITY"])
         self.assertEqual(self.verify(self.artifact(key_id="other-key"))["errors"],["SOURCE_ATTESTATION_UNKNOWN_AUTHORITY"])
         self.assertEqual(self.verify(self.artifact(policy_id="older-policy"))["errors"],["SOURCE_ATTESTATION_CANONICAL_INVALID"])
-        other=Ed25519PrivateKey.generate(); wrong=canon({"schema":"tclk-source-authorities-v1","policy_revision":att.POLICY,"authorities":[{"authority_id":"fixture-authority","authority_version":"1","policy_id":att.POLICY,"key_id":"fixture-key","public_key_b64url":b64(other.public_key().public_bytes_raw()),"allowed_source_types":["DIRECT_EXPORT"]}]})
+        other=Ed25519PrivateKey.generate(); wrong=canon({"schema":"tclk-source-authorities-v1","policy_revision":att.POLICY,"authorities":[{"authority_id":"fixture-authority","authority_version":"1","policy_id":att.POLICY,"key_id":"fixture-key","public_key_b64url":b64(other.public_key().public_bytes_raw()),"allowed_source_types":["DIRECT_EXPORT"],"allowed_source_ids":["reviewed-export-1"]}]})
         self.assertEqual(self.verify(manifest=wrong)["errors"],["SOURCE_ATTESTATION_SIGNATURE_INVALID"])
         value=json.loads(self.artifact()); value["signature"]="A"*86; self.assertEqual(self.verify(canon(value))["errors"],["SOURCE_ATTESTATION_SIGNATURE_INVALID"])
         self.assertEqual(att.verify_source_attestation(self.evidence,self.descriptor,self.context,self.artifact(),b"[]")["errors"],["SOURCE_ATTESTATION_UNKNOWN_AUTHORITY"])
@@ -86,7 +86,7 @@ class SourceAttestationTests(unittest.TestCase):
 
     def test_same_nonce_is_authority_scoped(self):
         first=self.verify(); other=Ed25519PrivateKey.generate()
-        second_item={"authority_id":"fixture-authority-2","authority_version":"1","policy_id":att.POLICY,"key_id":"fixture-key-2","public_key_b64url":b64(other.public_key().public_bytes_raw()),"allowed_source_types":["DIRECT_EXPORT"]}
+        second_item={"authority_id":"fixture-authority-2","authority_version":"1","policy_id":att.POLICY,"key_id":"fixture-key-2","public_key_b64url":b64(other.public_key().public_bytes_raw()),"allowed_source_types":["DIRECT_EXPORT"],"allowed_source_ids":["reviewed-export-1"]}
         manifest=canon({"schema":"tclk-source-authorities-v1","policy_revision":att.POLICY,"authorities":[json.loads(self.manifest)["authorities"][0],second_item]})
         value=json.loads(self.artifact()); value.update(authority_id="fixture-authority-2",key_id="fixture-key-2"); value.pop("signature"); value["signature"]=b64(other.sign(att.DOMAIN+canon(value)))
         result=self.verify(canon(value),replay=canon([first["attestation_replay_id"]]),manifest=manifest); self.assertEqual(result["source_attestation"],"SOURCE_ATTESTATION_VERIFIED"); self.assertNotEqual(result["attestation_replay_id"],first["attestation_replay_id"])

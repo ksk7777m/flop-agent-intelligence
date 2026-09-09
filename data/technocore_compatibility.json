@@ -167,5 +167,14 @@
     "winner": "GLOBAL_WINNER_UNRESOLVED",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "tclk_offer_wide_completeness": {
+    "schema": "tclk-offer-wide-completeness-v1",
+    "classification": "SAFE_PURE_VALIDATOR",
+    "source_authority": "SEALED_ATTESTATION_REQUIRED",
+    "completeness": "CONDITIONALLY_ISSUABLE",
+    "winner": "GLOBAL_WINNER_UNRESOLVED",
+    "network": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }

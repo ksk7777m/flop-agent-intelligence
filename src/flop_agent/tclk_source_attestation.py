@@ -24,7 +24,8 @@ DOMAIN = b"TCLK_SOURCE_ATTESTATION\x00V1|"
 POLICY = "tclk-source-attestation-policy-v1"
 SOURCE_TYPES = frozenset({"DIRECT_EXPORT", "MCP_PAGE", "PROVIDED_EXPORT", "LOCAL_ARCHIVE", "UNKNOWN_SOURCE"})
 ARTIFACT_FIELDS = frozenset({"version", "authority_id", "authority_version", "policy_id", "key_id", "source_type", "source_binding_sha256", "generation", "acquired_at", "issued_at", "expires_at", "evidence_sha256", "context_sha256", "attestation_nonce", "signature"})
-AUTHORITY_FIELDS = frozenset({"authority_id", "authority_version", "policy_id", "key_id", "public_key_b64url", "allowed_source_types"})
+AUTHORITY_FIELDS = frozenset({"authority_id", "authority_version", "policy_id", "key_id", "public_key_b64url", "allowed_source_types", "allowed_source_ids"})
+CONTEXT_FIELDS = frozenset({"source_type", "source_id", "generation", "acquisition_mode", "acquired_at", "acquisition_scope", "offer_sha256", "first_seq", "high_water_seq", "lower_boundary", "upper_boundary", "truncated", "dropped_count", "bounded_page", "retention_loss", "artifact_set_status"})
 MAX_ARTIFACT_BYTES = 8192
 MAX_BOUND_BYTES = 8 * 1024 * 1024
 MAX_REPLAY_BYTES = 64 * 1024
@@ -96,7 +97,7 @@ def _load_manifest(raw: bytes) -> dict[str, Any]:
         if not isinstance(item, dict) or set(item) != AUTHORITY_FIELDS or not all(_valid_token(item[k]) for k in ("authority_id", "authority_version", "policy_id", "key_id")) or item["policy_id"] != POLICY:
             raise ValueError
         key = _b64decode(item["public_key_b64url"])
-        if len(key) != 32 or not isinstance(item["allowed_source_types"], list) or not item["allowed_source_types"] or len(set(item["allowed_source_types"])) != len(item["allowed_source_types"]) or any(x not in SOURCE_TYPES for x in item["allowed_source_types"]):
+        if len(key) != 32 or not isinstance(item["allowed_source_types"], list) or not item["allowed_source_types"] or len(set(item["allowed_source_types"])) != len(item["allowed_source_types"]) or any(x not in SOURCE_TYPES for x in item["allowed_source_types"]) or not isinstance(item["allowed_source_ids"],list) or not item["allowed_source_ids"] or len(set(item["allowed_source_ids"]))!=len(item["allowed_source_ids"]) or any(not _valid_token(x) for x in item["allowed_source_ids"]):
             raise ValueError
         if item["authority_id"] in authority_ids or item["key_id"] in key_ids:
             raise ValueError
@@ -145,7 +146,7 @@ def _verify(evidence: bytes, descriptor: bytes, context: bytes, artifact_raw: by
     stages[5]["state"] = "VERIFIED"
     try: descriptor_value = _parse_exact(descriptor); context_value = _parse_exact(context)
     except Exception: return _fail(result, "SOURCE_ATTESTATION_GENERATION_MISMATCH")
-    if not isinstance(descriptor_value, dict) or set(descriptor_value) != {"source_type", "source_id", "generation"} or descriptor_value.get("source_type") != artifact["source_type"] or descriptor_value.get("generation") != artifact["generation"] or not _valid_token(descriptor_value.get("source_id")) or not isinstance(context_value, dict) or set(context_value) != {"source_type", "source_id", "generation", "acquisition_mode", "acquired_at"} or context_value.get("source_type") != artifact["source_type"] or context_value.get("source_id") != descriptor_value["source_id"] or context_value.get("generation") != artifact["generation"] or context_value.get("acquired_at") != artifact["acquired_at"] or not _valid_token(context_value.get("acquisition_mode")):
+    if not isinstance(descriptor_value, dict) or set(descriptor_value) != {"source_type", "source_id", "generation"} or descriptor_value.get("source_type") != artifact["source_type"] or descriptor_value.get("generation") != artifact["generation"] or not _valid_token(descriptor_value.get("source_id")) or descriptor_value.get("source_id") not in authority["allowed_source_ids"] or not isinstance(context_value, dict) or set(context_value) != CONTEXT_FIELDS or context_value.get("source_type") != artifact["source_type"] or context_value.get("source_id") != descriptor_value["source_id"] or context_value.get("generation") != artifact["generation"] or context_value.get("acquired_at") != artifact["acquired_at"] or not _valid_token(context_value.get("acquisition_mode")) or context_value.get("acquisition_scope") not in {"OFFER_WIDE", "PARTIAL"} or not isinstance(context_value.get("offer_sha256"), str) or len(context_value["offer_sha256"]) != 64 or any(c not in "0123456789abcdef" for c in context_value["offer_sha256"]) or any(not _valid_uint(context_value.get(k)) for k in ("first_seq", "high_water_seq", "dropped_count")) or context_value["first_seq"] > context_value["high_water_seq"] or any(type(context_value.get(k)) is not bool for k in ("lower_boundary", "upper_boundary", "truncated", "bounded_page", "retention_loss")) or context_value.get("artifact_set_status") not in {"NO_CONFLICTS", "CONFLICT_UNRESOLVED"}:
         return _fail(result, "SOURCE_ATTESTATION_GENERATION_MISMATCH")
     stages[6]["state"] = "VERIFIED"
     replay_id = _hash(_canon({"authority_id": artifact["authority_id"], "authority_version": artifact["authority_version"], "attestation_nonce": artifact["attestation_nonce"]}))
@@ -202,7 +203,7 @@ __all__ = ["verify_source_attestation"]
 
 
 class _Sealed(types.ModuleType):
-    _protected = frozenset({"MANIFEST", "MANIFEST_SHA256", "RESULT_SCHEMA", "SCHEMA", "ARTIFACT_VERSION", "DOMAIN", "POLICY", "SOURCE_TYPES", "ARTIFACT_FIELDS", "AUTHORITY_FIELDS", "STAGES", "verify_source_attestation", "_verify", "_build_public_verifier", "_validate_result", "__all__"})
+    _protected = frozenset({"MANIFEST", "MANIFEST_SHA256", "RESULT_SCHEMA", "SCHEMA", "ARTIFACT_VERSION", "DOMAIN", "POLICY", "SOURCE_TYPES", "ARTIFACT_FIELDS", "AUTHORITY_FIELDS", "CONTEXT_FIELDS", "STAGES", "verify_source_attestation", "_verify", "_build_public_verifier", "_validate_result", "__all__"})
     def __setattr__(self, name: str, value: Any) -> None:
         if name in self._protected and name in self.__dict__: raise AttributeError("source attestation dependencies are sealed")
         super().__setattr__(name, value)
