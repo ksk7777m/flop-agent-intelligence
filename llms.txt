@@ -24,6 +24,7 @@ Machine-readable URLs:
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/capabilities.v1.json — strict disabled-capability contract
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-accept-conformance.v1.json — offline accept conformance and unresolved historical reclassification boundary
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-official-schema-evidence.v1.json — immutable offline evidence for an exact official TCLK schema commit
+- https://ksk7777m.github.io/flop-agent-intelligence/schemas/offline-tclk-accept-preflight.v1.json — closed result schema for pure offline offer/accept preflight validation
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/status.json — KV allowlist coverage and empty-state status
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/namespaces.json — configured versus successfully observed namespaces
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/changes.json — observer-derived hash changes; no raw values

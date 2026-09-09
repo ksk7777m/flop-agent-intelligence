@@ -130,6 +130,12 @@ pins an exact official repository commit, schema blob/hash/size, Apache-2.0
 snapshot, accept semantics, and contract-ID specification sources. It exposes no
 network loader and does not migrate historical observations or enable actions.
 
+The [offline TCLK accept preflight](docs/OFFLINE_TCLK_ACCEPT_PREFLIGHT.md)
+validates bounded offer/accept bytes with that exact snapshot, independently
+recomputes offer and contract IDs, separates raw canonicality, and checks every
+rail. Its minimized result contains no frame or contract value and never grants
+signing, posting, settlement, readiness, or authorization.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects

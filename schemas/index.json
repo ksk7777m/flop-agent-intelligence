@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "Offline TCLK Accept Preflight V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/offline-tclk-accept-preflight.v1.json",
+      "path": "schemas/offline-tclk-accept-preflight.v1.json",
+      "purpose": "Validates minimized offline-only TCLK offer/accept preflight results without signing, posting, or action authority.",
+      "related_endpoint": null
+    },
+    {
       "name": "TCLK Accept Schema Conformance V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-accept-conformance.v1.json",
       "path": "schemas/tclk-accept-conformance.v1.json",

@@ -9,7 +9,7 @@
     "source_evidence", "semantic_invariants", "capability_evidence",
     "deployment_observations", "observation_policy_binding", "freshness",
     "flop_specification_authority", "tclk_accept_conformance",
-    "tclk_official_schema_evidence"
+    "tclk_official_schema_evidence", "offline_tclk_accept_preflight"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -138,6 +138,21 @@
         "contract_derivation": {"const": "CONTRACT_DERIVATION_SPEC_PINNED"},
         "local_profile_comparison": {"const": "SPEC_DRIFT"},
         "historical_reclassification": {"const": "BLOCKED"},
+        "action": {"const": "NO_LIVE_ACTION"}
+      }
+    },
+    "offline_tclk_accept_preflight": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "policy", "classification", "official_schema", "contract_derivation", "network", "side_effect", "authority", "action"],
+      "properties": {
+        "schema": {"const": "offline-tclk-accept-preflight-v1"},
+        "policy": {"const": "offline-tclk-accept-preflight-policy-v1"},
+        "classification": {"const": "SAFE_PURE_VALIDATOR"},
+        "official_schema": {"const": "PINNED_EXACT_COMMIT_OFFLINE"},
+        "contract_derivation": {"const": "INDEPENDENT_RECOMPUTATION_GOLDEN_VECTOR_MATCHED"},
+        "network": {"const": "NONE"},
+        "side_effect": {"const": "NONE"},
+        "authority": {"const": "NONE"},
         "action": {"const": "NO_LIVE_ACTION"}
       }
     }

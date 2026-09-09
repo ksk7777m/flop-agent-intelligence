@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/offline-tclk-accept-preflight.v1.json",
+  "title": "Offline TCLK Accept Preflight V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "domain", "content_label", "artifact_id", "policy_identity", "input_evidence", "stages", "errors", "schema_conformance", "reference_binding", "contract_classification", "contract_equality", "canonicality", "rail_disposition", "overall_disposition", "compatibility", "signature_status", "replay_status", "winner_status", "settlement_status", "ready_to_act", "authorized_to_act", "live_action_enabled", "production_api"],
+  "properties": {
+    "schema": {"const": "offline-tclk-accept-preflight-v1"},
+    "domain": {"const": "OFFLINE_TCLK_ACCEPT_PREFLIGHT\u0000V1"},
+    "content_label": {"const": "PUBLIC_MINIMIZED_PREFLIGHT_RESULT"},
+    "artifact_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "policy_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["policy_version", "repository", "commit_sha", "protocol", "schema_path", "schema_blob_sha1", "schema_sha256", "schema_byte_length", "derivation_sources"],
+      "properties": {
+        "policy_version": {"const": "offline-tclk-accept-preflight-policy-v1"},
+        "repository": {"const": "flop-labs/tclk"},
+        "commit_sha": {"const": "5cc4ab93efbc8999a3a7e1471b639deca25998ea"},
+        "protocol": {"const": "tclk/1"},
+        "schema_path": {"const": "schema/tclk1-frames.schema.json"},
+        "schema_blob_sha1": {"const": "13e3ab92a698086df65c3be98385d546ff0bb99e"},
+        "schema_sha256": {"const": "17071a2b3b21e8484cac9da7976088f3700e6fb6c1372268d4756b61ddd60c70"},
+        "schema_byte_length": {"const": 6070},
+        "derivation_sources": {"const": ["SPEC.md", "src/frames.ts", "tests/vectors.test.ts"]}
+      }
+    },
+    "input_evidence": {
+      "type": "object", "additionalProperties": false, "required": ["offer", "accept", "hash_role"],
+      "properties": {
+        "offer": {"$ref": "#/$defs/inputIdentity"}, "accept": {"$ref": "#/$defs/inputIdentity"},
+        "hash_role": {"const": "EVIDENCE_IDENTITY_ONLY_NOT_AUTHORITY_OR_SIGNING_TARGET"}
+      }
+    },
+    "stages": {
+      "type": "array", "minItems": 14, "maxItems": 14,
+      "prefixItems": [
+        {"$ref": "#/$defs/s1"}, {"$ref": "#/$defs/s2"}, {"$ref": "#/$defs/s3"}, {"$ref": "#/$defs/s4"},
+        {"$ref": "#/$defs/s5"}, {"$ref": "#/$defs/s6"}, {"$ref": "#/$defs/s7"}, {"$ref": "#/$defs/s8"},
+        {"$ref": "#/$defs/s9"}, {"$ref": "#/$defs/s10"}, {"$ref": "#/$defs/s11"}, {"$ref": "#/$defs/s12"},
+        {"$ref": "#/$defs/s13"}, {"$ref": "#/$defs/s14"}
+      ], "items": false
+    },
+    "errors": {"type": "array", "maxItems": 1, "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"}},
+    "schema_conformance": {"$ref": "#/$defs/twoStatus"},
+    "reference_binding": {"enum": ["NOT_EVALUATED", "BOUND", "FAILED"]},
+    "contract_classification": {"type": "string", "pattern": "^[A-Z0-9_]+$"},
+    "contract_equality": {"enum": ["NOT_EVALUATED", "MATCH", "MISMATCH"]},
+    "canonicality": {
+      "type": "object", "additionalProperties": false,
+      "required": ["derivation", "raw_offer", "raw_accept", "official_wire_policy", "local_signing_safety"],
+      "properties": {
+        "derivation": {"enum": ["NOT_EVALUATED", "DERIVATION_CANONICAL_FORM_VALID"]},
+        "raw_offer": {"enum": ["NOT_EVALUATED", "RAW_OFFER_BYTES_CANONICAL", "RAW_BYTES_NONCANONICAL"]},
+        "raw_accept": {"enum": ["NOT_EVALUATED", "RAW_ACCEPT_BYTES_CANONICAL", "RAW_BYTES_NONCANONICAL"]},
+        "official_wire_policy": {"const": "CANONICAL_ASCII_ENCODING_SPECIFIED"},
+        "local_signing_safety": {"const": "LOCAL_SIGNING_SAFETY_CANONICALITY_REQUIRED"}
+      }
+    },
+    "rail_disposition": {
+      "type": "object", "additionalProperties": false, "required": ["status", "rail_count", "maturity"],
+      "properties": {
+        "status": {"enum": ["NOT_EVALUATED", "ALL_KNOWN", "DUPLICATE_RAILS", "ORDER_AMBIGUITY", "MALFORMED_OR_ALIAS", "UNKNOWN_PRESENT"]},
+        "rail_count": {"type": ["integer", "null"], "minimum": 0, "maximum": 32},
+        "maturity": {"const": "VALUE_BEARING_VERIFICATION_NOT_PERFORMED"}
+      }
+    },
+    "overall_disposition": {"enum": ["PREFLIGHT_NOT_PERFORMED", "PREFLIGHT_PASS", "PREFLIGHT_FAIL", "PREFLIGHT_QUARANTINED"]},
+    "compatibility": {"enum": ["COMPATIBILITY_REVIEW_REQUIRED", "OFFLINE_PINNED_POLICY_COMPATIBLE"]},
+    "signature_status": {"const": "NOT_EVALUATED"}, "replay_status": {"const": "NOT_EVALUATED"},
+    "winner_status": {"const": "NOT_EVALUATED"}, "settlement_status": {"const": "NOT_EVALUATED"},
+    "ready_to_act": {"const": false}, "authorized_to_act": {"const": false}, "live_action_enabled": {"const": false},
+    "production_api": {
+      "type": "object", "additionalProperties": false,
+      "required": ["classification", "network", "filesystem", "side_effect", "authority", "corrected_frame_output"],
+      "properties": {
+        "classification": {"const": "SAFE_PURE_VALIDATOR"}, "network": {"const": "NONE"},
+        "filesystem": {"const": "FIXED_READ_ONLY"}, "side_effect": {"const": "NONE"},
+        "authority": {"const": "NONE"}, "corrected_frame_output": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "inputIdentity": {
+      "type": "object", "additionalProperties": false, "required": ["byte_length", "sha256"],
+      "properties": {"byte_length": {"type": ["integer", "null"], "minimum": 0}, "sha256": {"type": "string", "pattern": "^(?:[0-9a-f]{64}|UNAVAILABLE)$"}}
+    },
+    "stageStatus": {"enum": ["PASS", "FAIL", "NOT_EVALUATED", "EVIDENCE_REQUIRED", "QUARANTINED"]},
+    "stage": {"type": "object", "additionalProperties": false, "required": ["stage", "status"], "properties": {"stage": {"type": "string"}, "status": {"$ref": "#/$defs/stageStatus"}}},
+    "s1": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "PINNED_POLICY_INTEGRITY"}}},
+    "s2": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "INPUT_BOUNDS"}}},
+    "s3": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "UTF8_DECODE"}}},
+    "s4": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "STRICT_JSON_PARSE"}}},
+    "s5": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "OFFER_SCHEMA_CONFORMANCE"}}},
+    "s6": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "ACCEPT_SCHEMA_CONFORMANCE"}}},
+    "s7": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "OFFER_ACCEPT_REFERENCE_BINDING"}}},
+    "s8": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "ACCEPT_SEMANTIC_VALIDATION"}}},
+    "s9": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "ALL_RAILS_VALIDATION"}}},
+    "s10": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "CONTRACT_DERIVATION_INPUT_EXTRACTION"}}},
+    "s11": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "CONTRACT_ID_RECOMPUTATION"}}},
+    "s12": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "CONTRACT_ID_EQUALITY"}}},
+    "s13": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "INPUT_CANONICALITY"}}},
+    "s14": {"$ref": "#/$defs/stage", "properties": {"stage": {"const": "PREFLIGHT_DISPOSITION"}}},
+    "twoStatus": {"type": "object", "additionalProperties": false, "required": ["offer", "accept"], "properties": {"offer": {"enum": ["NOT_EVALUATED", "CONFORMANT", "NONCONFORMANT"]}, "accept": {"enum": ["NOT_EVALUATED", "CONFORMANT", "NONCONFORMANT"]}}}
+  }
+}

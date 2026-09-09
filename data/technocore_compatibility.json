@@ -113,5 +113,16 @@
     "local_profile_comparison": "SPEC_DRIFT",
     "historical_reclassification": "BLOCKED",
     "action": "NO_LIVE_ACTION"
+  },
+  "offline_tclk_accept_preflight": {
+    "schema": "offline-tclk-accept-preflight-v1",
+    "policy": "offline-tclk-accept-preflight-policy-v1",
+    "classification": "SAFE_PURE_VALIDATOR",
+    "official_schema": "PINNED_EXACT_COMMIT_OFFLINE",
+    "contract_derivation": "INDEPENDENT_RECOMPUTATION_GOLDEN_VECTOR_MATCHED",
+    "network": "NONE",
+    "side_effect": "NONE",
+    "authority": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }
