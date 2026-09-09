@@ -4,7 +4,7 @@ import hashlib, hmac, json, sys, types
 from pathlib import Path
 from typing import Any, Mapping
 from jsonschema import Draft202012Validator
-from .tclk_accept_preflight import _parse
+from .tclk_accept_preflight import MAX_INPUT_BYTES as MAX_OFFER_BYTES, _parse
 from .tclk_offer_global_winner import assess_offer_global_winner
 from .tclk_schema_evidence import COMMIT, SCHEMA_SHA256, SPEC_SHA256
 from .tclk_transcript_boundary import MAX_TRANSCRIPT_BYTES, assess_tclk_transcript
@@ -19,6 +19,14 @@ STAGES=("INPUT_BOUNDS","SOURCE_METADATA","SOURCE_AUTHENTICITY","RAW_SOURCE_INTEG
  "TRANSCRIPT_VALIDATION","SIGNER_VERIFICATION","CURSOR_INTEGRITY","GENERATION_CONTINUITY",
  "SEQUENCE_CONTINUITY","LOWER_BOUNDARY","UPPER_BOUNDARY","TRUNCATION","GAP_CLASSIFICATION",
  "OFFER_WIDE_COMPLETENESS","CHRONOLOGY_AUTHORITY","WINNER_AUTHORITY","READINESS","AUTHORIZATION")
+STAGE_ALLOWED=(frozenset({"NOT_EVALUATED","VERIFIED"}),frozenset({"NOT_EVALUATED","VERIFIED"}),
+ frozenset({"UNKNOWN"}),frozenset({"UNKNOWN"}),frozenset({"NOT_EVALUATED","VERIFIED","FAILED"}),
+ frozenset({"NOT_EVALUATED","VERIFIED","FAILED"}),frozenset({"NOT_EVALUATED","VERIFIED"}),
+ frozenset({"NOT_EVALUATED","VERIFIED","FAILED"}),frozenset({"NOT_EVALUATED","VERIFIED","FAILED"}),
+ frozenset({"NOT_EVALUATED","OBSERVED","UNKNOWN"}),frozenset({"NOT_EVALUATED","OBSERVED","UNKNOWN"}),
+ frozenset({"NOT_EVALUATED","FAILED","NOT_OBSERVED"}),frozenset({"NOT_EVALUATED","UNRESOLVED","NO_GAP_OBSERVED"}),
+ frozenset({"NOT_EVALUATED","NOT_ESTABLISHED"}),frozenset({"NOT_AUTHORITATIVE"}),
+ frozenset({"BLOCKED"}),frozenset({"BLOCKED"}),frozenset({"BLOCKED"}))
 
 class _Error(ValueError):
  def __init__(self,code:str):super().__init__(code);self.code=code
@@ -49,6 +57,13 @@ def _validate(v:Any)->None:
  except Exception:raise _Error("RESULT_SCHEMA_INVALID") from None
  expected=_hash(_canon({"domain":DOMAIN,**{k:x for k,x in v.items() if k!="artifact_id"}}))
  if not hmac.compare_digest(v["artifact_id"],expected):raise _Error("ARTIFACT_IDENTITY_MISMATCH")
+ stages=v["stages"]
+ for i,(item,name,allowed) in enumerate(zip(stages,STAGES,STAGE_ALLOWED),1):
+  if type(item["ordinal"]) is not int or item["ordinal"]!=i or item["stage_id"]!=name or item["state"] not in allowed:raise _Error("STAGE_GRAMMAR_INVALID")
+ cursor=v["cursor"]
+ if (v["gap"]=="GENERATION_MISMATCH") != (cursor["generation"]=="MISMATCH" and cursor["continuity"]=="BLOCKED" and cursor["resync"]=="RESYNC_REQUIRED"):raise _Error("CURSOR_STATE_CONTRADICTION")
+ if v["gap"] in {"GAP_UNRESOLVED","CURSOR_OVERLAP_UNRESOLVED"} and cursor["resync"]!="RESYNC_REQUIRED":raise _Error("GAP_STATE_CONTRADICTION")
+ if v["gap"]=="NO_INTERNAL_GAP_OBSERVED" and (cursor["continuity"]!="CONTIGUOUS" or cursor["resync"]!="NOT_REQUIRED_BY_LOCAL_CHECK"):raise _Error("GAP_STATE_CONTRADICTION")
  if v["winner"]!="GLOBAL_WINNER_UNRESOLVED" or v["race_loss"]!="NOT_ISSUED" or v["ready_to_act"] is not False or v["authorized_to_act"] is not False:raise _Error("AUTHORITY_ESCALATION_REJECTED")
 def _document(raw:bytes,fields:frozenset[str])->Mapping[str,Any]:
  try:v=_parse(raw)
@@ -60,7 +75,7 @@ def assess_offer_wide_evidence(offer_bytes:bytes,transcript_bytes:bytes,source_m
  def mark(i:int,x:str)->None:st[i]["state"]=x
  if any(type(x) is not bytes for x in (offer_bytes,transcript_bytes,source_metadata_bytes,checkpoint_bytes)):
   r["errors"]=["INPUT_TYPE_INVALID"];return _seal(r)
- if len(transcript_bytes)>MAX_TRANSCRIPT_BYTES or len(source_metadata_bytes)>MAX_METADATA_BYTES or len(checkpoint_bytes)>MAX_METADATA_BYTES:
+ if len(offer_bytes)>MAX_OFFER_BYTES or len(transcript_bytes)>MAX_TRANSCRIPT_BYTES or len(source_metadata_bytes)>MAX_METADATA_BYTES or len(checkpoint_bytes)>MAX_METADATA_BYTES:
   r["errors"]=["INPUT_LIMIT_EXCEEDED"];return _seal(r)
  mark(0,"VERIFIED")
  try:source=_document(source_metadata_bytes,SOURCE_FIELDS);checkpoint=_document(checkpoint_bytes,CHECKPOINT_FIELDS)
@@ -91,7 +106,7 @@ def assess_offer_wide_evidence(offer_bytes:bytes,transcript_bytes:bytes,source_m
  return _seal(r)
 __all__=["assess_offer_wide_evidence"]
 class _Sealed(types.ModuleType):
- _protected=frozenset({"SCHEMA","DOMAIN","POLICY","ROOT","RESULT_SCHEMA","SOURCE_TYPES","SOURCE_FIELDS","CHECKPOINT_FIELDS","STAGES","MAX_METADATA_BYTES","MAX_TRANSCRIPT_BYTES","assess_offer_global_winner","assess_tclk_transcript","_parse","_validate","_document","_seal","assess_offer_wide_evidence","__all__"})
+ _protected=frozenset({"SCHEMA","DOMAIN","POLICY","ROOT","RESULT_SCHEMA","SOURCE_TYPES","SOURCE_FIELDS","CHECKPOINT_FIELDS","STAGES","STAGE_ALLOWED","MAX_METADATA_BYTES","MAX_OFFER_BYTES","MAX_TRANSCRIPT_BYTES","assess_offer_global_winner","assess_tclk_transcript","_parse","_validate","_document","_seal","assess_offer_wide_evidence","__all__"})
  def __setattr__(self,n:str,v:Any)->None:
   if n in self._protected and n in self.__dict__:raise AttributeError("offer-wide evidence dependencies are sealed")
   super().__setattr__(n,v)
