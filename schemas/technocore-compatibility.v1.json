@@ -8,7 +8,8 @@
     "schema", "status", "reviewed_at", "reviewed_technocore_agent_version",
     "source_evidence", "semantic_invariants", "capability_evidence",
     "deployment_observations", "observation_policy_binding", "freshness",
-    "flop_specification_authority", "tclk_accept_conformance"
+    "flop_specification_authority", "tclk_accept_conformance",
+    "tclk_official_schema_evidence"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -123,6 +124,20 @@
         "local_safety_profile": {"const": "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1"},
         "historical_classification": {"const": "HISTORICAL_CLASSIFICATION_UNRESOLVED"},
         "field_report": {"const": "UNRATIFIED"},
+        "action": {"const": "NO_LIVE_ACTION"}
+      }
+    },
+    "tclk_official_schema_evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "artifact", "official_schema", "required_contract_policy", "contract_derivation", "local_profile_comparison", "historical_reclassification", "action"],
+      "properties": {
+        "schema": {"const": "tclk-official-schema-evidence-v1"},
+        "artifact": {"const": "data/tclk_official_schema_evidence.json"},
+        "official_schema": {"const": "OFFICIAL_SCHEMA_CONFORMANCE_POLICY_PINNED"},
+        "required_contract_policy": {"const": "REQUIRED_CONTRACT_POLICY_ATTESTED"},
+        "contract_derivation": {"const": "CONTRACT_DERIVATION_SPEC_PINNED"},
+        "local_profile_comparison": {"const": "SPEC_DRIFT"},
+        "historical_reclassification": {"const": "BLOCKED"},
         "action": {"const": "NO_LIVE_ACTION"}
       }
     }

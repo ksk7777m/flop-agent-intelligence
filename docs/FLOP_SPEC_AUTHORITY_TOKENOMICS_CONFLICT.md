@@ -110,11 +110,12 @@ Latest untrusted monitoring material adds, without implementation:
   `OFFICIAL_SCHEMA_CONFORMANCE_UNKNOWN`. `ACCEPT_SCHEMA_VALID` requires pinned
   official evidence; historical accepted-but-unlocked records remain
   `HISTORICAL_CLASSIFICATION_UNRESOLVED` without complete raw evidence.
-- S: **TCLK Official Schema Evidence Pinning / Offline Source Import Boundary**.
-  This must precede any preflight validator and bind an exact official commit,
-  schema hash/version, constraints, derivation reference, immutable snapshot,
-  and supersession policy without network or action authority.
-- Blocked: **Offline TCLK Accept Preflight Validator**. A future pure validator would
+- S implemented, final review pending: **TCLK Official Schema Evidence Pinning /
+  Offline Source Import Boundary**. It binds an exact official commit, schema
+  hash/version, constraints, derivation sources, immutable snapshot, and
+  supersession boundary without production network or action authority.
+- Blocked until that review/integration: **Offline TCLK Accept Preflight
+  Validator**. A future pure validator would
   require an exact pinned schema, required-field and semantic validation,
   contract ID re-derivation, canonical encoding, and all-rails validation, with
   no posting, signing, network, or action authority.

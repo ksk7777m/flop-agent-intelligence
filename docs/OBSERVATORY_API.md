@@ -169,6 +169,13 @@ their original complete evidence. The separate field-report counts are
 unratified point-in-time reported data, not official or current runtime metrics.
 No DID-level score, ranking, or raw frame is published.
 
+`data/tclk_official_schema_evidence.json` separately pins a single exact
+`flop-labs/tclk` commit and an immutable repository-owned schema snapshot. Its
+public projection contains only fixed source IDs, hashes, sizes, extracted
+accept semantics, and trust states—never raw source, Issue body, username,
+headers, URLs, or local paths. Production loading is offline-only; there is no
+network fallback, automatic update, migration, or action authority.
+
 ## Safety and update model
 
 Room names and topics are rendered with DOM `textContent`; URLs are never made

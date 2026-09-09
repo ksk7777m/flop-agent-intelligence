@@ -1,0 +1,623 @@
+{
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-official-schema-evidence.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acquisition_evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "accept_encoding": {
+          "const": "identity"
+        },
+        "all_content_gets_commit_pinned": {
+          "const": true
+        },
+        "allowed_hosts": {
+          "items": false,
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "const": "api.github.com"
+            },
+            {
+              "const": "raw.githubusercontent.com"
+            }
+          ],
+          "type": "array"
+        },
+        "api_gets": {
+          "const": 16
+        },
+        "bounded_response": {
+          "const": true
+        },
+        "content_length_validated": {
+          "const": true
+        },
+        "content_type_validated": {
+          "const": true
+        },
+        "credentials_used": {
+          "const": false
+        },
+        "duplicate_headers_rejected": {
+          "const": true
+        },
+        "fallback_enabled": {
+          "const": false
+        },
+        "manual_reexecution_after_local_decode_failure": {
+          "const": 1
+        },
+        "method": {
+          "const": "GET"
+        },
+        "mode": {
+          "const": "MANUAL_ONE_SHOT_READ_ONLY_COMPLETED"
+        },
+        "mutable_main_resolution_gets": {
+          "const": 1
+        },
+        "raw_error_material_retained": {
+          "const": false
+        },
+        "raw_gets": {
+          "const": 10
+        },
+        "redirects_allowed": {
+          "const": false
+        },
+        "retry_mechanism": {
+          "const": false
+        },
+        "timeout_seconds": {
+          "const": 10
+        },
+        "total_gets": {
+          "const": 26
+        }
+      },
+      "required": [
+        "accept_encoding",
+        "all_content_gets_commit_pinned",
+        "allowed_hosts",
+        "api_gets",
+        "bounded_response",
+        "content_length_validated",
+        "content_type_validated",
+        "credentials_used",
+        "duplicate_headers_rejected",
+        "fallback_enabled",
+        "manual_reexecution_after_local_decode_failure",
+        "method",
+        "mode",
+        "mutable_main_resolution_gets",
+        "raw_error_material_retained",
+        "raw_gets",
+        "redirects_allowed",
+        "retry_mechanism",
+        "timeout_seconds",
+        "total_gets"
+      ],
+      "type": "object"
+    },
+    "action_state": {
+      "additionalProperties": false,
+      "properties": {
+        "authorized_to_act": {
+          "const": false
+        },
+        "compatibility": {
+          "const": "COMPATIBILITY_REVIEW_REQUIRED"
+        },
+        "live_action_enabled": {
+          "const": false
+        },
+        "mode": {
+          "const": "NO_LIVE_ACTION"
+        },
+        "ready_to_act": {
+          "const": false
+        }
+      },
+      "required": [
+        "authorized_to_act",
+        "compatibility",
+        "live_action_enabled",
+        "mode",
+        "ready_to_act"
+      ],
+      "type": "object"
+    },
+    "artifact_id": {
+      "const": "5711e1c9bbaeb5c62da71763752a01eeb3e19c8f835e3195700e0c685ed92777"
+    },
+    "canonical_encoding": {
+      "const": "SORTED_ASCII_JSON_V1"
+    },
+    "content_label": {
+      "const": "PUBLIC_MINIMIZED_EVIDENCE"
+    },
+    "derivation_evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "const": "SHA256_DOMAIN_TAGGED_ASCII_CANONICAL_OFFER_ACCEPT_CORE"
+        },
+        "implementation_in_scope": {
+          "const": false
+        },
+        "normative_spec": {
+          "additionalProperties": false,
+          "properties": {
+            "blob_sha1": {
+              "const": "99e3e677295354b88fe49efa69f84b1b78a1036c"
+            },
+            "byte_length": {
+              "const": 31051
+            },
+            "path": {
+              "const": "SPEC.md"
+            },
+            "sha256": {
+              "const": "f01b46edf747606402979e5bf09193e3d7032217461bf5af2135241e5d940b62"
+            },
+            "source_id": {
+              "const": "TCLK_SPEC"
+            }
+          },
+          "required": [
+            "blob_sha1",
+            "byte_length",
+            "path",
+            "sha256",
+            "source_id"
+          ],
+          "type": "object"
+        },
+        "reference_implementation": {
+          "additionalProperties": false,
+          "properties": {
+            "blob_sha1": {
+              "const": "0c27a9aaaefe2965725384adfd383405f9c2cd3a"
+            },
+            "byte_length": {
+              "const": 19276
+            },
+            "path": {
+              "const": "src/frames.ts"
+            },
+            "sha256": {
+              "const": "b8077cdd2b4210f0c696ac0e98fb8fe8be9c53ba998d0f671a454829c42bfb97"
+            },
+            "source_id": {
+              "const": "TCLK_FRAMES_SOURCE"
+            }
+          },
+          "required": [
+            "blob_sha1",
+            "byte_length",
+            "path",
+            "sha256",
+            "source_id"
+          ],
+          "type": "object"
+        },
+        "source_state": {
+          "const": "CONTRACT_DERIVATION_SOURCE_OBSERVED"
+        },
+        "status": {
+          "const": "CONTRACT_DERIVATION_SPEC_PINNED"
+        },
+        "test_vector": {
+          "additionalProperties": false,
+          "properties": {
+            "blob_sha1": {
+              "const": "42b221894d4c34a879d9f8812bc86fb8237f15a0"
+            },
+            "byte_length": {
+              "const": 3604
+            },
+            "path": {
+              "const": "tests/vectors.test.ts"
+            },
+            "sha256": {
+              "const": "c60f109ba26547c6be0795b0eb66a861a96a7d68a36885a28f318e69a1cebb96"
+            },
+            "source_id": {
+              "const": "TCLK_GOLDEN_VECTORS"
+            }
+          },
+          "required": [
+            "blob_sha1",
+            "byte_length",
+            "path",
+            "sha256",
+            "source_id"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "algorithm",
+        "implementation_in_scope",
+        "normative_spec",
+        "reference_implementation",
+        "source_state",
+        "status",
+        "test_vector"
+      ],
+      "type": "object"
+    },
+    "domain": {
+      "const": "TCLK_OFFICIAL_SCHEMA_EVIDENCE\u0000V1"
+    },
+    "issue_142_evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "author_association": {
+          "const": "NONE"
+        },
+        "authority": {
+          "const": "NOT_PROTOCOL_SPEC"
+        },
+        "canonical_object_type": {
+          "const": "ISSUE"
+        },
+        "created_at": {
+          "const": "2026-09-08T23:16:38Z"
+        },
+        "maintainer_ratification": {
+          "const": "NOT_CONFIRMED"
+        },
+        "mutable_body_sha256": {
+          "const": "d88a952736346a1a6ada2206663195d28d9e58203a72954f480b8f339c1cae79"
+        },
+        "number": {
+          "const": 142
+        },
+        "state": {
+          "const": "OPEN_OBSERVED"
+        },
+        "temporal_scope": {
+          "const": "POINT_IN_TIME_REPORTED"
+        },
+        "updated_at": {
+          "const": "2026-09-09T07:00:57Z"
+        }
+      },
+      "required": [
+        "author_association",
+        "authority",
+        "canonical_object_type",
+        "created_at",
+        "maintainer_ratification",
+        "mutable_body_sha256",
+        "number",
+        "state",
+        "temporal_scope",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "local_profile_comparison": {
+      "additionalProperties": false,
+      "properties": {
+        "automatic_migration": {
+          "const": false
+        },
+        "comparison": {
+          "const": "SPEC_DRIFT"
+        },
+        "historical_reclassification": {
+          "const": "BLOCKED"
+        },
+        "official_conformance_policy": {
+          "const": "PINNED"
+        },
+        "prior_artifact": {
+          "const": "TCLK_ACCEPT_CONFORMANCE_PACKAGE_V1"
+        },
+        "prior_profile": {
+          "const": "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1"
+        },
+        "reason": {
+          "const": "LOCAL_PROFILE_FIELD_SET_DIFFERS_FROM_PINNED_ACCEPT"
+        },
+        "required_contract_policy": {
+          "const": "ATTESTED"
+        }
+      },
+      "required": [
+        "automatic_migration",
+        "comparison",
+        "historical_reclassification",
+        "official_conformance_policy",
+        "prior_artifact",
+        "prior_profile",
+        "reason",
+        "required_contract_policy"
+      ],
+      "type": "object"
+    },
+    "policy_version": {
+      "const": "tclk-official-schema-offline-import-v1"
+    },
+    "schema": {
+      "const": "tclk-official-schema-evidence-v1"
+    },
+    "schema_semantics": {
+      "additionalProperties": false,
+      "properties": {
+        "accept_definition": {
+          "const": "OBSERVED"
+        },
+        "additional_properties": {
+          "const": "REJECTED"
+        },
+        "contract_required": {
+          "const": true
+        },
+        "contract_type": {
+          "const": "STRING_HEX32"
+        },
+        "declared_draft": {
+          "const": "JSON_SCHEMA_DRAFT_2020_12"
+        },
+        "protocol_version": {
+          "const": "TCLK_1"
+        },
+        "reference_completeness": {
+          "const": "COMPLETE_LOCAL_SAME_DOCUMENT"
+        },
+        "references": {
+          "items": false,
+          "maxItems": 15,
+          "minItems": 15,
+          "prefixItems": [
+            {
+              "const": "#/$defs/accept"
+            },
+            {
+              "const": "#/$defs/cancel"
+            },
+            {
+              "const": "#/$defs/did"
+            },
+            {
+              "const": "#/$defs/heartbeat"
+            },
+            {
+              "const": "#/$defs/hex32"
+            },
+            {
+              "const": "#/$defs/hex33"
+            },
+            {
+              "const": "#/$defs/job"
+            },
+            {
+              "const": "#/$defs/lock"
+            },
+            {
+              "const": "#/$defs/nonce"
+            },
+            {
+              "const": "#/$defs/offer"
+            },
+            {
+              "const": "#/$defs/presig"
+            },
+            {
+              "const": "#/$defs/rail"
+            },
+            {
+              "const": "#/$defs/receipt"
+            },
+            {
+              "const": "#/$defs/refund"
+            },
+            {
+              "const": "#/$defs/reveal"
+            }
+          ],
+          "type": "array"
+        },
+        "required_fields": {
+          "items": false,
+          "maxItems": 6,
+          "minItems": 6,
+          "prefixItems": [
+            {
+              "const": "type"
+            },
+            {
+              "const": "from"
+            },
+            {
+              "const": "ref"
+            },
+            {
+              "const": "statement"
+            },
+            {
+              "const": "contract"
+            },
+            {
+              "const": "nonce"
+            }
+          ],
+          "type": "array"
+        },
+        "schema_id": {
+          "const": "TCLK_OFFICIAL_SCHEMA_ID"
+        },
+        "semantic_extraction": {
+          "const": "COMPLETE_FOR_ACCEPT_DEFINITION"
+        }
+      },
+      "required": [
+        "accept_definition",
+        "additional_properties",
+        "contract_required",
+        "contract_type",
+        "declared_draft",
+        "protocol_version",
+        "reference_completeness",
+        "references",
+        "required_fields",
+        "schema_id",
+        "semantic_extraction"
+      ],
+      "type": "object"
+    },
+    "snapshot_identity": {
+      "additionalProperties": false,
+      "properties": {
+        "blob_sha1": {
+          "const": "13e3ab92a698086df65c3be98385d546ff0bb99e"
+        },
+        "byte_length": {
+          "const": 6070
+        },
+        "content_sha256": {
+          "const": "17071a2b3b21e8484cac9da7976088f3700e6fb6c1372268d4756b61ddd60c70"
+        },
+        "duplicate_keys": {
+          "const": "ABSENT"
+        },
+        "json_parse": {
+          "const": "PARSED"
+        },
+        "license": {
+          "const": "APACHE_2_0_OBSERVED"
+        },
+        "license_blob_sha1": {
+          "const": "a33f6f27c9ee1b1b31cb02a29c45adcebbf5ab33"
+        },
+        "license_byte_length": {
+          "const": 11340
+        },
+        "license_sha256": {
+          "const": "9a199b2f98908456e0714c49a9d0ae7b01d43eb85c0005a040a974db5faa982a"
+        },
+        "retention": {
+          "const": "RAW_SCHEMA_RETAINED_APACHE_2_0"
+        },
+        "source_id": {
+          "const": "TCLK_OFFICIAL_ACCEPT_SCHEMA"
+        },
+        "source_path": {
+          "const": "schema/tclk1-frames.schema.json"
+        }
+      },
+      "required": [
+        "blob_sha1",
+        "byte_length",
+        "content_sha256",
+        "duplicate_keys",
+        "json_parse",
+        "license",
+        "license_blob_sha1",
+        "license_byte_length",
+        "license_sha256",
+        "retention",
+        "source_id",
+        "source_path"
+      ],
+      "type": "object"
+    },
+    "source_identity": {
+      "additionalProperties": false,
+      "properties": {
+        "commit_sha": {
+          "const": "5cc4ab93efbc8999a3a7e1471b639deca25998ea"
+        },
+        "commit_state": {
+          "const": "EXACT_COMMIT_OBSERVED"
+        },
+        "default_branch_observed": {
+          "const": "main"
+        },
+        "name": {
+          "const": "tclk"
+        },
+        "owner": {
+          "const": "flop-labs"
+        },
+        "repository": {
+          "const": "FLOP_LABS_TCLK"
+        },
+        "repository_state": {
+          "const": "OFFICIAL_REPOSITORY_IDENTITY_OBSERVED"
+        }
+      },
+      "required": [
+        "commit_sha",
+        "commit_state",
+        "default_branch_observed",
+        "name",
+        "owner",
+        "repository",
+        "repository_state"
+      ],
+      "type": "object"
+    },
+    "status": {
+      "const": "OFFLINE_PINNED_EVIDENCE"
+    },
+    "trust_boundary": {
+      "additionalProperties": false,
+      "properties": {
+        "current_main_immutability": {
+          "const": "NOT_INFERRED"
+        },
+        "maintainer_signature": {
+          "const": "NOT_VERIFIED"
+        },
+        "production_network_fetch": {
+          "const": false
+        },
+        "protocol_ratification": {
+          "const": "NOT_INFERRED"
+        },
+        "runtime_deployment": {
+          "const": "NOT_PROVEN"
+        },
+        "yellow_paper_settlement_conformance": {
+          "const": "NOT_PROVEN"
+        }
+      },
+      "required": [
+        "current_main_immutability",
+        "maintainer_signature",
+        "production_network_fetch",
+        "protocol_ratification",
+        "runtime_deployment",
+        "yellow_paper_settlement_conformance"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "acquisition_evidence",
+    "action_state",
+    "artifact_id",
+    "canonical_encoding",
+    "content_label",
+    "derivation_evidence",
+    "domain",
+    "issue_142_evidence",
+    "local_profile_comparison",
+    "policy_version",
+    "schema",
+    "schema_semantics",
+    "snapshot_identity",
+    "source_identity",
+    "status",
+    "trust_boundary"
+  ],
+  "title": "TCLK Official Schema Evidence Pinning V1",
+  "type": "object"
+}

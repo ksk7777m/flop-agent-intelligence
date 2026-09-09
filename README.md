@@ -125,6 +125,11 @@ judgments. Its fixed ordered 12-stage grammar cannot promote local shape into
 official validity. The exact official schema revision is not retained, so all
 official-valid/winner claims fail closed and historical data is not reclassified.
 
+The offline [TCLK official schema evidence](docs/TCLK_OFFICIAL_SCHEMA_EVIDENCE.md)
+pins an exact official repository commit, schema blob/hash/size, Apache-2.0
+snapshot, accept semantics, and contract-ID specification sources. It exposes no
+network loader and does not migrate historical observations or enable actions.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects

@@ -81,10 +81,9 @@ They contain no raw remote content or action material. Runtime compatibility is
 `COMPATIBILITY_REVIEW_REQUIRED`; action remains `NO_LIVE_ACTION`,
 `ready_to_act=false`, and `authorized_to_act=false`.
 
-The next candidate is **TCLK Official Schema Evidence Pinning / Offline Source
-Import Boundary**. It must bind the official repository, exact commit, document
-hash and schema version, required fields, contract constraints and derivation
-reference, immutable snapshot evidence, and supersession policy. An Offline
-TCLK Accept Preflight Validator remains blocked until that package is reviewed
-and integrated. Outgoing builders, posting, signing, approval-to-signing
-connection, network sinks, and runtime schema download remain out of scope.
+The follow-up **TCLK Official Schema Evidence Pinning / Offline Source Import
+Boundary** is now implemented as a separate generation and records `SPEC_DRIFT`
+without changing this historical artifact. After its final review and
+integration, **Offline TCLK Accept Preflight Validator** is the next candidate.
+Outgoing builders, posting, signing, approval-to-signing connection, network
+sinks, and runtime schema download remain out of scope.

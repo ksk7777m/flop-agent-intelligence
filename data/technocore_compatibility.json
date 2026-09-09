@@ -103,5 +103,15 @@
     "historical_classification": "HISTORICAL_CLASSIFICATION_UNRESOLVED",
     "field_report": "UNRATIFIED",
     "action": "NO_LIVE_ACTION"
+  },
+  "tclk_official_schema_evidence": {
+    "schema": "tclk-official-schema-evidence-v1",
+    "artifact": "data/tclk_official_schema_evidence.json",
+    "official_schema": "OFFICIAL_SCHEMA_CONFORMANCE_POLICY_PINNED",
+    "required_contract_policy": "REQUIRED_CONTRACT_POLICY_ATTESTED",
+    "contract_derivation": "CONTRACT_DERIVATION_SPEC_PINNED",
+    "local_profile_comparison": "SPEC_DRIFT",
+    "historical_reclassification": "BLOCKED",
+    "action": "NO_LIVE_ACTION"
   }
 }
