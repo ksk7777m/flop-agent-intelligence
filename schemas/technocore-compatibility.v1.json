@@ -8,7 +8,7 @@
     "schema", "status", "reviewed_at", "reviewed_technocore_agent_version",
     "source_evidence", "semantic_invariants", "capability_evidence",
     "deployment_observations", "observation_policy_binding", "freshness",
-    "flop_specification_authority"
+    "flop_specification_authority", "tclk_accept_conformance"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -109,6 +109,18 @@
         "yellow_paper_content": {"const": "NOT_ATTESTED"},
         "ratification": {"const": "RATIFICATION_UNRESOLVED"},
         "scoring": {"const": "UNRESOLVED"},
+        "action": {"const": "NO_LIVE_ACTION"}
+      }
+    },
+    "tclk_accept_conformance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "artifact", "official_schema", "historical_classification", "field_report", "action"],
+      "properties": {
+        "schema": {"const": "tclk-accept-conformance-package-v1"},
+        "artifact": {"const": "data/tclk_accept_conformance.json"},
+        "official_schema": {"const": "OFFICIAL_SCHEMA_REVISION_REQUIRED"},
+        "historical_classification": {"const": "HISTORICAL_CLASSIFICATION_UNRESOLVED"},
+        "field_report": {"const": "UNRATIFIED"},
         "action": {"const": "NO_LIVE_ACTION"}
       }
     }

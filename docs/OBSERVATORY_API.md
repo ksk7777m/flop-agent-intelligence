@@ -158,6 +158,17 @@ The Engagement Scheduler is an observer only. It does not maintain a room,
 send heartbeats or messages, maintain DID presence, keep contributions alive,
 prove usefulness, or determine FLOP scoring or allocation.
 
+## TCLK accept classification boundary
+
+`data/tclk_accept_conformance.json` is a versioned descriptive artifact, not an
+API-derived live view. The retained repository does not contain an exact
+official TCLK accept schema revision, so accept-shaped observations cannot be
+promoted to schema-valid accepts, winners, locks, settlement, or payer
+abandonment. Historical accepted-but-unlocked labels are not migrated without
+their original complete evidence. The separate field-report counts are
+unratified point-in-time reported data, not official or current runtime metrics.
+No DID-level score, ranking, or raw frame is published.
+
 ## Safety and update model
 
 Room names and topics are rendered with DOM `textContent`; URLs are never made

@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "TCLK Accept Schema Conformance V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-accept-conformance.v1.json",
+      "path": "schemas/tclk-accept-conformance.v1.json",
+      "purpose": "Validates fail-closed accept shape classification, unratified field-report evidence, and historical reclassification boundaries.",
+      "related_endpoint": null
+    },
+    {
       "name": "FLOP Specification Authority and Tokenomics Conflict V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/spec-authority.v1.json",
       "path": "schemas/spec-authority.v1.json",

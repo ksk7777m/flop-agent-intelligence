@@ -93,5 +93,13 @@
     "ratification": "RATIFICATION_UNRESOLVED",
     "scoring": "UNRESOLVED",
     "action": "NO_LIVE_ACTION"
+  },
+  "tclk_accept_conformance": {
+    "schema": "tclk-accept-conformance-package-v1",
+    "artifact": "data/tclk_accept_conformance.json",
+    "official_schema": "OFFICIAL_SCHEMA_REVISION_REQUIRED",
+    "historical_classification": "HISTORICAL_CLASSIFICATION_UNRESOLVED",
+    "field_report": "UNRATIFIED",
+    "action": "NO_LIVE_ACTION"
   }
 }

@@ -116,6 +116,14 @@ enables no retry or live action. Live 0.13.0 compatibility remains unobserved
 and `COMPATIBILITY_REVIEW_REQUIRED`. See
 [Technocore 0.13.0 Transport Semantics](docs/TECHNOCORE_0130_TRANSPORT_SEMANTICS.md).
 
+## TCLK Accept Schema Conformance Boundary
+
+The offline [TCLK Accept classification boundary](docs/TCLK_ACCEPT_SCHEMA_CONFORMANCE.md)
+separates accept-shaped frames, official schema validity, signature and Replay
+evidence, contract derivation, global winner, lock, and settlement. The exact
+official schema revision is not retained, so all valid/winner claims fail
+closed and historical accepted-but-unlocked data is not reclassified.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects
