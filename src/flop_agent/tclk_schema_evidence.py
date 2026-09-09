@@ -22,10 +22,22 @@ SCHEMA_SIZE = 6070
 LICENSE_BLOB = "a33f6f27c9ee1b1b31cb02a29c45adcebbf5ab33"
 LICENSE_SHA256 = "9a199b2f98908456e0714c49a9d0ae7b01d43eb85c0005a040a974db5faa982a"
 LICENSE_SIZE = 11340
+SPEC_BLOB = "99e3e677295354b88fe49efa69f84b1b78a1036c"
+SPEC_SHA256 = "f01b46edf747606402979e5bf09193e3d7032217461bf5af2135241e5d940b62"
+SPEC_SIZE = 31051
+FRAMES_BLOB = "0c27a9aaaefe2965725384adfd383405f9c2cd3a"
+FRAMES_SHA256 = "b8077cdd2b4210f0c696ac0e98fb8fe8be9c53ba998d0f671a454829c42bfb97"
+FRAMES_SIZE = 19276
+VECTORS_BLOB = "42b221894d4c34a879d9f8812bc86fb8237f15a0"
+VECTORS_SHA256 = "c60f109ba26547c6be0795b0eb66a861a96a7d68a36885a28f318e69a1cebb96"
+VECTORS_SIZE = 3604
 MAX_SCHEMA_BYTES = 64 * 1024
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT = ROOT / "vendor" / "tclk" / COMMIT / SOURCE_PATH
 LICENSE = ROOT / "vendor" / "tclk" / COMMIT / "LICENSE"
+SPEC = ROOT / "vendor" / "tclk" / COMMIT / "SPEC.md"
+FRAMES = ROOT / "vendor" / "tclk" / COMMIT / "src" / "frames.ts"
+VECTORS = ROOT / "vendor" / "tclk" / COMMIT / "tests" / "vectors.test.ts"
 REQUIRED = ("type", "from", "ref", "statement", "contract", "nonce")
 REFS = tuple(f"#/$defs/{name}" for name in ("accept", "cancel", "did", "heartbeat",
     "hex32", "hex33", "job", "lock", "nonce", "offer", "presig", "rail",
@@ -56,6 +68,16 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
+def _same(left: Any, right: Any) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, Mapping):
+        return set(left) == set(right) and all(_same(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(_same(a, b) for a, b in zip(left, right))
+    return left == right
+
+
 def _pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in items:
@@ -65,7 +87,12 @@ def _pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _read_fixed(path: Path, expected_hash: str, expected_size: int, field: str) -> bytes:
+def _git_blob_id(raw: bytes) -> str:
+    return hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\x00" + raw).hexdigest()
+
+
+def _read_fixed(path: Path, expected_blob: str, expected_hash: str,
+                expected_size: int, field: str) -> bytes:
     try:
         info = path.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
@@ -89,6 +116,8 @@ def _read_fixed(path: Path, expected_hash: str, expected_size: int, field: str) 
         raise SchemaEvidenceError("SNAPSHOT_READ_FAILED", field) from None
     if hashlib.sha256(raw).hexdigest() != expected_hash:
         raise SchemaEvidenceError("SNAPSHOT_HASH_MISMATCH", field)
+    if _git_blob_id(raw) != expected_blob:
+        raise SchemaEvidenceError("SNAPSHOT_BLOB_MISMATCH", field)
     return raw
 
 
@@ -111,8 +140,9 @@ def _extract(raw: bytes) -> Mapping[str, Any]:
         raise SchemaEvidenceError("SCHEMA_EXPECTATION_MISMATCH", "accept")
     required = accept.get("required")
     properties = accept.get("properties")
-    if required != list(REQUIRED) or not isinstance(properties, dict) or set(properties) != {
-            "type", "from", "ref", "statement", "contract", "nonce", "paymentKey"}:
+    if (not isinstance(required, list) or len(required) != len(REQUIRED)
+            or set(required) != set(REQUIRED) or not isinstance(properties, dict) or set(properties) != {
+            "type", "from", "ref", "statement", "contract", "nonce", "paymentKey"}):
         raise SchemaEvidenceError("SCHEMA_EXPECTATION_MISMATCH", "accept")
     expected = {"type": {"const": "accept"}, "from": {"$ref": "#/$defs/did"},
         "ref": {"$ref": "#/$defs/hex32"},
@@ -136,16 +166,23 @@ def _extract(raw: bytes) -> Mapping[str, Any]:
         raise SchemaEvidenceError("SCHEMA_EXPECTATION_MISMATCH", "declaration")
     return MappingProxyType({"declared_draft": "JSON_SCHEMA_DRAFT_2020_12",
         "schema_id": "TCLK_OFFICIAL_SCHEMA_ID", "protocol_version": "TCLK_1",
-        "accept_definition": "OBSERVED", "required_fields": list(REQUIRED),
+        "accept_definition": "ROOT_ONE_OF_LOCAL_ACCEPT", "required_fields_source_order": list(required),
+        "required_field_set": sorted(REQUIRED), "optional_field_set": ["paymentKey"],
         "contract_required": True, "contract_type": "STRING_HEX32",
         "additional_properties": "REJECTED", "references": list(REFS),
         "reference_completeness": "COMPLETE_LOCAL_SAME_DOCUMENT",
-        "semantic_extraction": "COMPLETE_FOR_ACCEPT_DEFINITION"})
+        "combinators": ["ROOT_ONE_OF"], "conditional_keywords": "ABSENT_IN_ACCEPT_CLOSURE",
+        "supported_accept_keywords": ["$defs", "$ref", "additionalProperties", "const",
+            "oneOf", "pattern", "properties", "required", "type"],
+        "semantic_extraction": "ACCEPT_POLICY_EXTRACTION_COMPLETE_NOT_VALIDATOR"})
 
 
 def _assemble() -> dict[str, Any]:
-    raw = _read_fixed(SNAPSHOT, SCHEMA_SHA256, SCHEMA_SIZE, "schema_snapshot")
-    _read_fixed(LICENSE, LICENSE_SHA256, LICENSE_SIZE, "license_snapshot")
+    raw = _read_fixed(SNAPSHOT, SCHEMA_BLOB, SCHEMA_SHA256, SCHEMA_SIZE, "schema_snapshot")
+    _read_fixed(LICENSE, LICENSE_BLOB, LICENSE_SHA256, LICENSE_SIZE, "license_snapshot")
+    _read_fixed(SPEC, SPEC_BLOB, SPEC_SHA256, SPEC_SIZE, "spec_snapshot")
+    _read_fixed(FRAMES, FRAMES_BLOB, FRAMES_SHA256, FRAMES_SIZE, "frames_snapshot")
+    _read_fixed(VECTORS, VECTORS_BLOB, VECTORS_SHA256, VECTORS_SIZE, "vectors_snapshot")
     semantics = dict(_extract(raw))
     value = {"schema": SCHEMA, "domain": DOMAIN, "status": "OFFLINE_PINNED_EVIDENCE",
         "content_label": "PUBLIC_MINIMIZED_EVIDENCE", "artifact_id": "",
@@ -154,13 +191,45 @@ def _assemble() -> dict[str, Any]:
             "name": "tclk", "default_branch_observed": "main", "commit_sha": COMMIT,
             "repository_state": "OFFICIAL_REPOSITORY_IDENTITY_OBSERVED",
             "commit_state": "EXACT_COMMIT_OBSERVED"},
-        "acquisition_evidence": {"mode": "MANUAL_ONE_SHOT_READ_ONLY_COMPLETED",
+        "acquisition_evidence": {"mode": "READ_ONLY_ACQUISITION_COMPLETED_WITH_DEVIATION",
             "allowed_hosts": ["api.github.com", "raw.githubusercontent.com"],
             "method": "GET", "accept_encoding": "identity", "timeout_seconds": 10,
-            "redirects_allowed": False, "retry_mechanism": False,
+            "redirects_allowed": False, "automatic_retry_count": 0,
             "fallback_enabled": False, "credentials_used": False,
             "mutable_main_resolution_gets": 1, "api_gets": 16, "raw_gets": 10,
-            "total_gets": 26, "manual_reexecution_after_local_decode_failure": 1,
+            "acquisition_attempt_count": 26, "manual_reexecution_occurred": True,
+            "manual_reexecution_count": 1,
+            "first_processing_failure": "LOCAL_BASE64_WHITESPACE_DECODER_REJECTED",
+            "second_schema_attempts_classification": "MANUAL_REEXECUTION",
+            "acquisition_policy_conformance": "ACQUISITION_POLICY_DEVIATION_RECORDED",
+            "acquisition_audit": "ACQUISITION_AUDIT_INCOMPLETE",
+            "audit_gap": "NO_SEALED_PER_REQUEST_TRANSCRIPT",
+            "no_further_fetch_allowed": True,
+            "content_integrity": "INDEPENDENTLY_REVALIDATED_OFFLINE",
+            "offline_reproducibility": "COMPLETE_FOR_RETAINED_SOURCES",
+            "resource_attempts": [
+                {"source_id": "REPOSITORY_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "MUTABLE_MAIN_RESOLUTION", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "EXACT_COMMIT_TREE", "transport": "GITHUB_API", "attempts": 3},
+                {"source_id": "SCHEMA_METADATA", "transport": "GITHUB_API", "attempts": 2},
+                {"source_id": "SCHEMA_RAW", "transport": "GITHUB_RAW", "attempts": 2},
+                {"source_id": "LICENSE_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "LICENSE_RAW", "transport": "GITHUB_RAW", "attempts": 1},
+                {"source_id": "README_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "README_RAW", "transport": "GITHUB_RAW", "attempts": 1},
+                {"source_id": "SCHEMA_TEST_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "SCHEMA_TEST_RAW", "transport": "GITHUB_RAW", "attempts": 1},
+                {"source_id": "SPEC_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "SPEC_RAW", "transport": "GITHUB_RAW", "attempts": 1},
+                {"source_id": "COMMITMENTS_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "COMMITMENTS_RAW", "transport": "GITHUB_RAW", "attempts": 1},
+                {"source_id": "FRAMES_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "FRAMES_RAW", "transport": "GITHUB_RAW", "attempts": 1},
+                {"source_id": "VECTORS_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "VECTORS_RAW", "transport": "GITHUB_RAW", "attempts": 1},
+                {"source_id": "TCLK_TEST_METADATA", "transport": "GITHUB_API", "attempts": 1},
+                {"source_id": "TCLK_TEST_RAW", "transport": "GITHUB_RAW", "attempts": 1},
+                {"source_id": "ISSUE_142_IDENTITY", "transport": "GITHUB_API", "attempts": 1}],
             "all_content_gets_commit_pinned": True,
             "bounded_response": True, "content_type_validated": True,
             "content_length_validated": True, "duplicate_headers_rejected": True,
@@ -168,33 +237,50 @@ def _assemble() -> dict[str, Any]:
         "snapshot_identity": {"source_id": "TCLK_OFFICIAL_ACCEPT_SCHEMA",
             "source_path": SOURCE_PATH, "blob_sha1": SCHEMA_BLOB,
             "content_sha256": SCHEMA_SHA256, "byte_length": SCHEMA_SIZE,
-            "retention": "RAW_SCHEMA_RETAINED_APACHE_2_0", "json_parse": "PARSED",
-            "duplicate_keys": "ABSENT", "license": "APACHE_2_0_OBSERVED",
+            "retention": "RAW_SCHEMA_RETAINED_EXACT_BYTES", "json_parse": "PARSED",
+            "duplicate_keys": "ABSENT", "license": "APACHE_2_0_LICENSE_FILE_OBSERVED",
+            "redistribution_basis": "REDISTRIBUTION_BASIS_RECORDED",
+            "legal_compliance_guarantee": "NOT_ASSERTED",
             "license_blob_sha1": LICENSE_BLOB, "license_sha256": LICENSE_SHA256,
             "license_byte_length": LICENSE_SIZE},
         "schema_semantics": semantics,
         "derivation_evidence": {"status": "CONTRACT_DERIVATION_SPEC_PINNED",
             "source_state": "CONTRACT_DERIVATION_SOURCE_OBSERVED",
-            "normative_spec": {"source_id": "TCLK_SPEC", "path": "SPEC.md",
-                "blob_sha1": "99e3e677295354b88fe49efa69f84b1b78a1036c",
-                "sha256": "f01b46edf747606402979e5bf09193e3d7032217461bf5af2135241e5d940b62", "byte_length": 31051},
+            "normative_spec_candidate": {"source_id": "TCLK_SPEC", "path": "SPEC.md",
+                "blob_sha1": SPEC_BLOB, "sha256": SPEC_SHA256, "byte_length": SPEC_SIZE,
+                "retention": "EXACT_BYTES_RETAINED"},
             "reference_implementation": {"source_id": "TCLK_FRAMES_SOURCE", "path": "src/frames.ts",
-                "blob_sha1": "0c27a9aaaefe2965725384adfd383405f9c2cd3a",
-                "sha256": "b8077cdd2b4210f0c696ac0e98fb8fe8be9c53ba998d0f671a454829c42bfb97", "byte_length": 19276},
+                "blob_sha1": FRAMES_BLOB, "sha256": FRAMES_SHA256, "byte_length": FRAMES_SIZE,
+                "retention": "EXACT_BYTES_RETAINED"},
             "test_vector": {"source_id": "TCLK_GOLDEN_VECTORS", "path": "tests/vectors.test.ts",
-                "blob_sha1": "42b221894d4c34a879d9f8812bc86fb8237f15a0",
-                "sha256": "c60f109ba26547c6be0795b0eb66a861a96a7d68a36885a28f318e69a1cebb96", "byte_length": 3604},
-            "algorithm": "SHA256_DOMAIN_TAGGED_ASCII_CANONICAL_OFFER_ACCEPT_CORE",
+                "blob_sha1": VECTORS_BLOB, "sha256": VECTORS_SHA256, "byte_length": VECTORS_SIZE,
+                "retention": "EXACT_BYTES_RETAINED"},
+            "algorithm": {"hash": "SHA_256", "domain_tag_ascii": "FLOP::tclk::v1|contract|",
+                "payload": "CANONICAL_JSON_OBJECT_OFFER_ACCEPT_CORE",
+                "object_keys": "LEXICOGRAPHIC", "array_order": "PRESERVED",
+                "undefined_object_fields": "OMITTED", "non_ascii": "UTF16_CODE_UNIT_U_ESCAPE",
+                "json_whitespace": "NONE", "input_encoding": "UTF_8",
+                "output_encoding": "LOWERCASE_0X_HEX", "length_prefix": "NONE",
+                "accept_core_fields": ["from", "nonce", "paymentKey", "ref", "statement"],
+                "optional_payment_key": "OMITTED_WHEN_UNDEFINED",
+                "golden_vector_consistency": "OFFLINE_RECOMPUTED_MATCH"},
             "implementation_in_scope": False},
         "issue_142_evidence": {"canonical_object_type": "ISSUE", "number": 142,
             "state": "OPEN_OBSERVED", "created_at": "2026-09-08T23:16:38Z",
             "updated_at": "2026-09-09T07:00:57Z",
             "mutable_body_sha256": "d88a952736346a1a6ada2206663195d28d9e58203a72954f480b8f339c1cae79",
+            "observed_at": "OBSERVATION_TIMESTAMP_NOT_RETAINED", "current_state": False,
             "author_association": "NONE", "maintainer_ratification": "NOT_CONFIRMED",
             "authority": "NOT_PROTOCOL_SPEC", "temporal_scope": "POINT_IN_TIME_REPORTED"},
         "local_profile_comparison": {"prior_artifact": "TCLK_ACCEPT_CONFORMANCE_PACKAGE_V1",
             "prior_profile": "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1",
             "comparison": "SPEC_DRIFT", "reason": "LOCAL_PROFILE_FIELD_SET_DIFFERS_FROM_PINNED_ACCEPT",
+            "local_required_field_set": ["contract", "type"],
+            "official_required_field_set": ["contract", "from", "nonce", "ref", "statement", "type"],
+            "missing_locally_enforced_fields": ["from", "nonce", "ref", "statement"],
+            "extra_locally_enforced_fields": [],
+            "constraint_differences": ["CONTRACT_PATTERN_DIFFERS", "OFFICIAL_PAYMENT_KEY_OPTIONAL_LOCAL_REJECTS"],
+            "additional_properties_comparison": "BOTH_REJECT",
             "required_contract_policy": "ATTESTED", "official_conformance_policy": "PINNED",
             "historical_reclassification": "BLOCKED", "automatic_migration": False},
         "trust_boundary": {"maintainer_signature": "NOT_VERIFIED",
@@ -213,7 +299,7 @@ def validate_evidence(value: Any) -> Mapping[str, Any]:
         raise SchemaEvidenceError("FIELD_SET_INVALID", "evidence")
     expected = _assemble()
     for key in FIELDS - {"artifact_id"}:
-        if value[key] != expected[key]:
+        if not _same(value[key], expected[key]):
             raise SchemaEvidenceError("EVIDENCE_CONTRADICTION", key)
     body = {key: value[key] for key in FIELDS if key != "artifact_id"}
     identity = _digest({"domain": DOMAIN, "schema": SCHEMA,
@@ -235,9 +321,12 @@ __all__ = ["SchemaEvidenceError", "load_pinned_evidence", "validate_evidence"]
 
 
 class _SealedModule(types.ModuleType):
-    _protected = frozenset({"ROOT", "SNAPSHOT", "LICENSE", "COMMIT", "SOURCE_PATH",
+    _protected = frozenset({"ROOT", "SNAPSHOT", "LICENSE", "SPEC", "FRAMES", "VECTORS",
+        "COMMIT", "SOURCE_PATH",
         "SCHEMA_BLOB", "SCHEMA_SHA256", "SCHEMA_SIZE", "LICENSE_BLOB",
-        "LICENSE_SHA256", "LICENSE_SIZE", "_read_fixed", "_extract", "_assemble",
+        "LICENSE_SHA256", "LICENSE_SIZE", "SPEC_BLOB", "SPEC_SHA256", "SPEC_SIZE",
+        "FRAMES_BLOB", "FRAMES_SHA256", "FRAMES_SIZE", "VECTORS_BLOB",
+        "VECTORS_SHA256", "VECTORS_SIZE", "_read_fixed", "_extract", "_assemble",
         "load_pinned_evidence", "validate_evidence", "__all__"})
 
     def __setattr__(self, name: str, value: Any) -> None:

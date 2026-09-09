@@ -1,28 +1,149 @@
 {
   "acquisition_evidence": {
     "accept_encoding": "identity",
+    "acquisition_attempt_count": 26,
+    "acquisition_audit": "ACQUISITION_AUDIT_INCOMPLETE",
+    "acquisition_policy_conformance": "ACQUISITION_POLICY_DEVIATION_RECORDED",
     "all_content_gets_commit_pinned": true,
     "allowed_hosts": [
       "api.github.com",
       "raw.githubusercontent.com"
     ],
     "api_gets": 16,
+    "audit_gap": "NO_SEALED_PER_REQUEST_TRANSCRIPT",
+    "automatic_retry_count": 0,
     "bounded_response": true,
+    "content_integrity": "INDEPENDENTLY_REVALIDATED_OFFLINE",
     "content_length_validated": true,
     "content_type_validated": true,
     "credentials_used": false,
     "duplicate_headers_rejected": true,
     "fallback_enabled": false,
-    "manual_reexecution_after_local_decode_failure": 1,
+    "first_processing_failure": "LOCAL_BASE64_WHITESPACE_DECODER_REJECTED",
+    "manual_reexecution_count": 1,
+    "manual_reexecution_occurred": true,
     "method": "GET",
-    "mode": "MANUAL_ONE_SHOT_READ_ONLY_COMPLETED",
+    "mode": "READ_ONLY_ACQUISITION_COMPLETED_WITH_DEVIATION",
     "mutable_main_resolution_gets": 1,
+    "no_further_fetch_allowed": true,
+    "offline_reproducibility": "COMPLETE_FOR_RETAINED_SOURCES",
     "raw_error_material_retained": false,
     "raw_gets": 10,
     "redirects_allowed": false,
-    "retry_mechanism": false,
-    "timeout_seconds": 10,
-    "total_gets": 26
+    "resource_attempts": [
+      {
+        "attempts": 1,
+        "source_id": "REPOSITORY_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "MUTABLE_MAIN_RESOLUTION",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 3,
+        "source_id": "EXACT_COMMIT_TREE",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 2,
+        "source_id": "SCHEMA_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 2,
+        "source_id": "SCHEMA_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "LICENSE_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "LICENSE_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "README_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "README_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "SCHEMA_TEST_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "SCHEMA_TEST_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "SPEC_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "SPEC_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "COMMITMENTS_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "COMMITMENTS_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "FRAMES_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "FRAMES_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "VECTORS_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "VECTORS_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "TCLK_TEST_METADATA",
+        "transport": "GITHUB_API"
+      },
+      {
+        "attempts": 1,
+        "source_id": "TCLK_TEST_RAW",
+        "transport": "GITHUB_RAW"
+      },
+      {
+        "attempts": 1,
+        "source_id": "ISSUE_142_IDENTITY",
+        "transport": "GITHUB_API"
+      }
+    ],
+    "second_schema_attempts_classification": "MANUAL_REEXECUTION",
+    "timeout_seconds": 10
   },
   "action_state": {
     "authorized_to_act": false,
@@ -31,16 +152,38 @@
     "mode": "NO_LIVE_ACTION",
     "ready_to_act": false
   },
-  "artifact_id": "5711e1c9bbaeb5c62da71763752a01eeb3e19c8f835e3195700e0c685ed92777",
+  "artifact_id": "a518a08041276fb7dd4a2c8e41f40a8446b6e9f8e788850552c508716ff6a3ee",
   "canonical_encoding": "SORTED_ASCII_JSON_V1",
   "content_label": "PUBLIC_MINIMIZED_EVIDENCE",
   "derivation_evidence": {
-    "algorithm": "SHA256_DOMAIN_TAGGED_ASCII_CANONICAL_OFFER_ACCEPT_CORE",
+    "algorithm": {
+      "accept_core_fields": [
+        "from",
+        "nonce",
+        "paymentKey",
+        "ref",
+        "statement"
+      ],
+      "array_order": "PRESERVED",
+      "domain_tag_ascii": "FLOP::tclk::v1|contract|",
+      "golden_vector_consistency": "OFFLINE_RECOMPUTED_MATCH",
+      "hash": "SHA_256",
+      "input_encoding": "UTF_8",
+      "json_whitespace": "NONE",
+      "length_prefix": "NONE",
+      "non_ascii": "UTF16_CODE_UNIT_U_ESCAPE",
+      "object_keys": "LEXICOGRAPHIC",
+      "optional_payment_key": "OMITTED_WHEN_UNDEFINED",
+      "output_encoding": "LOWERCASE_0X_HEX",
+      "payload": "CANONICAL_JSON_OBJECT_OFFER_ACCEPT_CORE",
+      "undefined_object_fields": "OMITTED"
+    },
     "implementation_in_scope": false,
-    "normative_spec": {
+    "normative_spec_candidate": {
       "blob_sha1": "99e3e677295354b88fe49efa69f84b1b78a1036c",
       "byte_length": 31051,
       "path": "SPEC.md",
+      "retention": "EXACT_BYTES_RETAINED",
       "sha256": "f01b46edf747606402979e5bf09193e3d7032217461bf5af2135241e5d940b62",
       "source_id": "TCLK_SPEC"
     },
@@ -48,6 +191,7 @@
       "blob_sha1": "0c27a9aaaefe2965725384adfd383405f9c2cd3a",
       "byte_length": 19276,
       "path": "src/frames.ts",
+      "retention": "EXACT_BYTES_RETAINED",
       "sha256": "b8077cdd2b4210f0c696ac0e98fb8fe8be9c53ba998d0f671a454829c42bfb97",
       "source_id": "TCLK_FRAMES_SOURCE"
     },
@@ -57,6 +201,7 @@
       "blob_sha1": "42b221894d4c34a879d9f8812bc86fb8237f15a0",
       "byte_length": 3604,
       "path": "tests/vectors.test.ts",
+      "retention": "EXACT_BYTES_RETAINED",
       "sha256": "c60f109ba26547c6be0795b0eb66a861a96a7d68a36885a28f318e69a1cebb96",
       "source_id": "TCLK_GOLDEN_VECTORS"
     }
@@ -67,18 +212,44 @@
     "authority": "NOT_PROTOCOL_SPEC",
     "canonical_object_type": "ISSUE",
     "created_at": "2026-09-08T23:16:38Z",
+    "current_state": false,
     "maintainer_ratification": "NOT_CONFIRMED",
     "mutable_body_sha256": "d88a952736346a1a6ada2206663195d28d9e58203a72954f480b8f339c1cae79",
     "number": 142,
+    "observed_at": "OBSERVATION_TIMESTAMP_NOT_RETAINED",
     "state": "OPEN_OBSERVED",
     "temporal_scope": "POINT_IN_TIME_REPORTED",
     "updated_at": "2026-09-09T07:00:57Z"
   },
   "local_profile_comparison": {
+    "additional_properties_comparison": "BOTH_REJECT",
     "automatic_migration": false,
     "comparison": "SPEC_DRIFT",
+    "constraint_differences": [
+      "CONTRACT_PATTERN_DIFFERS",
+      "OFFICIAL_PAYMENT_KEY_OPTIONAL_LOCAL_REJECTS"
+    ],
+    "extra_locally_enforced_fields": [],
     "historical_reclassification": "BLOCKED",
+    "local_required_field_set": [
+      "contract",
+      "type"
+    ],
+    "missing_locally_enforced_fields": [
+      "from",
+      "nonce",
+      "ref",
+      "statement"
+    ],
     "official_conformance_policy": "PINNED",
+    "official_required_field_set": [
+      "contract",
+      "from",
+      "nonce",
+      "ref",
+      "statement",
+      "type"
+    ],
     "prior_artifact": "TCLK_ACCEPT_CONFORMANCE_PACKAGE_V1",
     "prior_profile": "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1",
     "reason": "LOCAL_PROFILE_FIELD_SET_DIFFERS_FROM_PINNED_ACCEPT",
@@ -87,11 +258,18 @@
   "policy_version": "tclk-official-schema-offline-import-v1",
   "schema": "tclk-official-schema-evidence-v1",
   "schema_semantics": {
-    "accept_definition": "OBSERVED",
+    "accept_definition": "ROOT_ONE_OF_LOCAL_ACCEPT",
     "additional_properties": "REJECTED",
+    "combinators": [
+      "ROOT_ONE_OF"
+    ],
+    "conditional_keywords": "ABSENT_IN_ACCEPT_CLOSURE",
     "contract_required": true,
     "contract_type": "STRING_HEX32",
     "declared_draft": "JSON_SCHEMA_DRAFT_2020_12",
+    "optional_field_set": [
+      "paymentKey"
+    ],
     "protocol_version": "TCLK_1",
     "reference_completeness": "COMPLETE_LOCAL_SAME_DOCUMENT",
     "references": [
@@ -111,7 +289,15 @@
       "#/$defs/refund",
       "#/$defs/reveal"
     ],
-    "required_fields": [
+    "required_field_set": [
+      "contract",
+      "from",
+      "nonce",
+      "ref",
+      "statement",
+      "type"
+    ],
+    "required_fields_source_order": [
       "type",
       "from",
       "ref",
@@ -120,7 +306,18 @@
       "nonce"
     ],
     "schema_id": "TCLK_OFFICIAL_SCHEMA_ID",
-    "semantic_extraction": "COMPLETE_FOR_ACCEPT_DEFINITION"
+    "semantic_extraction": "ACCEPT_POLICY_EXTRACTION_COMPLETE_NOT_VALIDATOR",
+    "supported_accept_keywords": [
+      "$defs",
+      "$ref",
+      "additionalProperties",
+      "const",
+      "oneOf",
+      "pattern",
+      "properties",
+      "required",
+      "type"
+    ]
   },
   "snapshot_identity": {
     "blob_sha1": "13e3ab92a698086df65c3be98385d546ff0bb99e",
@@ -128,11 +325,13 @@
     "content_sha256": "17071a2b3b21e8484cac9da7976088f3700e6fb6c1372268d4756b61ddd60c70",
     "duplicate_keys": "ABSENT",
     "json_parse": "PARSED",
-    "license": "APACHE_2_0_OBSERVED",
+    "legal_compliance_guarantee": "NOT_ASSERTED",
+    "license": "APACHE_2_0_LICENSE_FILE_OBSERVED",
     "license_blob_sha1": "a33f6f27c9ee1b1b31cb02a29c45adcebbf5ab33",
     "license_byte_length": 11340,
     "license_sha256": "9a199b2f98908456e0714c49a9d0ae7b01d43eb85c0005a040a974db5faa982a",
-    "retention": "RAW_SCHEMA_RETAINED_APACHE_2_0",
+    "redistribution_basis": "REDISTRIBUTION_BASIS_RECORDED",
+    "retention": "RAW_SCHEMA_RETAINED_EXACT_BYTES",
     "source_id": "TCLK_OFFICIAL_ACCEPT_SCHEMA",
     "source_path": "schema/tclk1-frames.schema.json"
   },
