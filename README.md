@@ -148,6 +148,11 @@ and absent Replay authority keep global winner and definitive race loss
 unresolved; lock, settlement, reputation, readiness, and authorization remain
 blocked.
 
+The [offer-wide evidence boundary](docs/TCLK_OFFER_WIDE_EVIDENCE.md) validates
+offline source descriptors and `{generation,last_delivered_seq}` checkpoints,
+classifies gaps without inferring retention loss, and keeps completeness and
+winner authority fail-closed.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects
