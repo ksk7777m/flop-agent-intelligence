@@ -9,22 +9,23 @@
     "hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},
     "review":{
       "type":"object","additionalProperties":false,
-      "required":["schema","record_type","record_id","status","reviewed_at","reviewed_main_sha","runner_implementation_id","plan_id","predicate_policy","predicate_policy_hash","observation_policy","source_set_id","source_order_hash","expected_generation","journal_id","journal_identity_domain","journal_schema","checklist_revision","operation","method","retry_count","redirects_allowed","fallback_enabled","alternate_url_enabled","timeout_policy_id","production_permit_issuer","production_evidence_issuer","production_execution","compatibility","retention_policy","review_window_policy","rollback_anchor_policy","operator_identity_policy","separation_of_duties_policy","ready_to_act","authorized_to_act","executable","live_get_count"],
+      "required":["schema","record_type","record_id","status","artifact_scope","currentness","merged_main_review","human_review_proven","cryptographic_attestation","durable_authorization","reviewed_at","reviewed_main_sha","runner_implementation_id","plan_id","predicate_policy","predicate_policy_hash","observation_policy","source_set_id","source_order_hash","expected_generation","generation_scope","production_generation","journal_inspection","journal_id","journal_identity_domain","journal_schema","checklist_revision","operation","method","retry_count","redirects_allowed","fallback_enabled","alternate_url_enabled","timeout_policy_id","production_permit_issuer","production_evidence_issuer","production_execute_api","production_execution","compatibility","retention_policy","review_window_policy","rollback_anchor_policy","operator_identity_policy","separation_of_duties_policy","ready_to_act","authorized_to_act","executable","live_get_count"],
       "properties":{
         "schema":{"const":"production-reobservation-handoff-v1"},"record_type":{"const":"AUTHORIZATION_REVIEW"},"record_id":{"$ref":"#/$defs/hash"},
-        "status":{"const":"REVIEWED_DESCRIPTIVE_ONLY"},"reviewed_at":{"type":"string","format":"date-time"},"reviewed_main_sha":{"const":"fc7df45d032b2a39a652e176581e392ae6c455a0"},
+        "status":{"const":"SUPERSEDED"},"artifact_scope":{"const":"BASELINE_TEST_FIXTURE"},"currentness":{"const":"STALE_REVIEW_REQUIRED"},"merged_main_review":{"const":"REQUIRED"},"human_review_proven":{"const":false},"cryptographic_attestation":{"const":false},"durable_authorization":{"const":false},
+        "reviewed_at":{"type":"string","format":"date-time"},"reviewed_main_sha":{"const":"fc7df45d032b2a39a652e176581e392ae6c455a0"},
         "runner_implementation_id":{"$ref":"#/$defs/hash"},"plan_id":{"$ref":"#/$defs/hash"},"predicate_policy":{"const":"technocore-runtime-predicates-v2"},"predicate_policy_hash":{"$ref":"#/$defs/hash"},
-        "observation_policy":{"const":"technocore-runtime-readonly-observation-v1"},"source_set_id":{"const":"technocore-runtime-fixed-source-set-v1"},"source_order_hash":{"$ref":"#/$defs/hash"},"expected_generation":{"const":0},
+        "observation_policy":{"const":"technocore-runtime-readonly-observation-v1"},"source_set_id":{"const":"technocore-runtime-fixed-source-set-v1"},"source_order_hash":{"$ref":"#/$defs/hash"},"expected_generation":{"const":0},"generation_scope":{"const":"TEST_FIXTURE_ONLY"},"production_generation":{"const":"NOT_OBSERVED"},"journal_inspection":{"const":"NOT_PERFORMED"},
         "journal_id":{"$ref":"#/$defs/hash"},"journal_identity_domain":{"const":"FLOP_DURABLE_OBSERVATION_JOURNAL_V1"},"journal_schema":{"const":"durable-observation-attempt-journal-v1"},"checklist_revision":{"const":"production-reobservation-activation-checklist-v1"},
         "operation":{"const":"READ_ONLY_REOBSERVATION"},"method":{"const":"GET"},"retry_count":{"const":0},"redirects_allowed":{"const":false},"fallback_enabled":{"const":false},"alternate_url_enabled":{"const":false},"timeout_policy_id":{"$ref":"#/$defs/hash"},
-        "production_permit_issuer":{"const":"ABSENT"},"production_evidence_issuer":{"const":"ABSENT"},"production_execution":{"const":"UNREACHABLE"},"compatibility":{"const":"COMPATIBILITY_REVIEW_REQUIRED"},
+        "production_permit_issuer":{"const":"ABSENT"},"production_evidence_issuer":{"const":"ABSENT"},"production_execute_api":{"const":"ABSENT"},"production_execution":{"const":"UNREACHABLE"},"compatibility":{"const":"COMPATIBILITY_REVIEW_REQUIRED"},
         "retention_policy":{"const":"POLICY_REQUIRED"},"review_window_policy":{"const":"POLICY_REQUIRED"},"rollback_anchor_policy":{"const":"POLICY_REQUIRED"},"operator_identity_policy":{"const":"POLICY_REQUIRED"},"separation_of_duties_policy":{"const":"POLICY_REQUIRED"},
         "ready_to_act":{"const":false},"authorized_to_act":{"const":false},"executable":{"const":false},"live_get_count":{"const":0}
       }
     },
     "checkItem":{
-      "type":"object","additionalProperties":false,"required":["ordinal","check_id","status","satisfied"],
-      "properties":{"ordinal":{"type":"integer","minimum":0,"maximum":17},"check_id":{"type":"string","pattern":"^[A-Z0-9_]+$"},"status":{"enum":["PASS","VERIFICATION_REQUIRED","POLICY_REQUIRED","AUTHORIZATION_REQUIRED"]},"satisfied":{"type":"boolean"}}
+      "type":"object","additionalProperties":false,"required":["ordinal","check_id","status","satisfied","provenance"],
+      "properties":{"ordinal":{"type":"integer","minimum":0,"maximum":17},"check_id":{"type":"string","pattern":"^[A-Z0-9_]+$"},"status":{"enum":["PASS","VERIFICATION_REQUIRED","POLICY_REQUIRED","AUTHORIZATION_REQUIRED"]},"satisfied":{"type":"boolean"},"provenance":{"enum":["MERGED_MAIN_EVIDENCE_REQUIRED","RUNTIME_EVIDENCE_REQUIRED","REPOSITORY_STATIC_INVARIANT","HUMAN_POLICY_DECISION_REQUIRED","EXPLICIT_HUMAN_AUTHORIZATION_REQUIRED"]}}
     },
     "checklist":{
       "type":"object","additionalProperties":false,
@@ -37,9 +38,9 @@
     },
     "status":{
       "type":"object","additionalProperties":false,
-      "required":["schema","record_type","handoff_state","review_record_id","review_currentness","activation_status","production_permit_issuer","production_evidence_issuer","production_execute_api","cli_entry_point","scheduler","live_execution","compatibility","automatic_retry_allowed","automatic_resume_allowed","ready_to_act","authorized_to_act","live_action_enabled","live_get_count"],
+      "required":["schema","record_type","handoff_state","review_record_id","review_currentness","merged_main_review","activation_status","production_permit_issuer","production_evidence_issuer","production_execute_api","cli_entry_point","scheduler","live_execution","compatibility","automatic_retry_allowed","automatic_resume_allowed","ready_to_act","authorized_to_act","live_action_enabled","live_get_count"],
       "properties":{
-        "schema":{"const":"production-reobservation-handoff-v1"},"record_type":{"const":"HANDOFF_STATUS"},"handoff_state":{"const":"ACTIVATION_REVIEW_REQUIRED"},"review_record_id":{"$ref":"#/$defs/hash"},"review_currentness":{"const":"CURRENTNESS_UNKNOWN"},"activation_status":{"const":"BLOCKED"},
+        "schema":{"const":"production-reobservation-handoff-v1"},"record_type":{"const":"HANDOFF_STATUS"},"handoff_state":{"const":"SUPERSEDED"},"review_record_id":{"$ref":"#/$defs/hash"},"review_currentness":{"const":"STALE_REVIEW_REQUIRED"},"merged_main_review":{"const":"REQUIRED"},"activation_status":{"const":"BLOCKED"},
         "production_permit_issuer":{"const":"ABSENT"},"production_evidence_issuer":{"const":"ABSENT"},"production_execute_api":{"const":"ABSENT"},"cli_entry_point":{"const":"ABSENT"},"scheduler":{"const":"ABSENT"},"live_execution":{"const":"UNREACHABLE"},"compatibility":{"const":"COMPATIBILITY_REVIEW_REQUIRED"},
         "automatic_retry_allowed":{"const":false},"automatic_resume_allowed":{"const":false},"ready_to_act":{"const":false},"authorized_to_act":{"const":false},"live_action_enabled":{"const":false},"live_get_count":{"const":0}
       }

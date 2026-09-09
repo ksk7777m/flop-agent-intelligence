@@ -1,6 +1,7 @@
 import copy
 import inspect
 import json
+import math
 import os
 import pickle
 import tempfile
@@ -41,6 +42,11 @@ class ProductionReobservationHandoffTests(unittest.TestCase):
         self.assertEqual(value["plan_id"], runner.PLAN_ID)
         self.assertEqual(value["journal_id"], journal.JOURNAL_ID)
         self.assertEqual(value["predicate_policy"], "technocore-runtime-predicates-v2")
+        self.assertEqual(value["status"], "SUPERSEDED")
+        self.assertEqual(value["artifact_scope"], "BASELINE_TEST_FIXTURE")
+        self.assertEqual(value["currentness"], "STALE_REVIEW_REQUIRED")
+        self.assertFalse(value["human_review_proven"])
+        self.assertFalse(value["cryptographic_attestation"])
         for key in value:
             with self.subTest(key=key):
                 forged = dict(value)
@@ -66,6 +72,24 @@ class ProductionReobservationHandoffTests(unittest.TestCase):
         checklist["items"][0]["ordinal"] = False
         self.assertTrue(handoff.validate_activation_checklist(checklist))
 
+    def test_merge_sha_requires_new_review_and_generation_is_not_production_observation(self):
+        review = dict(handoff.review_record())
+        self.assertEqual(review["merged_main_review"], "REQUIRED")
+        self.assertEqual(review["generation_scope"], "TEST_FIXTURE_ONLY")
+        self.assertEqual(review["production_generation"], "NOT_OBSERVED")
+        self.assertEqual(review["journal_inspection"], "NOT_PERFORMED")
+        hypothetical_merged_sha = "1" * 40
+        forged = dict(review); forged["reviewed_main_sha"] = hypothetical_merged_sha
+        self.assertTrue(handoff.validate_review_record(forged))
+        status = handoff.handoff_status()
+        self.assertEqual(status["handoff_state"], "SUPERSEDED")
+        self.assertEqual(status["review_currentness"], "STALE_REVIEW_REQUIRED")
+        checks = {item["check_id"]: item for item in handoff.activation_checklist()["items"]}
+        for check_id in ("DURABLE_JOURNAL_INSPECTION_PASS", "NO_OUTCOME_UNKNOWN",
+                         "DURABILITY_UNKNOWN_ABSENT"):
+            self.assertFalse(checks[check_id]["satisfied"])
+            self.assertEqual(checks[check_id]["provenance"], "RUNTIME_EVIDENCE_REQUIRED")
+
     def test_checklist_cannot_be_promoted_by_claimed_results(self):
         value = dict(handoff.activation_checklist())
         for mutation in (
@@ -78,6 +102,10 @@ class ProductionReobservationHandoffTests(unittest.TestCase):
         ):
             forged = copy.deepcopy(value); mutation(forged)
             self.assertTrue(handoff.validate_activation_checklist(forged))
+        passed = [item for item in value["items"] if item["status"] == "PASS"]
+        self.assertEqual(len(passed), 3)
+        self.assertTrue(all(item["provenance"] == "REPOSITORY_STATIC_INVARIANT"
+                            for item in passed))
 
     def test_fixture_review_state_is_one_shot_non_capability_and_replay_safe(self):
         issue, transition = handoff._build_fixture_handoff_service()
@@ -170,6 +198,18 @@ class ProductionReobservationHandoffTests(unittest.TestCase):
         errors = handoff.validate_review_record(forged)
         self.assertEqual(errors, ("REVIEW_BINDING_INVALID",))
         self.assertNotIn("private-value", repr(errors))
+
+    def test_bool_float_nan_nonjson_and_checklist_order_are_rejected(self):
+        review = dict(handoff.review_record())
+        for replacement in (False, 0.0, math.nan, math.inf, {"nested": object()}):
+            forged = dict(review); forged["expected_generation"] = replacement
+            self.assertTrue(handoff.validate_review_record(forged))
+        for invalid in (1.0, math.nan, math.inf, object()):
+            with self.assertRaises(handoff.HandoffError):
+                handoff._hash({"value": invalid}, "TEST")
+        checklist = dict(handoff.activation_checklist())
+        checklist["items"] = list(reversed(checklist["items"]))
+        self.assertTrue(handoff.validate_activation_checklist(checklist))
 
 
 if __name__ == "__main__": unittest.main()

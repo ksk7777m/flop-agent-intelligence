@@ -135,9 +135,10 @@ performs zero live GETs. See [Manual Read-only Reobservation Runner](docs/MANUAL
 
 ## Production Reobservation Handoff Specification
 
-The descriptive handoff model binds a reviewed commit to the fixed runner,
-plan, predicate, source order and journal identities, and publishes a closed,
-fail-closed activation checklist. It creates no permit or execution authority;
+The descriptive handoff model binds a superseded baseline test fixture to the
+fixed runner, plan, predicate, source order and journal identities, and
+publishes a closed, fail-closed activation checklist. Schema validity does not
+prove human review, and merged main requires a new exact-SHA review. It creates no permit or execution authority;
 production issuers, execute API, CLI, scheduler and live GET remain absent. See
 [Production Reobservation Handoff](docs/PRODUCTION_REOBSERVATION_HANDOFF.md).
 

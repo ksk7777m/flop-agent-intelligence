@@ -70,20 +70,26 @@ _RUNNER_IMPLEMENTATION_ID = _hash({"runner_schema": RUNNER_SCHEMA, "plan_id": PL
 
 _REVIEW_MATERIAL = {
     "schema": SCHEMA_VERSION, "record_type": "AUTHORIZATION_REVIEW",
-    "status": HandoffState.REVIEWED_DESCRIPTIVE_ONLY.value,
+    "status": HandoffState.SUPERSEDED.value, "artifact_scope": "BASELINE_TEST_FIXTURE",
+    "currentness": "STALE_REVIEW_REQUIRED", "merged_main_review": "REQUIRED",
+    "human_review_proven": False, "cryptographic_attestation": False,
+    "durable_authorization": False,
     "reviewed_at": REVIEWED_AT, "reviewed_main_sha": REVIEWED_MAIN_SHA,
     "runner_implementation_id": _RUNNER_IMPLEMENTATION_ID, "plan_id": PLAN_ID,
     "predicate_policy": PredicatePolicy.V2.value,
     "predicate_policy_hash": PREDICATE_POLICY_HASHES[PredicatePolicy.V2],
     "observation_policy": OBSERVATION_POLICY, "source_set_id": SOURCE_SET_ID,
     "source_order_hash": SOURCE_ORDER_HASH, "expected_generation": 0,
+    "generation_scope": "TEST_FIXTURE_ONLY", "production_generation": "NOT_OBSERVED",
+    "journal_inspection": "NOT_PERFORMED",
     "journal_id": JOURNAL_ID, "journal_identity_domain": JOURNAL_IDENTITY_DOMAIN,
     "journal_schema": JOURNAL_SCHEMA, "checklist_revision": CHECKLIST_REVISION,
     "operation": "READ_ONLY_REOBSERVATION", "method": "GET", "retry_count": 0,
     "redirects_allowed": False, "fallback_enabled": False,
     "alternate_url_enabled": False, "timeout_policy_id": _TIMEOUT_POLICY_ID,
     "production_permit_issuer": "ABSENT", "production_evidence_issuer": "ABSENT",
-    "production_execution": "UNREACHABLE", "compatibility": "COMPATIBILITY_REVIEW_REQUIRED",
+    "production_execute_api": "ABSENT", "production_execution": "UNREACHABLE",
+    "compatibility": "COMPATIBILITY_REVIEW_REQUIRED",
     "retention_policy": "POLICY_REQUIRED", "review_window_policy": "POLICY_REQUIRED",
     "rollback_anchor_policy": "POLICY_REQUIRED", "operator_identity_policy": "POLICY_REQUIRED",
     "separation_of_duties_policy": "POLICY_REQUIRED", "ready_to_act": False,
@@ -92,24 +98,24 @@ _REVIEW_MATERIAL = {
 _REVIEW_ID = _hash(_REVIEW_MATERIAL, "AUTHORIZATION_REVIEW")
 
 _CHECKS = (
-    ("EXACT_REVIEWED_COMMIT", "VERIFICATION_REQUIRED", False),
-    ("CLEAN_WORKTREE", "VERIFICATION_REQUIRED", False),
-    ("FULL_SUITE_PASS", "VERIFICATION_REQUIRED", False),
-    ("SCHEMA_INDEX_PASS", "VERIFICATION_REQUIRED", False),
-    ("PRODUCTION_API_UNSAFE_ZERO", "VERIFICATION_REQUIRED", False),
-    ("SECRET_SENSITIVE_TRACKING_PASS", "VERIFICATION_REQUIRED", False),
-    ("FIXED_SOURCE_PREDICATE_IDENTITIES", "PASS", True),
-    ("DURABLE_JOURNAL_INSPECTION_PASS", "VERIFICATION_REQUIRED", False),
-    ("NO_OUTCOME_UNKNOWN", "VERIFICATION_REQUIRED", False),
-    ("DURABILITY_UNKNOWN_ABSENT", "VERIFICATION_REQUIRED", False),
-    ("RETENTION_REVIEW_WINDOW_DECIDED", "POLICY_REQUIRED", False),
-    ("ROLLBACK_ANCHOR_DECIDED", "POLICY_REQUIRED", False),
-    ("OPERATOR_IDENTITY_AUTHENTICATION_DECIDED", "POLICY_REQUIRED", False),
-    ("PERMIT_EXPIRY_REVOCATION_DECIDED", "POLICY_REQUIRED", False),
-    ("EXPLICIT_LIVE_GET_AUTHORIZATION", "AUTHORIZATION_REQUIRED", False),
-    ("INCIDENT_RECONCILIATION_PROCEDURE", "POLICY_REQUIRED", False),
-    ("RAW_CONTENT_NON_RETENTION", "PASS", True),
-    ("RETRY_RESUME_DISABLED", "PASS", True),
+    ("EXACT_REVIEWED_COMMIT", "VERIFICATION_REQUIRED", False, "MERGED_MAIN_EVIDENCE_REQUIRED"),
+    ("CLEAN_WORKTREE", "VERIFICATION_REQUIRED", False, "RUNTIME_EVIDENCE_REQUIRED"),
+    ("FULL_SUITE_PASS", "VERIFICATION_REQUIRED", False, "RUNTIME_EVIDENCE_REQUIRED"),
+    ("SCHEMA_INDEX_PASS", "VERIFICATION_REQUIRED", False, "RUNTIME_EVIDENCE_REQUIRED"),
+    ("PRODUCTION_API_UNSAFE_ZERO", "VERIFICATION_REQUIRED", False, "RUNTIME_EVIDENCE_REQUIRED"),
+    ("SECRET_SENSITIVE_TRACKING_PASS", "VERIFICATION_REQUIRED", False, "RUNTIME_EVIDENCE_REQUIRED"),
+    ("FIXED_SOURCE_PREDICATE_IDENTITIES", "PASS", True, "REPOSITORY_STATIC_INVARIANT"),
+    ("DURABLE_JOURNAL_INSPECTION_PASS", "VERIFICATION_REQUIRED", False, "RUNTIME_EVIDENCE_REQUIRED"),
+    ("NO_OUTCOME_UNKNOWN", "VERIFICATION_REQUIRED", False, "RUNTIME_EVIDENCE_REQUIRED"),
+    ("DURABILITY_UNKNOWN_ABSENT", "VERIFICATION_REQUIRED", False, "RUNTIME_EVIDENCE_REQUIRED"),
+    ("RETENTION_REVIEW_WINDOW_DECIDED", "POLICY_REQUIRED", False, "HUMAN_POLICY_DECISION_REQUIRED"),
+    ("ROLLBACK_ANCHOR_DECIDED", "POLICY_REQUIRED", False, "HUMAN_POLICY_DECISION_REQUIRED"),
+    ("OPERATOR_IDENTITY_AUTHENTICATION_DECIDED", "POLICY_REQUIRED", False, "HUMAN_POLICY_DECISION_REQUIRED"),
+    ("PERMIT_EXPIRY_REVOCATION_DECIDED", "POLICY_REQUIRED", False, "HUMAN_POLICY_DECISION_REQUIRED"),
+    ("EXPLICIT_LIVE_GET_AUTHORIZATION", "AUTHORIZATION_REQUIRED", False, "EXPLICIT_HUMAN_AUTHORIZATION_REQUIRED"),
+    ("INCIDENT_RECONCILIATION_PROCEDURE", "POLICY_REQUIRED", False, "HUMAN_POLICY_DECISION_REQUIRED"),
+    ("RAW_CONTENT_NON_RETENTION", "PASS", True, "REPOSITORY_STATIC_INVARIANT"),
+    ("RETRY_RESUME_DISABLED", "PASS", True, "REPOSITORY_STATIC_INVARIANT"),
 )
 
 
@@ -126,7 +132,8 @@ def _build_production_projection_service():
 
     def activation_checklist() -> Mapping[str, Any]:
         items = [{"ordinal": ordinal, "check_id": check_id, "status": status,
-                  "satisfied": satisfied} for ordinal, (check_id, status, satisfied) in enumerate(checks)]
+                  "satisfied": satisfied, "provenance": provenance}
+            for ordinal, (check_id, status, satisfied, provenance) in enumerate(checks)]
         material = {"schema": schema, "record_type": "ACTIVATION_CHECKLIST",
             "review_record_id": review_id, "checklist_revision": checklist_revision,
             "reviewed_main_sha": reviewed_sha, "plan_id": plan_id,
@@ -141,8 +148,9 @@ def _build_production_projection_service():
 
     def handoff_status() -> Mapping[str, Any]:
         value = {"schema": schema, "record_type": "HANDOFF_STATUS",
-            "handoff_state": HandoffState.ACTIVATION_REVIEW_REQUIRED.value,
-            "review_record_id": review_id, "review_currentness": "CURRENTNESS_UNKNOWN",
+            "handoff_state": HandoffState.SUPERSEDED.value,
+            "review_record_id": review_id, "review_currentness": "STALE_REVIEW_REQUIRED",
+            "merged_main_review": "REQUIRED",
             "activation_status": "BLOCKED", "production_permit_issuer": "ABSENT",
             "production_evidence_issuer": "ABSENT", "production_execute_api": "ABSENT",
             "cli_entry_point": "ABSENT", "scheduler": "ABSENT",
@@ -174,10 +182,10 @@ def validate_activation_checklist(value: Mapping[str, Any]) -> tuple[str, ...]:
     errors = []
     items = value.get("items")
     expected_items = [{"ordinal": ordinal, "check_id": check_id, "status": status,
-                       "satisfied": satisfied}
-        for ordinal, (check_id, status, satisfied) in enumerate(_CHECKS)]
+                       "satisfied": satisfied, "provenance": provenance}
+        for ordinal, (check_id, status, satisfied, provenance) in enumerate(_CHECKS)]
     if (type(items) is not list or items != expected_items
-            or any(type(item) is not dict or set(item) != {"ordinal", "check_id", "status", "satisfied"}
+            or any(type(item) is not dict or set(item) != {"ordinal", "check_id", "status", "satisfied", "provenance"}
                    or type(item["ordinal"]) is not int or type(item["satisfied"]) is not bool
                    for item in items)):
         errors.append("CHECKLIST_ITEMS_INVALID")
@@ -200,8 +208,9 @@ def validate_activation_checklist(value: Mapping[str, Any]) -> tuple[str, ...]:
 def validate_handoff_status(value: Mapping[str, Any]) -> tuple[str, ...]:
     expected = {
         "schema": SCHEMA_VERSION, "record_type": "HANDOFF_STATUS",
-        "handoff_state": HandoffState.ACTIVATION_REVIEW_REQUIRED.value,
-        "review_record_id": _REVIEW_ID, "review_currentness": "CURRENTNESS_UNKNOWN",
+        "handoff_state": HandoffState.SUPERSEDED.value,
+        "review_record_id": _REVIEW_ID, "review_currentness": "STALE_REVIEW_REQUIRED",
+        "merged_main_review": "REQUIRED",
         "activation_status": "BLOCKED", "production_permit_issuer": "ABSENT",
         "production_evidence_issuer": "ABSENT", "production_execute_api": "ABSENT",
         "cli_entry_point": "ABSENT", "scheduler": "ABSENT", "live_execution": "UNREACHABLE",
