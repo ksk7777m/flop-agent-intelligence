@@ -110,7 +110,8 @@ Final public-effect API inventory (reviewed 2026-09-08):
   production reobservation handoff/checklist, the sealed offline TCLK accept
   preflight pure validator, the offline TCLK transcript signed/unsigned-metadata
   boundary, the offline offer-global winner/accept-race boundary, the offline
-  offer-wide source/cursor/completeness boundary, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
+  offer-wide source/cursor/completeness boundary, the pinned-manifest offline
+  sealed source-attestation verifier, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
   payment/Presence-write adapters
 - `DEPRECATED_INTERNAL`: underscore-prefixed fixture mechanisms and their
   private dependency-injecting factories only

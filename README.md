@@ -153,6 +153,11 @@ offline source descriptors and `{generation,last_delivered_seq}` checkpoints,
 classifies gaps without inferring retention loss, and keeps completeness and
 winner authority fail-closed.
 
+The [sealed source attestation boundary](docs/TCLK_SOURCE_ATTESTATION.md)
+verifies a locally pinned acquisition authority, exact-byte evidence/source/
+context digests, generation, freshness, and offline replay evidence. Provenance
+does not establish completeness, winner, lock, settlement, or action authority.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects

@@ -10,7 +10,7 @@
     "deployment_observations", "observation_policy_binding", "freshness",
     "flop_specification_authority", "tclk_accept_conformance",
     "tclk_official_schema_evidence", "offline_tclk_accept_preflight", "tclk_transcript_boundary",
-    "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence"
+    "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -191,6 +191,11 @@
       "type":"object","additionalProperties":false,
       "required":["schema","classification","source_authenticity","completeness","winner","network","action"],
       "properties":{"schema":{"const":"tclk-offer-wide-evidence-v1"},"classification":{"const":"SAFE_PURE_VALIDATOR"},"source_authenticity":{"const":"UNKNOWN"},"completeness":{"const":"COMPLETENESS_NOT_ESTABLISHED"},"winner":{"const":"GLOBAL_WINNER_UNRESOLVED"},"network":{"const":"NONE"},"action":{"const":"NO_LIVE_ACTION"}}
+    },
+    "tclk_source_attestation": {
+      "type":"object","additionalProperties":false,
+      "required":["schema","classification","authority_manifest","source_authenticity","completeness","winner","network","action"],
+      "properties":{"schema":{"const":"tclk-source-attestation-verification-v1"},"classification":{"const":"SAFE_PURE_VALIDATOR"},"authority_manifest":{"const":"LOCAL_PUBLIC_KEYS_ONLY"},"source_authenticity":{"const":"FAIL_CLOSED"},"completeness":{"const":"COMPLETENESS_NOT_ESTABLISHED"},"winner":{"const":"GLOBAL_WINNER_UNRESOLVED"},"network":{"const":"NONE"},"action":{"const":"NO_LIVE_ACTION"}}
     }
   },
   "$defs": {

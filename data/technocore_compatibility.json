@@ -157,5 +157,15 @@
     "winner": "GLOBAL_WINNER_UNRESOLVED",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "tclk_source_attestation": {
+    "schema": "tclk-source-attestation-verification-v1",
+    "classification": "SAFE_PURE_VALIDATOR",
+    "authority_manifest": "LOCAL_PUBLIC_KEYS_ONLY",
+    "source_authenticity": "FAIL_CLOSED",
+    "completeness": "COMPLETENESS_NOT_ESTABLISHED",
+    "winner": "GLOBAL_WINNER_UNRESOLVED",
+    "network": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }

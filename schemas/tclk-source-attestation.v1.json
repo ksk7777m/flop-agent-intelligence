@@ -1,0 +1,30 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-source-attestation.v1.json",
+  "title":"TCLK Source Attestation Verification V1","type":"object","additionalProperties":false,
+  "required":["schema","content_label","artifact_id","policy_revision","input_evidence","stages","errors","source_attestation","source_authenticity","source_completeness","winner","race_loss","lock","settlement","replay","attestation_replay_id","ready_to_act","authorized_to_act","live_action_enabled","production_api"],
+  "properties":{
+    "schema":{"const":"tclk-source-attestation-verification-v1"},"content_label":{"const":"PUBLIC_MINIMIZED_EVIDENCE"},"artifact_id":{"type":"string","pattern":"^[0-9a-f]{64}$"},"policy_revision":{"const":"tclk-source-attestation-policy-v1"},
+    "input_evidence":{"type":"object","additionalProperties":false,"required":["byte_lengths","raw_content_exposed"],"properties":{"byte_lengths":{"type":"array","minItems":5,"maxItems":5,"items":{"oneOf":[{"type":"integer","minimum":0},{"type":"null"}]}},"raw_content_exposed":{"const":false}}},
+    "stages":{"type":"array","minItems":9,"maxItems":9,"prefixItems":[
+      {"$ref":"#/$defs/s1"},{"$ref":"#/$defs/s2"},{"$ref":"#/$defs/s3"},{"$ref":"#/$defs/s4"},{"$ref":"#/$defs/s5"},{"$ref":"#/$defs/s6"},{"$ref":"#/$defs/s7"},{"$ref":"#/$defs/s8"},{"$ref":"#/$defs/s9"}
+    ]},
+    "errors":{"type":"array","maxItems":1,"items":{"enum":["INPUT_TYPE_INVALID","INPUT_LIMIT_EXCEEDED","SOURCE_ATTESTATION_SCHEMA_INVALID","SOURCE_ATTESTATION_CANONICAL_INVALID","SOURCE_AUTHORITY_MANIFEST_INVALID","SOURCE_ATTESTATION_UNKNOWN_AUTHORITY","SOURCE_ATTESTATION_POLICY_MISMATCH","SOURCE_ATTESTATION_SIGNATURE_INVALID","SOURCE_ATTESTATION_DIGEST_MISMATCH","SOURCE_ATTESTATION_GENERATION_MISMATCH","SOURCE_ATTESTATION_REPLAY_INVALID","SOURCE_ATTESTATION_DUPLICATE","SOURCE_ATTESTATION_EXPIRED"]}},
+    "source_attestation":{"enum":["SOURCE_ATTESTATION_INVALID","SOURCE_ATTESTATION_VERIFIED"]},"source_authenticity":{"enum":["NOT_ESTABLISHED","AUTHENTICATED_SOURCE"]},"source_completeness":{"const":"COMPLETENESS_NOT_ESTABLISHED"},"winner":{"const":"GLOBAL_WINNER_UNRESOLVED"},"race_loss":{"const":"NOT_ISSUED"},"lock":{"const":"NOT_VERIFIED"},"settlement":{"const":"NOT_VERIFIED"},
+    "replay":{"enum":["NOT_EVALUATED","UNSEEN_IN_PROVIDED_LEDGER","DUPLICATE_REJECTED"]},"attestation_replay_id":{"oneOf":[{"const":""},{"type":"string","pattern":"^[0-9a-f]{64}$"}]},
+    "ready_to_act":{"const":false},"authorized_to_act":{"const":false},"live_action_enabled":{"const":false},
+    "production_api":{"type":"object","additionalProperties":false,"required":["classification","network","technocore","remote_mcp","signer","wallet","settlement"],"properties":{"classification":{"const":"SAFE_PURE_VALIDATOR"},"network":{"const":"NONE"},"technocore":{"const":"NONE"},"remote_mcp":{"const":"NONE"},"signer":{"const":"NONE"},"wallet":{"const":"NONE"},"settlement":{"const":"NONE"}}}
+  },
+  "$defs":{
+    "stage":{"type":"object","additionalProperties":false,"required":["ordinal","stage_id","state"],"properties":{"ordinal":{"type":"integer"},"stage_id":{"type":"string"},"state":{"enum":["NOT_EVALUATED","VERIFIED"]}}},
+    "s1":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":1},"stage_id":{"const":"SCHEMA_VALIDATION"}}}]},
+    "s2":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":2},"stage_id":{"const":"CANONICAL_VALIDATION"}}}]},
+    "s3":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":3},"stage_id":{"const":"AUTHORITY_LOOKUP"}}}]},
+    "s4":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":4},"stage_id":{"const":"AUTHORITY_POLICY"}}}]},
+    "s5":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":5},"stage_id":{"const":"SIGNATURE_VERIFICATION"}}}]},
+    "s6":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":6},"stage_id":{"const":"DIGEST_BINDING"}}}]},
+    "s7":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":7},"stage_id":{"const":"GENERATION_CONTEXT_BINDING"}}}]},
+    "s8":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":8},"stage_id":{"const":"FRESHNESS_REPLAY"}}}]},
+    "s9":{"allOf":[{"$ref":"#/$defs/stage"},{"properties":{"ordinal":{"const":9},"stage_id":{"const":"RESULT_ISSUANCE"}}}]}
+  }
+}
