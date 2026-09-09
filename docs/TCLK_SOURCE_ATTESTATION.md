@@ -16,10 +16,13 @@ type, generation, acquisition time, and mode.
 Authorities resolve only through `data/tclk_source_authorities.json`, which
 contains public verification material only. The initial reviewed manifest is
 intentionally empty: no production authority is trusted until its public key,
-version, policy, and allowed source types receive a separate review. Tests use
+version, policy, and allowed source types receive a separate review. Authority
+IDs and key IDs are globally unique within the manifest; rollback or any byte
+replacement is rejected by the pinned manifest hash. Tests use
 only an in-memory ephemeral fixture authority and never write its private key.
 
-Verification order is schema, canonical grammar, authority lookup, policy,
+Acquisition precedes issuance and issuance cannot exceed expiry; all three are
+bounded integers. Verification order is schema, canonical grammar, authority lookup, policy,
 signature, exact-byte digests, generation/context, freshness/replay, then
 issuance. Replay identity is a minimized hash of authority identity/version and
 the exact nonce. A matching entry in the supplied offline replay ledger is

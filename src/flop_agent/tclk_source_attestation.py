@@ -90,17 +90,18 @@ def _load_manifest(raw: bytes) -> dict[str, Any]:
     value = _parse_exact(body)
     if not isinstance(value, dict) or set(value) != {"schema", "policy_revision", "authorities"} or value["schema"] != "tclk-source-authorities-v1" or value["policy_revision"] != POLICY or not isinstance(value["authorities"], list):
         raise ValueError
-    seen: set[tuple[str, str]] = set()
+    authority_ids: set[str] = set()
+    key_ids: set[str] = set()
     for item in value["authorities"]:
         if not isinstance(item, dict) or set(item) != AUTHORITY_FIELDS or not all(_valid_token(item[k]) for k in ("authority_id", "authority_version", "policy_id", "key_id")) or item["policy_id"] != POLICY:
             raise ValueError
         key = _b64decode(item["public_key_b64url"])
         if len(key) != 32 or not isinstance(item["allowed_source_types"], list) or not item["allowed_source_types"] or len(set(item["allowed_source_types"])) != len(item["allowed_source_types"]) or any(x not in SOURCE_TYPES for x in item["allowed_source_types"]):
             raise ValueError
-        identity = (item["authority_id"], item["authority_version"])
-        if identity in seen:
+        if item["authority_id"] in authority_ids or item["key_id"] in key_ids:
             raise ValueError
-        seen.add(identity)
+        authority_ids.add(item["authority_id"])
+        key_ids.add(item["key_id"])
     return value
 
 
@@ -119,7 +120,7 @@ def _verify(evidence: bytes, descriptor: bytes, context: bytes, artifact_raw: by
         return _fail(result, "SOURCE_ATTESTATION_SCHEMA_INVALID")
     stages[0]["state"] = "VERIFIED"
     tokens = ("authority_id", "authority_version", "policy_id", "key_id", "source_binding_sha256", "generation", "attestation_nonce")
-    if artifact["version"] != ARTIFACT_VERSION or not all(_valid_token(artifact[k]) for k in tokens) or artifact["policy_id"] != POLICY or artifact["source_type"] not in SOURCE_TYPES or any(not isinstance(artifact[k], str) or len(artifact[k]) != 64 or any(c not in "0123456789abcdef" for c in artifact[k]) for k in ("evidence_sha256", "context_sha256")) or any(not _valid_uint(artifact[k]) for k in ("acquired_at", "issued_at", "expires_at")) or artifact["issued_at"] > artifact["acquired_at"] or artifact["acquired_at"] > artifact["expires_at"]:
+    if artifact["version"] != ARTIFACT_VERSION or not all(_valid_token(artifact[k]) for k in tokens) or artifact["policy_id"] != POLICY or artifact["source_type"] not in SOURCE_TYPES or any(not isinstance(artifact[k], str) or len(artifact[k]) != 64 or any(c not in "0123456789abcdef" for c in artifact[k]) for k in ("evidence_sha256", "context_sha256")) or any(not _valid_uint(artifact[k]) for k in ("acquired_at", "issued_at", "expires_at")) or artifact["acquired_at"] > artifact["issued_at"] or artifact["issued_at"] > artifact["expires_at"]:
         return _fail(result, "SOURCE_ATTESTATION_CANONICAL_INVALID")
     stages[1]["state"] = "VERIFIED"
     try: manifest = _load_manifest(manifest_raw)
@@ -186,6 +187,15 @@ def _validate_result(value: Any) -> None:
         raise ValueError("AUTHORITY_ESCALATION_REJECTED")
     for index, (stage, name) in enumerate(zip(value["stages"], STAGES), 1):
         if type(stage["ordinal"]) is not int or stage["ordinal"] != index or stage["stage_id"] != name: raise ValueError("STAGE_GRAMMAR_INVALID")
+    verified = value["source_attestation"] == "SOURCE_ATTESTATION_VERIFIED"
+    if verified != (not value["errors"] and value["source_authenticity"] == "AUTHENTICATED_SOURCE" and value["replay"] == "UNSEEN_IN_PROVIDED_LEDGER" and len(value["attestation_replay_id"]) == 64 and all(x["state"] == "VERIFIED" for x in value["stages"])):
+        raise ValueError("SOURCE_ATTESTATION_STATE_CONTRADICTION")
+    if not verified and (value["source_authenticity"] != "NOT_ESTABLISHED" or value["stages"][-1]["state"] != "NOT_EVALUATED" or not value["errors"]):
+        raise ValueError("SOURCE_ATTESTATION_STATE_CONTRADICTION")
+    seen_not_evaluated = False
+    for stage in value["stages"]:
+        seen_not_evaluated = seen_not_evaluated or stage["state"] == "NOT_EVALUATED"
+        if seen_not_evaluated and stage["state"] == "VERIFIED": raise ValueError("STAGE_GRAMMAR_INVALID")
 
 
 __all__ = ["verify_source_attestation"]
