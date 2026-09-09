@@ -98,6 +98,8 @@
     "schema": "tclk-accept-conformance-package-v1",
     "artifact": "data/tclk_accept_conformance.json",
     "official_schema": "OFFICIAL_SCHEMA_REVISION_REQUIRED",
+    "official_conformance": "OFFICIAL_SCHEMA_CONFORMANCE_UNKNOWN",
+    "local_safety_profile": "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1",
     "historical_classification": "HISTORICAL_CLASSIFICATION_UNRESOLVED",
     "field_report": "UNRATIFIED",
     "action": "NO_LIVE_ACTION"

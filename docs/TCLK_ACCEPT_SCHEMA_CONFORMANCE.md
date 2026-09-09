@@ -18,24 +18,38 @@ The reported reference 142 measurements are a separate
 `HIGH_SIGNAL_FIELD_REPORT`: `UNRATIFIED`, `POINT_IN_TIME_REPORTED`,
 `METHODOLOGY_NOT_INDEPENDENTLY_REPRODUCED`, not evergreen, not protocol
 specification, and not current-runtime proof. Counts are bounded integers.
-Exact fractions are derived from count pairs without floats; the reported
+Exact fractions `461/511`, `74/79`, and `55/56` are derived from count pairs
+without floats; the reported
 percentage strings remain non-authoritative display values. No DID list,
 frame, signature, room, URL, or author data is retained.
 
-## Independent stages and fixed classification order
+## Structural facts, local profile, and ordered stages
+
+The projection separates directly observed structural facts (parse result,
+type presence/equality, contract presence/type/emptiness, and unknown-field
+presence) from every protocol judgment. Contract values themselves are never
+published. A fixed local defensive profile may pass or fail, but has
+`official_schema_authority=false`; official conformance is always
+`OFFICIAL_SCHEMA_CONFORMANCE_UNKNOWN` in this package.
 
 The model keeps these dimensions independent: frame observed, accept type,
 official schema validity, signature validity, replay validity, contract
 presence, contract derivation, evidence completeness, offer-global coverage,
 offer-global winner, lock observation, and settlement verification.
 
-Obvious local shape failures are ordered as malformed input, unknown field,
-non-accept frame, missing `contract`, and invalid `contract` type. A
-contract-shaped candidate remains `WINNER_UNRESOLVED`: it is not promoted to
-official schema validity, signature validity, accepted-contract count, winner,
-lock, or settlement. Missing contract is
-`INVALID_ACCEPT_MISSING_CONTRACT`—never race loss, payer abandonment, replay,
-spam, maliciousness, or negative reputation.
+The 12 stages are an ordered grammar with fixed ordinal, ID, and epistemic
+state (`VERIFIED`, `REJECTED`, `NOT_EVALUATED`, `EVIDENCE_REQUIRED`, or
+`UNKNOWN`). Missing, duplicate, reordered, unknown, and truthy/bool ordinal
+forms are rejected. No later stage can prove an earlier one.
+
+Obvious local shape failures use fixed priority: malformed input, non-accept
+frame, unknown field, missing `contract`, then rejected local contract shape.
+Independent failures are preserved. A contract-shaped candidate is only
+`LOCAL_ACCEPT_SAFETY_PROFILE_PASS`; it is not promoted to official schema
+validity, signature validity, accepted-contract count, winner, lock, or
+settlement. Missing contract is `REPORTED_POLICY_MISSING_CONTRACT`—never an
+official invalidity, race loss, payer abandonment, replay, spam, maliciousness,
+or negative reputation.
 
 No caller boolean can inject verified evidence. There is no verifier/issuer for
 signature, Replay, contract derivation, global winner, lock, or settlement in
@@ -67,7 +81,10 @@ They contain no raw remote content or action material. Runtime compatibility is
 `COMPATIBILITY_REVIEW_REQUIRED`; action remains `NO_LIVE_ACTION`,
 `ready_to_act=false`, and `authorized_to_act=false`.
 
-The next candidate is **Offline TCLK Accept Preflight Validator**. It may use
-this taxonomy and policy identity only after exact official schema evidence is
-reviewed. Outgoing builders, posting, signing, approval-to-signing connection,
-network sinks, and runtime schema download remain out of scope.
+The next candidate is **TCLK Official Schema Evidence Pinning / Offline Source
+Import Boundary**. It must bind the official repository, exact commit, document
+hash and schema version, required fields, contract constraints and derivation
+reference, immutable snapshot evidence, and supersession policy. An Offline
+TCLK Accept Preflight Validator remains blocked until that package is reviewed
+and integrated. Outgoing builders, posting, signing, approval-to-signing
+connection, network sinks, and runtime schema download remain out of scope.

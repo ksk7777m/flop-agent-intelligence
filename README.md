@@ -119,10 +119,11 @@ and `COMPATIBILITY_REVIEW_REQUIRED`. See
 ## TCLK Accept Schema Conformance Boundary
 
 The offline [TCLK Accept classification boundary](docs/TCLK_ACCEPT_SCHEMA_CONFORMANCE.md)
-separates accept-shaped frames, official schema validity, signature and Replay
-evidence, contract derivation, global winner, lock, and settlement. The exact
-official schema revision is not retained, so all valid/winner claims fail
-closed and historical accepted-but-unlocked data is not reclassified.
+separates structural facts and a local safety profile from official schema,
+signature, Replay, contract derivation, global winner, lock, and settlement
+judgments. Its fixed ordered 12-stage grammar cannot promote local shape into
+official validity. The exact official schema revision is not retained, so all
+official-valid/winner claims fail closed and historical data is not reclassified.
 
 ## Technocore Runtime Read-only Observation
 

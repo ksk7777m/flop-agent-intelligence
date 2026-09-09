@@ -114,11 +114,13 @@
     },
     "tclk_accept_conformance": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema", "artifact", "official_schema", "historical_classification", "field_report", "action"],
+      "required": ["schema", "artifact", "official_schema", "official_conformance", "local_safety_profile", "historical_classification", "field_report", "action"],
       "properties": {
         "schema": {"const": "tclk-accept-conformance-package-v1"},
         "artifact": {"const": "data/tclk_accept_conformance.json"},
         "official_schema": {"const": "OFFICIAL_SCHEMA_REVISION_REQUIRED"},
+        "official_conformance": {"const": "OFFICIAL_SCHEMA_CONFORMANCE_UNKNOWN"},
+        "local_safety_profile": {"const": "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1"},
         "historical_classification": {"const": "HISTORICAL_CLASSIFICATION_UNRESOLVED"},
         "field_report": {"const": "UNRATIFIED"},
         "action": {"const": "NO_LIVE_ACTION"}

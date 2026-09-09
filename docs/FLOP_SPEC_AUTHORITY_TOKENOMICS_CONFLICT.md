@@ -103,14 +103,18 @@ Latest untrusted monitoring material adds, without implementation:
   `HIGH_SIGNAL_FIELD_REPORT`; maintainer ratification is unconfirmed and mixed
   pull/issue references require reconciliation. Reported counts and percentages
   (1,022 / 922 / 90.2% / 711 / 666 / 93.7% / 56 / 55) are not source-bound or
-  evergreen runtime facts. Candidate classification
-  separates `INVALID_ACCEPT_MISSING_CONTRACT`, `INVALID_ACCEPT_SCHEMA`,
-  `INVALID_ACCEPT_CONTRACT_MISMATCH`, `ACCEPT_RACE_LOST`, `REPLAY`, `MALFORMED`,
-  `POLICY_REJECTED`, `WINNER_UNRESOLVED`, `VALID_ACCEPT_LOCK_NOT_OBSERVED`, and
-  `PAYER_ABANDONMENT_UNPROVEN`. `ACCEPT_SCHEMA_VALID` is a candidate gate before
-  `ACCEPTED`; historical accepted-but-unlocked records remain
+  evergreen runtime facts. Local defensive classification separates structural
+  facts from protocol judgments and uses `REPORTED_POLICY_MISSING_CONTRACT`,
+  `REPORTED_POLICY_CONTRACT_TYPE_REJECTED`, and
+  `LOCAL_ACCEPT_SAFETY_PROFILE_PASS/FAIL`; official conformance remains
+  `OFFICIAL_SCHEMA_CONFORMANCE_UNKNOWN`. `ACCEPT_SCHEMA_VALID` requires pinned
+  official evidence; historical accepted-but-unlocked records remain
   `HISTORICAL_CLASSIFICATION_UNRESOLVED` without complete raw evidence.
-- A: **Offline TCLK Accept Preflight Validator**. A future pure validator would
+- S: **TCLK Official Schema Evidence Pinning / Offline Source Import Boundary**.
+  This must precede any preflight validator and bind an exact official commit,
+  schema hash/version, constraints, derivation reference, immutable snapshot,
+  and supersession policy without network or action authority.
+- Blocked: **Offline TCLK Accept Preflight Validator**. A future pure validator would
   require an exact pinned schema, required-field and semantic validation,
   contract ID re-derivation, canonical encoding, and all-rails validation, with
   no posting, signing, network, or action authority.

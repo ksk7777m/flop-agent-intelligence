@@ -19,30 +19,33 @@ DOMAIN = "TCLK_ACCEPT_CONFORMANCE\x00V1"
 CANONICAL_ENCODING = "SORTED_ASCII_JSON_V1"
 MAX_COUNT = 2**63 - 1
 
-STAGE_FIELDS = ("frame_observed", "frame_type_accept", "accept_schema_valid",
-    "signature_valid", "replay_valid", "contract_present",
-    "contract_derivation_verified", "evidence_complete",
-    "offer_global_view_complete", "offer_global_winner_verified",
-    "lock_observed", "settlement_verified")
-STAGE_VALUES = frozenset({"OBSERVED", "NOT_OBSERVED", "VERIFIED", "NOT_VERIFIED",
-                          "VALID", "INVALID", "COMPLETE", "INCOMPLETE", "UNKNOWN"})
-CLASSIFICATIONS = frozenset({"INVALID_ACCEPT_MISSING_CONTRACT", "INVALID_ACCEPT_SCHEMA",
-    "INVALID_ACCEPT_CONTRACT_TYPE", "INVALID_ACCEPT_CONTRACT_MISMATCH",
-    "SIGNATURE_INVALID", "SIGNATURE_NOT_VERIFIED", "REPLAY", "REPLAY_NOT_VERIFIED",
-    "ACCEPT_RACE_LOST", "RACE_STATUS_UNRESOLVED", "POLICY_REJECTED", "MALFORMED",
-    "EVIDENCE_INCOMPLETE", "WINNER_UNRESOLVED", "VALID_ACCEPT_LOCK_NOT_OBSERVED",
-    "PAYER_ABANDONMENT_UNPROVEN", "SETTLEMENT_UNVERIFIED"})
+STAGE_FIELDS = ("FRAME_OBSERVED", "FRAME_TYPE_ACCEPT", "ACCEPT_SCHEMA_VALID",
+    "SIGNATURE_VALID", "REPLAY_VALID", "CONTRACT_PRESENT",
+    "CONTRACT_DERIVATION_VERIFIED", "EVIDENCE_COMPLETE",
+    "OFFER_GLOBAL_VIEW_COMPLETE", "OFFER_GLOBAL_WINNER_VERIFIED",
+    "LOCK_OBSERVED", "SETTLEMENT_VERIFIED")
+STAGE_VALUES = frozenset({"VERIFIED", "REJECTED", "NOT_EVALUATED",
+                          "EVIDENCE_REQUIRED", "UNKNOWN"})
+CLASSIFICATIONS = frozenset({"LOCAL_ACCEPT_SAFETY_PROFILE_PASS",
+    "REPORTED_POLICY_MISSING_CONTRACT", "REPORTED_POLICY_CONTRACT_TYPE_REJECTED",
+    "LOCAL_PROFILE_UNKNOWN_FIELDS_REJECTED", "MALFORMED_FRAME", "NOT_ACCEPT_FRAME"})
 PROJECTION_FIELDS = frozenset({"schema", "domain", "status", "content_label",
-    "observation_id", "policy_identity", "primary_classification", "stages",
+    "observation_id", "policy_identity", "classification_basis",
+    "official_schema_conformance", "local_safety_profile", "structural_facts",
+    "primary_classification", "independent_failures", "validation_stages",
     "reputation_dimensions", "payer_abandonment", "accepted_contract_count_eligible",
     "ready_to_act", "authorized_to_act", "live_action_enabled", "policy_version"})
 PACKAGE_FIELDS = frozenset({"schema", "domain", "status", "content_label", "artifact_id",
     "policy_identity", "issue_reference", "field_report", "historical_reclassification",
-    "runtime_compatibility", "action_state", "policy_version"})
+    "reputation_boundary", "runtime_compatibility", "action_state", "policy_version"})
 POLICY_FIELDS = frozenset({"protocol", "official_repository", "schema_path",
     "schema_version", "source_revision", "document_hash", "required_contract_policy",
     "additional_properties_policy", "contract_derivation_spec", "extraction_state",
-    "canonical_encoding"})
+    "canonical_encoding", "classification_policy_revision", "local_safety_profile_revision",
+    "validation_stage_order"})
+FACT_FIELDS = frozenset({"frame_parsed", "type_field_observed", "type_equals_accept",
+    "contract_field_present", "contract_value_kind", "contract_value_empty",
+    "contract_value_profile_shape", "unknown_fields_observed"})
 REPUTATION_FIELDS = frozenset({"protocol_conformance", "signature_failure",
     "replay_behavior", "race_outcome", "evidence_completeness",
     "settlement_completion", "malicious_behavior_evidence"})
@@ -79,29 +82,51 @@ def schema_policy_identity() -> Mapping[str, str]:
         "contract_derivation_spec": "SOURCE_EVIDENCE_REQUIRED",
         "extraction_state": "OFFICIAL_SCHEMA_REVISION_REQUIRED",
         "canonical_encoding": CANONICAL_ENCODING,
+        "classification_policy_revision": "TCLK_ACCEPT_CLASSIFICATION_POLICY_V2",
+        "local_safety_profile_revision": "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1",
+        "validation_stage_order": _digest(list(STAGE_FIELDS)),
     })
 
 
-def _base_stages() -> dict[str, str]:
-    return {"frame_observed": "NOT_OBSERVED", "frame_type_accept": "NOT_OBSERVED",
-        "accept_schema_valid": "NOT_VERIFIED", "signature_valid": "NOT_VERIFIED",
-        "replay_valid": "NOT_VERIFIED", "contract_present": "NOT_OBSERVED",
-        "contract_derivation_verified": "NOT_VERIFIED", "evidence_complete": "INCOMPLETE",
-        "offer_global_view_complete": "INCOMPLETE",
-        "offer_global_winner_verified": "NOT_VERIFIED", "lock_observed": "UNKNOWN",
-        "settlement_verified": "NOT_VERIFIED"}
+def _stage_list(states: Mapping[str, str]) -> list[dict[str, Any]]:
+    return [{"ordinal": ordinal, "stage_id": stage_id, "state": states[stage_id]}
+            for ordinal, stage_id in enumerate(STAGE_FIELDS, 1)]
 
 
-def _project(primary: str, stages: Mapping[str, str]) -> Mapping[str, Any]:
+def _project(primary: str, facts: Mapping[str, Any], failures: list[str]) -> Mapping[str, Any]:
     policy = dict(schema_policy_identity())
-    reputation = {"protocol_conformance": "FAILURE" if primary.startswith("INVALID_") else "UNRESOLVED",
+    profile_status = ("NOT_APPLICABLE" if primary in {"MALFORMED_FRAME", "NOT_ACCEPT_FRAME"}
+                      else "PASS" if primary == "LOCAL_ACCEPT_SAFETY_PROFILE_PASS" else "FAIL")
+    profile = {"revision": "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1",
+        "status": profile_status, "official_schema_authority": False}
+    states = {stage: "NOT_EVALUATED" for stage in STAGE_FIELDS}
+    states["FRAME_OBSERVED"] = "VERIFIED" if facts["frame_parsed"] else "REJECTED"
+    if facts["frame_parsed"]:
+        states["FRAME_TYPE_ACCEPT"] = "VERIFIED" if facts["type_equals_accept"] is True else "REJECTED"
+    if facts["type_equals_accept"] is True:
+        states["ACCEPT_SCHEMA_VALID"] = "EVIDENCE_REQUIRED"
+        states["CONTRACT_PRESENT"] = "VERIFIED" if facts["contract_field_present"] else "REJECTED"
+        states["EVIDENCE_COMPLETE"] = "EVIDENCE_REQUIRED"
+        if profile_status == "PASS":
+            states["SIGNATURE_VALID"] = "EVIDENCE_REQUIRED"
+            states["REPLAY_VALID"] = "EVIDENCE_REQUIRED"
+            states["CONTRACT_DERIVATION_VERIFIED"] = "EVIDENCE_REQUIRED"
+            states["OFFER_GLOBAL_VIEW_COMPLETE"] = "EVIDENCE_REQUIRED"
+            states["OFFER_GLOBAL_WINNER_VERIFIED"] = "EVIDENCE_REQUIRED"
+            states["LOCK_OBSERVED"] = "UNKNOWN"
+    reputation = {"protocol_conformance": "UNKNOWN",
         "signature_failure": "NOT_ESTABLISHED", "replay_behavior": "NOT_ESTABLISHED",
         "race_outcome": "UNRESOLVED", "evidence_completeness": "INCOMPLETE",
         "settlement_completion": "UNVERIFIED", "malicious_behavior_evidence": "ABSENT"}
     body = {"schema": SCHEMA_VERSION, "domain": DOMAIN, "status": "DESCRIPTIVE_ONLY",
         "content_label": "UNTRUSTED_CONTENT", "policy_identity": policy,
+        "classification_basis": "REPORTED_UNATTESTED_POLICY",
+        "official_schema_conformance": "OFFICIAL_SCHEMA_CONFORMANCE_UNKNOWN",
+        "local_safety_profile": profile,
+        "structural_facts": {name: facts[name] for name in FACT_FIELDS},
         "primary_classification": primary,
-        "stages": {name: stages[name] for name in STAGE_FIELDS},
+        "independent_failures": list(failures),
+        "validation_stages": _stage_list(states),
         "reputation_dimensions": reputation,
         "payer_abandonment": "PAYER_ABANDONMENT_UNPROVEN",
         "accepted_contract_count_eligible": False, "ready_to_act": False,
@@ -114,26 +139,40 @@ def _project(primary: str, stages: Mapping[str, str]) -> Mapping[str, Any]:
 
 def classify_frame(frame: Any) -> Mapping[str, Any]:
     """Classify only fixed, obvious shape facts; never claim official validity."""
-    stages = _base_stages()
+    facts = {"frame_parsed": isinstance(frame, Mapping), "type_field_observed": False,
+        "type_equals_accept": None, "contract_field_present": False,
+        "contract_value_kind": "NOT_EVALUATED", "contract_value_empty": None,
+        "contract_value_profile_shape": "NOT_EVALUATED", "unknown_fields_observed": False}
     if not isinstance(frame, Mapping):
-        return _project("MALFORMED", stages)
-    stages["frame_observed"] = "OBSERVED"
-    if frame.get("type") != "accept":
-        return _project("POLICY_REJECTED", stages)
-    stages["frame_type_accept"] = "OBSERVED"
-    if set(frame) - {"type", "contract"}:
-        stages["accept_schema_valid"] = "INVALID"
-        return _project("INVALID_ACCEPT_SCHEMA", stages)
-    if "contract" not in frame:
-        stages["accept_schema_valid"] = "INVALID"
-        return _project("INVALID_ACCEPT_MISSING_CONTRACT", stages)
+        return _project("MALFORMED_FRAME", facts, ["FRAME_PARSE_FAILED"])
+    facts["type_field_observed"] = "type" in frame
+    facts["type_equals_accept"] = frame.get("type") == "accept" if "type" in frame else None
+    facts["unknown_fields_observed"] = bool(set(frame) - {"type", "contract"})
+    if facts["type_equals_accept"] is not True:
+        return _project("NOT_ACCEPT_FRAME", facts, ["TYPE_NOT_ACCEPT"])
+    facts["contract_field_present"] = "contract" in frame
+    failures = []
+    if facts["unknown_fields_observed"]:
+        failures.append("LOCAL_PROFILE_UNKNOWN_FIELDS")
+    if not facts["contract_field_present"]:
+        facts["contract_value_kind"] = "MISSING"
+        failures.append("REPORTED_POLICY_MISSING_CONTRACT")
+        primary = ("LOCAL_PROFILE_UNKNOWN_FIELDS_REJECTED" if facts["unknown_fields_observed"]
+                   else "REPORTED_POLICY_MISSING_CONTRACT")
+        return _project(primary, facts, failures)
     contract = frame["contract"]
+    facts["contract_value_kind"] = "NULL" if contract is None else "STRING" if isinstance(contract, str) else "OTHER"
+    facts["contract_value_empty"] = (not contract) if isinstance(contract, str) else None
     if not isinstance(contract, str) or not contract or _CONTRACT.fullmatch(contract) is None:
-        stages["accept_schema_valid"] = "INVALID"
-        return _project("INVALID_ACCEPT_CONTRACT_TYPE", stages)
-    stages["contract_present"] = "OBSERVED"
-    # Shape conformance is not official schema conformance without a pinned revision.
-    return _project("WINNER_UNRESOLVED", stages)
+        facts["contract_value_profile_shape"] = "REJECTED"
+        failures.append("REPORTED_POLICY_CONTRACT_TYPE_REJECTED")
+    else:
+        facts["contract_value_profile_shape"] = "ACCEPTED"
+    if failures:
+        primary = ("LOCAL_PROFILE_UNKNOWN_FIELDS_REJECTED" if facts["unknown_fields_observed"]
+                   else "REPORTED_POLICY_CONTRACT_TYPE_REJECTED")
+        return _project(primary, facts, failures)
+    return _project("LOCAL_ACCEPT_SAFETY_PROFILE_PASS", facts, [])
 
 
 def validate_projection(value: Any) -> Mapping[str, Any]:
@@ -147,42 +186,97 @@ def validate_projection(value: Any) -> Mapping[str, Any]:
     policy = value["policy_identity"]
     if not isinstance(policy, Mapping) or set(policy) != POLICY_FIELDS or dict(policy) != dict(schema_policy_identity()):
         raise ConformanceError("POLICY_IDENTITY_INVALID", "policy_identity")
-    stages = value["stages"]
-    if not isinstance(stages, Mapping) or set(stages) != set(STAGE_FIELDS):
-        raise ConformanceError("STAGE_FIELDS_INVALID", "stages")
-    if any(stages[name] not in STAGE_VALUES for name in STAGE_FIELDS):
-        raise ConformanceError("STAGE_VALUE_INVALID", "stages")
-    if stages["accept_schema_valid"] == "VERIFIED":
-        raise ConformanceError("OFFICIAL_SCHEMA_REVISION_REQUIRED", "accept_schema_valid")
-    if any(stages[name] == "VERIFIED" for name in ("signature_valid", "replay_valid",
-            "contract_derivation_verified", "offer_global_winner_verified",
-            "settlement_verified")):
-        raise ConformanceError("SEALED_EVIDENCE_REQUIRED", "stages")
-    if stages["offer_global_view_complete"] == "INCOMPLETE" and value["primary_classification"] == "ACCEPT_RACE_LOST":
-        raise ConformanceError("GLOBAL_VIEW_REQUIRED", "primary_classification")
+    if value["classification_basis"] != "REPORTED_UNATTESTED_POLICY" or value["official_schema_conformance"] != "OFFICIAL_SCHEMA_CONFORMANCE_UNKNOWN":
+        raise ConformanceError("OFFICIAL_SCHEMA_EVIDENCE_REQUIRED", "official_schema_conformance")
+    profile = value["local_safety_profile"]
+    if not isinstance(profile, Mapping) or set(profile) != {"revision", "status", "official_schema_authority"} or profile.get("revision") != "TCLK_ACCEPT_LOCAL_SAFETY_PROFILE_V1" or profile.get("status") not in {"PASS", "FAIL", "NOT_APPLICABLE"} or profile.get("official_schema_authority") is not False:
+        raise ConformanceError("LOCAL_PROFILE_INVALID", "local_safety_profile")
+    facts = value["structural_facts"]
+    if not isinstance(facts, Mapping) or set(facts) != FACT_FIELDS:
+        raise ConformanceError("STRUCTURAL_FACTS_INVALID", "structural_facts")
+    for name in ("frame_parsed", "type_field_observed", "contract_field_present", "unknown_fields_observed"):
+        if type(facts[name]) is not bool: raise ConformanceError("BOOLEAN_INVALID", name)
+    if facts["type_equals_accept"] is not None and type(facts["type_equals_accept"]) is not bool:
+        raise ConformanceError("BOOLEAN_INVALID", "type_equals_accept")
+    if facts["contract_value_empty"] is not None and type(facts["contract_value_empty"]) is not bool:
+        raise ConformanceError("BOOLEAN_INVALID", "contract_value_empty")
+    if facts["contract_value_kind"] not in {"NOT_EVALUATED", "MISSING", "NULL", "STRING", "OTHER"}:
+        raise ConformanceError("STRUCTURAL_FACTS_INVALID", "contract_value_kind")
+    if facts["contract_value_profile_shape"] not in {"NOT_EVALUATED", "ACCEPTED", "REJECTED"}:
+        raise ConformanceError("STRUCTURAL_FACTS_INVALID", "contract_value_profile_shape")
+    if (not facts["frame_parsed"] and (facts["type_field_observed"] or facts["type_equals_accept"] is not None
+            or facts["contract_field_present"] or facts["unknown_fields_observed"])):
+        raise ConformanceError("STRUCTURAL_FACTS_CONTRADICTION", "frame_parsed")
+    if not facts["type_field_observed"] and facts["type_equals_accept"] is not None:
+        raise ConformanceError("STRUCTURAL_FACTS_CONTRADICTION", "type_equals_accept")
+    if not facts["contract_field_present"] and (facts["contract_value_empty"] is not None
+            or facts["contract_value_profile_shape"] != "NOT_EVALUATED"
+            or facts["contract_value_kind"] not in {"NOT_EVALUATED", "MISSING"}):
+        raise ConformanceError("STRUCTURAL_FACTS_CONTRADICTION", "contract_field_present")
+    if facts["contract_field_present"] and (facts["contract_value_kind"] not in {"NULL", "STRING", "OTHER"}
+            or facts["contract_value_profile_shape"] not in {"ACCEPTED", "REJECTED"}):
+        raise ConformanceError("STRUCTURAL_FACTS_CONTRADICTION", "contract_field_present")
+    if ((facts["contract_value_kind"] == "STRING") != (facts["contract_value_empty"] is not None)):
+        raise ConformanceError("STRUCTURAL_FACTS_CONTRADICTION", "contract_value_empty")
+    if facts["contract_value_profile_shape"] == "ACCEPTED" and not (facts["contract_value_kind"] == "STRING" and facts["contract_value_empty"] is False):
+        raise ConformanceError("STRUCTURAL_FACTS_CONTRADICTION", "contract_value_profile_shape")
+    stages = value["validation_stages"]
+    if not isinstance(stages, list) or len(stages) != len(STAGE_FIELDS):
+        raise ConformanceError("STAGE_GRAMMAR_INVALID", "validation_stages")
+    stage_map = {}
+    for ordinal, stage in enumerate(stages, 1):
+        if not isinstance(stage, Mapping) or set(stage) != {"ordinal", "stage_id", "state"}:
+            raise ConformanceError("STAGE_GRAMMAR_INVALID", "validation_stages")
+        if type(stage["ordinal"]) is not int or stage["ordinal"] != ordinal or stage["stage_id"] != STAGE_FIELDS[ordinal - 1] or stage["stage_id"] in stage_map or stage["state"] not in STAGE_VALUES:
+            raise ConformanceError("STAGE_GRAMMAR_INVALID", "validation_stages")
+        stage_map[stage["stage_id"]] = stage["state"]
+    if stage_map["ACCEPT_SCHEMA_VALID"] == "VERIFIED":
+        raise ConformanceError("OFFICIAL_SCHEMA_EVIDENCE_REQUIRED", "validation_stages")
+    for name in ("SIGNATURE_VALID", "REPLAY_VALID", "CONTRACT_DERIVATION_VERIFIED",
+                 "OFFER_GLOBAL_WINNER_VERIFIED", "SETTLEMENT_VERIFIED"):
+        if stage_map[name] == "VERIFIED": raise ConformanceError("SEALED_EVIDENCE_REQUIRED", name)
     if value["primary_classification"] not in CLASSIFICATIONS:
         raise ConformanceError("CLASSIFICATION_INVALID", "primary_classification")
-    expected_stages = {
-        "MALFORMED": _base_stages(),
-        "POLICY_REJECTED": {**_base_stages(), "frame_observed": "OBSERVED"},
-        "INVALID_ACCEPT_SCHEMA": {**_base_stages(), "frame_observed": "OBSERVED",
-            "frame_type_accept": "OBSERVED", "accept_schema_valid": "INVALID"},
-        "INVALID_ACCEPT_MISSING_CONTRACT": {**_base_stages(), "frame_observed": "OBSERVED",
-            "frame_type_accept": "OBSERVED", "accept_schema_valid": "INVALID"},
-        "INVALID_ACCEPT_CONTRACT_TYPE": {**_base_stages(), "frame_observed": "OBSERVED",
-            "frame_type_accept": "OBSERVED", "accept_schema_valid": "INVALID"},
-        "WINNER_UNRESOLVED": {**_base_stages(), "frame_observed": "OBSERVED",
-            "frame_type_accept": "OBSERVED", "contract_present": "OBSERVED"},
-    }
     primary = value["primary_classification"]
-    if primary not in expected_stages or dict(stages) != expected_stages[primary]:
-        raise ConformanceError("STAGE_CLASSIFICATION_CONTRADICTION", "stages")
+    failures = value["independent_failures"]
+    if not isinstance(failures, list) or len(failures) != len(set(failures)) or any(item not in {"FRAME_PARSE_FAILED", "TYPE_NOT_ACCEPT", "LOCAL_PROFILE_UNKNOWN_FIELDS", "REPORTED_POLICY_MISSING_CONTRACT", "REPORTED_POLICY_CONTRACT_TYPE_REJECTED"} for item in failures):
+        raise ConformanceError("FAILURE_SET_INVALID", "independent_failures")
+    if not facts["frame_parsed"]:
+        expected_primary, expected_failures, expected_profile = "MALFORMED_FRAME", ["FRAME_PARSE_FAILED"], "NOT_APPLICABLE"
+    elif facts["type_equals_accept"] is not True:
+        expected_primary, expected_failures, expected_profile = "NOT_ACCEPT_FRAME", ["TYPE_NOT_ACCEPT"], "NOT_APPLICABLE"
+    else:
+        expected_failures = []
+        if facts["unknown_fields_observed"]: expected_failures.append("LOCAL_PROFILE_UNKNOWN_FIELDS")
+        if not facts["contract_field_present"]: expected_failures.append("REPORTED_POLICY_MISSING_CONTRACT")
+        elif facts["contract_value_profile_shape"] == "REJECTED": expected_failures.append("REPORTED_POLICY_CONTRACT_TYPE_REJECTED")
+        expected_profile = "FAIL" if expected_failures else "PASS"
+        expected_primary = ("LOCAL_PROFILE_UNKNOWN_FIELDS_REJECTED" if facts["unknown_fields_observed"]
+            else "REPORTED_POLICY_MISSING_CONTRACT" if not facts["contract_field_present"]
+            else "REPORTED_POLICY_CONTRACT_TYPE_REJECTED" if expected_failures
+            else "LOCAL_ACCEPT_SAFETY_PROFILE_PASS")
+    if primary != expected_primary or failures != expected_failures or profile["status"] != expected_profile:
+        raise ConformanceError("PROJECTION_CONTRADICTION", "classification")
+    expected_states = {stage: "NOT_EVALUATED" for stage in STAGE_FIELDS}
+    expected_states["FRAME_OBSERVED"] = "VERIFIED" if facts["frame_parsed"] else "REJECTED"
+    if facts["frame_parsed"]: expected_states["FRAME_TYPE_ACCEPT"] = "VERIFIED" if facts["type_equals_accept"] is True else "REJECTED"
+    if facts["type_equals_accept"] is True:
+        expected_states["ACCEPT_SCHEMA_VALID"] = "EVIDENCE_REQUIRED"
+        expected_states["CONTRACT_PRESENT"] = "VERIFIED" if facts["contract_field_present"] else "REJECTED"
+        expected_states["EVIDENCE_COMPLETE"] = "EVIDENCE_REQUIRED"
+        if expected_profile == "PASS":
+            for name in ("SIGNATURE_VALID", "REPLAY_VALID", "CONTRACT_DERIVATION_VERIFIED",
+                    "OFFER_GLOBAL_VIEW_COMPLETE", "OFFER_GLOBAL_WINNER_VERIFIED"):
+                expected_states[name] = "EVIDENCE_REQUIRED"
+            expected_states["LOCK_OBSERVED"] = "UNKNOWN"
+    if stage_map != expected_states:
+        raise ConformanceError("STAGE_CLASSIFICATION_CONTRADICTION", "validation_stages")
     reputation = value["reputation_dimensions"]
     if not isinstance(reputation, Mapping) or set(reputation) != REPUTATION_FIELDS:
         raise ConformanceError("REPUTATION_FIELDS_INVALID", "reputation_dimensions")
     if reputation["malicious_behavior_evidence"] != "ABSENT":
         raise ConformanceError("MALICIOUSNESS_NOT_ESTABLISHED", "reputation_dimensions")
-    expected_reputation = {"protocol_conformance": "FAILURE" if primary.startswith("INVALID_") else "UNRESOLVED",
+    expected_reputation = {"protocol_conformance": "UNKNOWN",
         "signature_failure": "NOT_ESTABLISHED", "replay_behavior": "NOT_ESTABLISHED",
         "race_outcome": "UNRESOLVED", "evidence_completeness": "INCOMPLETE",
         "settlement_completion": "UNVERIFIED", "malicious_behavior_evidence": "ABSENT"}
@@ -256,7 +350,7 @@ def package_status() -> Mapping[str, Any]:
             "missing_contract_reported_display": "90.2%", "accepting_did_count": 711,
             "affected_did_count": 666, "affected_exact_ratio": exact_ratio(666, 711),
             "affected_reported_display": "93.7%", "contract_present_sample": 56,
-            "derivation_matches": 55},
+            "derivation_matches": 55, "derivation_match_exact_ratio": exact_ratio(55, 56)},
         "historical_reclassification": {"status": "HISTORICAL_CLASSIFICATION_UNRESOLVED",
             "evidence_requirement": "RECLASSIFICATION_EVIDENCE_REQUIRED",
             "payer_abandonment": "PAYER_ABANDONMENT_UNPROVEN",
@@ -266,6 +360,7 @@ def package_status() -> Mapping[str, Any]:
             "signature_evidence": False, "replay_evidence": False,
             "offer_global_chronology_complete": False, "lock_coverage_complete": False,
             "automatic_migration": False},
+        "reputation_boundary": "MALICIOUS_BEHAVIOR_NOT_ESTABLISHED",
         "runtime_compatibility": "COMPATIBILITY_REVIEW_REQUIRED",
         "action_state": {"mode": "NO_LIVE_ACTION", "ready_to_act": False,
             "authorized_to_act": False, "live_action_enabled": False},
@@ -292,7 +387,7 @@ def validate_package_status(value: Any) -> Mapping[str, Any]:
         "accept_typed_frames", "missing_contract", "missing_contract_exact_ratio",
         "missing_contract_reported_display", "accepting_did_count", "affected_did_count",
         "affected_exact_ratio", "affected_reported_display", "contract_present_sample",
-        "derivation_matches"}
+        "derivation_matches", "derivation_match_exact_ratio"}
     if not isinstance(report, Mapping) or set(report) != required_report:
         raise ConformanceError("FIELD_REPORT_FIELDS_INVALID", "field_report")
     for name in ("observation_runs", "accept_typed_frames", "missing_contract",
@@ -307,6 +402,8 @@ def validate_package_status(value: Any) -> Mapping[str, Any]:
         raise ConformanceError("RATIO_MISMATCH", "missing_contract_exact_ratio")
     if report["affected_exact_ratio"] != exact_ratio(report["affected_did_count"], report["accepting_did_count"]):
         raise ConformanceError("RATIO_MISMATCH", "affected_exact_ratio")
+    if report["derivation_match_exact_ratio"] != exact_ratio(report["derivation_matches"], report["contract_present_sample"]):
+        raise ConformanceError("RATIO_MISMATCH", "derivation_match_exact_ratio")
     if (report["classification"] != "HIGH_SIGNAL_FIELD_REPORT"
             or report["ratification"] != "UNRATIFIED"
             or report["temporal_scope"] != "POINT_IN_TIME_REPORTED"
@@ -330,7 +427,7 @@ def validate_package_status(value: Any) -> Mapping[str, Any]:
             "signature_evidence", "replay_evidence", "offer_global_chronology_complete",
             "lock_coverage_complete", "automatic_migration"}:
         raise ConformanceError("HISTORICAL_FIELDS_INVALID", "historical_reclassification")
-    if value["runtime_compatibility"] != "COMPATIBILITY_REVIEW_REQUIRED" or value["action_state"] != {"mode": "NO_LIVE_ACTION", "ready_to_act": False, "authorized_to_act": False, "live_action_enabled": False} or value["policy_version"] != POLICY_VERSION:
+    if value["reputation_boundary"] != "MALICIOUS_BEHAVIOR_NOT_ESTABLISHED" or value["runtime_compatibility"] != "COMPATIBILITY_REVIEW_REQUIRED" or value["action_state"] != {"mode": "NO_LIVE_ACTION", "ready_to_act": False, "authorized_to_act": False, "live_action_enabled": False} or value["policy_version"] != POLICY_VERSION:
         raise ConformanceError("ACTION_STATE_INVALID", "package")
     body = {key: value[key] for key in PACKAGE_FIELDS if key != "artifact_id"}
     expected_id = _digest({"domain": DOMAIN, "schema": value["schema"],
