@@ -20,10 +20,13 @@ disposition. A failed earlier stage cannot make a later stage pass.
 
 Each input is limited to 4096 bytes. Parsing rejects BOMs, invalid UTF-8,
 duplicate keys at every depth, trailing data, non-object roots, floats,
-NaN/Infinity, integers outside the exact JavaScript safe range, more than 16
+NaN/Infinity, negative zero, lone Unicode surrogates, integers outside the exact JavaScript safe range, more than 16
 levels, 64 total members, 32 array members, 1024 characters or 4096 UTF-8 bytes
 per string, and more than 192 parsed nodes. Values are never normalized or
-coerced. The pinned nonce is a lowercase hexadecimal string of 8–64 characters.
+coerced. The 4096-byte cap is a local resource-safety policy, not an official
+schema requirement. Lexical depth and string-character checks run before JSON
+materialization; the byte cap bounds all parser work. The pinned nonce is a
+lowercase hexadecimal string of 8–64 characters.
 
 ## Conformance, binding, and derivation
 
@@ -31,12 +34,20 @@ The full pinned root schema is evaluated with Draft 2020-12 semantics, including
 `oneOf`, same-document `$ref`, `const`, `enum`, patterns, required fields,
 nested constraints, and `additionalProperties: false`. Snapshot integrity makes
 remote references impossible; no format checker is installed.
+The pinned schema contains no conditional or `format` constraints. Its two
+`x-tclk-*` rail annotations are explicitly consumed by the separate rail gate;
+descriptions and titles remain inert annotations. The package claims complete
+validation of this exact pinned schema, not arbitrary future vocabularies.
 
 The validator independently recomputes the offer ID, binds `accept.ref`, rejects
 self-acceptance, checks deadline and hash/point semantics, and recomputes the
 contract from the complete offer and the accept core. The accept core contains
 `from`, `ref`, `statement`, optional `paymentKey`, and `nonce`; `type` and
 `contract` are excluded. Comparison uses constant-time digest comparison.
+The schema fixes payment keys to lowercase compressed 33-byte hex shape; the
+separate semantic stage additionally applies the pinned reference
+implementation's secp256k1 on-curve rule. It performs verification only and
+does not generate a key or sign.
 
 Canonical derivation is lexicographically sorted, compact JSON with preserved
 array order and lowercase UTF-16-code-unit escapes for non-ASCII input. Raw
@@ -46,6 +57,11 @@ the API does not return canonical or corrected bytes.
 All offer rails are checked. Duplicate or non-sorted arrays fail; legacy aliases
 and unknown/mixed rail sets are quarantined. This does not verify deployment,
 RPC, balance, locking, settlement, or value-bearing maturity.
+
+Deadline checks cover official type/range constraints and the offer-internal
+`claimByMs < refundAfterMs` relation only. The API accepts no reference time and
+never reads a clock, so current-time expiry is `NOT_EVALUATED`, with
+`REFERENCE_TIME_NOT_PROVIDED` and `RUNTIME_CURRENTNESS_OUT_OF_SCOPE` recorded.
 
 ## Public and action boundary
 

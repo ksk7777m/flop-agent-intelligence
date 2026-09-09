@@ -4,7 +4,7 @@
   "title": "Offline TCLK Accept Preflight V1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "domain", "content_label", "artifact_id", "policy_identity", "input_evidence", "stages", "errors", "schema_conformance", "reference_binding", "contract_classification", "contract_equality", "canonicality", "rail_disposition", "overall_disposition", "compatibility", "signature_status", "replay_status", "winner_status", "settlement_status", "ready_to_act", "authorized_to_act", "live_action_enabled", "production_api"],
+  "required": ["schema", "domain", "content_label", "artifact_id", "policy_identity", "input_evidence", "resource_policy", "stages", "errors", "schema_conformance", "reference_binding", "contract_classification", "contract_equality", "canonicality", "rail_disposition", "deadline_evaluation", "overall_disposition", "compatibility", "signature_status", "replay_status", "winner_status", "settlement_status", "ready_to_act", "authorized_to_act", "live_action_enabled", "production_api"],
   "properties": {
     "schema": {"const": "offline-tclk-accept-preflight-v1"},
     "domain": {"const": "OFFLINE_TCLK_ACCEPT_PREFLIGHT\u0000V1"},
@@ -12,7 +12,7 @@
     "artifact_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "policy_identity": {
       "type": "object", "additionalProperties": false,
-      "required": ["policy_version", "repository", "commit_sha", "protocol", "schema_path", "schema_blob_sha1", "schema_sha256", "schema_byte_length", "derivation_sources"],
+      "required": ["policy_version", "repository", "commit_sha", "protocol", "schema_path", "schema_blob_sha1", "schema_sha256", "schema_byte_length", "derivation_snapshot"],
       "properties": {
         "policy_version": {"const": "offline-tclk-accept-preflight-policy-v1"},
         "repository": {"const": "flop-labs/tclk"},
@@ -22,7 +22,13 @@
         "schema_blob_sha1": {"const": "13e3ab92a698086df65c3be98385d546ff0bb99e"},
         "schema_sha256": {"const": "17071a2b3b21e8484cac9da7976088f3700e6fb6c1372268d4756b61ddd60c70"},
         "schema_byte_length": {"const": 6070},
-        "derivation_sources": {"const": ["SPEC.md", "src/frames.ts", "tests/vectors.test.ts"]}
+        "derivation_snapshot": {
+          "const": {
+            "spec": {"path": "SPEC.md", "blob_sha1": "99e3e677295354b88fe49efa69f84b1b78a1036c", "sha256": "f01b46edf747606402979e5bf09193e3d7032217461bf5af2135241e5d940b62", "byte_length": 31051},
+            "reference": {"path": "src/frames.ts", "blob_sha1": "0c27a9aaaefe2965725384adfd383405f9c2cd3a", "sha256": "b8077cdd2b4210f0c696ac0e98fb8fe8be9c53ba998d0f671a454829c42bfb97", "byte_length": 19276},
+            "golden_vector": {"path": "tests/vectors.test.ts", "blob_sha1": "42b221894d4c34a879d9f8812bc86fb8237f15a0", "sha256": "c60f109ba26547c6be0795b0eb66a861a96a7d68a36885a28f318e69a1cebb96", "byte_length": 3604}
+          }
+        }
       }
     },
     "input_evidence": {
@@ -30,6 +36,15 @@
       "properties": {
         "offer": {"$ref": "#/$defs/inputIdentity"}, "accept": {"$ref": "#/$defs/inputIdentity"},
         "hash_role": {"const": "EVIDENCE_IDENTITY_ONLY_NOT_AUTHORITY_OR_SIGNING_TARGET"}
+      }
+    },
+    "resource_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["basis", "max_bytes_per_input", "preparse_byte_gate"],
+      "properties": {
+        "basis": {"const": "LOCAL_RESOURCE_SAFETY_POLICY_NOT_OFFICIAL_SCHEMA"},
+        "max_bytes_per_input": {"const": 4096},
+        "preparse_byte_gate": {"const": true}
       }
     },
     "stages": {
@@ -63,6 +78,16 @@
         "status": {"enum": ["NOT_EVALUATED", "ALL_KNOWN", "DUPLICATE_RAILS", "ORDER_AMBIGUITY", "MALFORMED_OR_ALIAS", "UNKNOWN_PRESENT"]},
         "rail_count": {"type": ["integer", "null"], "minimum": 0, "maximum": 32},
         "maturity": {"const": "VALUE_BEARING_VERIFICATION_NOT_PERFORMED"}
+      }
+    },
+    "deadline_evaluation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_and_relative_order", "current_time_expiry", "reference_time", "runtime_currentness"],
+      "properties": {
+        "schema_and_relative_order": {"enum": ["NOT_EVALUATED", "VALID"]},
+        "current_time_expiry": {"const": "NOT_EVALUATED"},
+        "reference_time": {"const": "REFERENCE_TIME_NOT_PROVIDED"},
+        "runtime_currentness": {"const": "RUNTIME_CURRENTNESS_OUT_OF_SCOPE"}
       }
     },
     "overall_disposition": {"enum": ["PREFLIGHT_NOT_PERFORMED", "PREFLIGHT_PASS", "PREFLIGHT_FAIL", "PREFLIGHT_QUARANTINED"]},

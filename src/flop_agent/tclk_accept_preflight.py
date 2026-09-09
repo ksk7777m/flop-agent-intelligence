@@ -12,7 +12,9 @@ from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 
-from .tclk_schema_evidence import COMMIT, SCHEMA_BLOB, SCHEMA_SHA256, SCHEMA_SIZE, load_pinned_evidence
+from .tclk_schema_evidence import (COMMIT, FRAMES_BLOB, FRAMES_SHA256, FRAMES_SIZE,
+    SCHEMA_BLOB, SCHEMA_SHA256, SCHEMA_SIZE, SPEC_BLOB, SPEC_SHA256, SPEC_SIZE,
+    VECTORS_BLOB, VECTORS_SHA256, VECTORS_SIZE, load_pinned_evidence)
 
 SCHEMA = "offline-tclk-accept-preflight-v1"
 DOMAIN = "OFFLINE_TCLK_ACCEPT_PREFLIGHT\x00V1"
@@ -141,6 +143,8 @@ def _parse(raw: bytes) -> Mapping[str, Any]:
         return result
 
     def integer(value: str) -> int:
+        if value == "-0":
+            raise _InputError("NUMERIC_REPRESENTATION_INVALID")
         if len(value.lstrip("-")) > 16:
             raise _InputError("NUMERIC_REPRESENTATION_INVALID")
         parsed = int(value)
@@ -168,6 +172,8 @@ def _parse(raw: bytes) -> Mapping[str, Any]:
         if nodes > MAX_NODES:
             raise _InputError("STRUCTURE_COMPLEXITY_EXCEEDED")
         if isinstance(child, str):
+            if any(0xD800 <= ord(character) <= 0xDFFF for character in child):
+                raise _InputError("INVALID_UNICODE_SCALAR")
             if len(child) > MAX_STRING_CHARS or len(child.encode("utf-8")) > MAX_STRING_BYTES:
                 raise _InputError("STRING_LIMIT_EXCEEDED")
         elif isinstance(child, list):
@@ -235,9 +241,17 @@ def _base(offer: Any, accept: Any) -> dict[str, Any]:
             "repository": "flop-labs/tclk", "commit_sha": COMMIT, "protocol": "tclk/1",
             "schema_path": "schema/tclk1-frames.schema.json", "schema_blob_sha1": SCHEMA_BLOB,
             "schema_sha256": SCHEMA_SHA256, "schema_byte_length": SCHEMA_SIZE,
-            "derivation_sources": ["SPEC.md", "src/frames.ts", "tests/vectors.test.ts"]},
+            "derivation_snapshot": {
+                "spec": {"path": "SPEC.md", "blob_sha1": SPEC_BLOB, "sha256": SPEC_SHA256,
+                    "byte_length": SPEC_SIZE},
+                "reference": {"path": "src/frames.ts", "blob_sha1": FRAMES_BLOB,
+                    "sha256": FRAMES_SHA256, "byte_length": FRAMES_SIZE},
+                "golden_vector": {"path": "tests/vectors.test.ts", "blob_sha1": VECTORS_BLOB,
+                    "sha256": VECTORS_SHA256, "byte_length": VECTORS_SIZE}}},
         "input_evidence": {"offer": identity(offer), "accept": identity(accept),
             "hash_role": "EVIDENCE_IDENTITY_ONLY_NOT_AUTHORITY_OR_SIGNING_TARGET"},
+        "resource_policy": {"basis": "LOCAL_RESOURCE_SAFETY_POLICY_NOT_OFFICIAL_SCHEMA",
+            "max_bytes_per_input": MAX_INPUT_BYTES, "preparse_byte_gate": True},
         "stages": _stages(), "errors": [],
         "schema_conformance": {"offer": "NOT_EVALUATED", "accept": "NOT_EVALUATED"},
         "reference_binding": "NOT_EVALUATED", "contract_classification": "NOT_EVALUATED",
@@ -247,6 +261,9 @@ def _base(offer: Any, accept: Any) -> dict[str, Any]:
             "local_signing_safety": "LOCAL_SIGNING_SAFETY_CANONICALITY_REQUIRED"},
         "rail_disposition": {"status": "NOT_EVALUATED", "rail_count": None,
             "maturity": "VALUE_BEARING_VERIFICATION_NOT_PERFORMED"},
+        "deadline_evaluation": {"schema_and_relative_order": "NOT_EVALUATED",
+            "current_time_expiry": "NOT_EVALUATED", "reference_time": "REFERENCE_TIME_NOT_PROVIDED",
+            "runtime_currentness": "RUNTIME_CURRENTNESS_OUT_OF_SCOPE"},
         "overall_disposition": "PREFLIGHT_NOT_PERFORMED", "compatibility": "COMPATIBILITY_REVIEW_REQUIRED",
         "signature_status": "NOT_EVALUATED", "replay_status": "NOT_EVALUATED",
         "winner_status": "NOT_EVALUATED", "settlement_status": "NOT_EVALUATED",
@@ -318,6 +335,7 @@ def validate_tclk_accept_preflight(offer_bytes: bytes, accept_bytes: bytes) -> M
         return stop(7, "ACCEPT_FROM_ROLE_INVALID")
     if offer["claimByMs"] >= offer["refundAfterMs"]:
         return stop(7, "OFFER_DEADLINE_ORDER_INVALID")
+    result["deadline_evaluation"]["schema_and_relative_order"] = "VALID"
     lock = offer["lock"]
     if lock == "hash" and not HEX32.fullmatch(accept["statement"]):
         return stop(7, "ACCEPT_STATEMENT_LOCK_MISMATCH")
@@ -371,11 +389,16 @@ __all__ = ["validate_tclk_accept_preflight"]
 
 
 class _SealedModule(types.ModuleType):
-    _protected = frozenset({"ROOT", "SNAPSHOT", "KNOWN_RAILS", "CONTRACT_DOMAIN", "OFFER_DOMAIN",
+    _protected = frozenset({"hashlib", "hmac", "json", "re", "Path", "Draft202012Validator",
+        "ROOT", "SNAPSHOT", "SCHEMA", "DOMAIN", "POLICY_VERSION", "STAGE_IDS", "KNOWN_RAILS",
+        "HEX32", "HEX33", "CANONICAL_RAIL", "CONTRACT_DOMAIN", "OFFER_DOMAIN",
         "COMMIT", "SCHEMA_BLOB", "SCHEMA_SHA256", "SCHEMA_SIZE", "GOLDEN_OFFER_ID",
+        "SPEC_BLOB", "SPEC_SHA256", "SPEC_SIZE", "FRAMES_BLOB", "FRAMES_SHA256", "FRAMES_SIZE",
+        "VECTORS_BLOB", "VECTORS_SHA256", "VECTORS_SIZE",
         "GOLDEN_CONTRACT_ID", "MAX_INPUT_BYTES", "MAX_JSON_DEPTH", "MAX_OBJECT_MEMBERS",
         "MAX_ARRAY_LENGTH", "MAX_STRING_CHARS", "MAX_STRING_BYTES", "MAX_NODES",
-        "SAFE_INTEGER_MAX", "Draft202012Validator", "load_pinned_evidence", "_policy", "_parse",
+        "SAFE_INTEGER_MAX", "load_pinned_evidence", "_InputError", "_policy", "_parse", "_base",
+        "_seal", "_stages",
         "_lexical_bounds", "_point_valid", "_golden", "_offer_id", "_contract_id", "_canonical",
         "validate_tclk_accept_preflight", "__all__"})
     def __setattr__(self, name: str, value: Any) -> None:

@@ -59,6 +59,9 @@ class OfflineTclkAcceptPreflightTests(unittest.TestCase):
         self.assertFalse(result["ready_to_act"])
         self.assertFalse(result["authorized_to_act"])
         self.assertFalse(result["live_action_enabled"])
+        self.assertEqual(result["deadline_evaluation"]["current_time_expiry"], "NOT_EVALUATED")
+        self.assertEqual(result["deadline_evaluation"]["reference_time"], "REFERENCE_TIME_NOT_PROVIDED")
+        self.assertEqual(result["deadline_evaluation"]["runtime_currentness"], "RUNTIME_CURRENTNESS_OUT_OF_SCOPE")
 
     def test_golden_vector_and_independent_recomputation_match(self):
         offer, accept = vector()
@@ -113,6 +116,29 @@ class OfflineTclkAcceptPreflightTests(unittest.TestCase):
         accept["paymentKey"] = "0x" + "02" + "ff" * 32
         self.assertEqual(run(offer, accept)["errors"], ["SECP256K1_POINT_INVALID"])
 
+    def test_payment_key_encoding_and_point_lock_boundaries(self):
+        offer, accept = vector()
+        invalid_shapes = [(None, "ACCEPT_SCHEMA_NONCONFORMANT"),
+                          ("0x" + "04" + "11" * 32, "SECP256K1_POINT_INVALID"),
+                          ("0x04" + "11" * 64, "ACCEPT_SCHEMA_NONCONFORMANT"),
+                          ("0x" + "02" + "11" * 31, "ACCEPT_SCHEMA_NONCONFORMANT"),
+                          ("0X" + "02" + "11" * 32, "ACCEPT_SCHEMA_NONCONFORMANT"),
+                          ("0x" + "02" + "AA" * 32, "ACCEPT_SCHEMA_NONCONFORMANT")]
+        for value, code in invalid_shapes:
+            candidate = copy.deepcopy(accept); candidate["paymentKey"] = value
+            self.assertEqual(run(offer, candidate)["errors"], [code])
+
+        point = "0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        offer["lock"] = "point"; offer["paymentKey"] = point; offer["id"] = preflight._offer_id(offer)
+        accept["ref"] = offer["id"]; accept["statement"] = point
+        accept["contract"] = preflight._contract_id(offer, accept)
+        self.assertEqual(run(offer, accept)["errors"], ["POINT_LOCK_PAYMENT_KEY_REQUIRED"])
+        accept["paymentKey"] = point; accept["contract"] = preflight._contract_id(offer, accept)
+        self.assertEqual(run(offer, accept)["overall_disposition"], "PREFLIGHT_PASS")
+        accept["statement"] = "0x02" + "ff" * 32
+        accept["contract"] = preflight._contract_id(offer, accept)
+        self.assertEqual(run(offer, accept)["errors"], ["SECP256K1_POINT_INVALID"])
+
     def test_schema_type_additional_and_binding_failures(self):
         offer, accept = vector()
         for target, field, value, code in [
@@ -132,10 +158,16 @@ class OfflineTclkAcceptPreflightTests(unittest.TestCase):
         cases = [
             (b'{"type":"offer","type":"offer"}', "DUPLICATE_JSON_KEY"),
             (b'{"type":"offer"} trailing', "MALFORMED_JSON"),
+            (b'{}{}', "MALFORMED_JSON"),
+            (b'{"x":"\\q"}', "MALFORMED_JSON"),
+            (b'{"x":"\x01"}', "MALFORMED_JSON"),
+            (b'{"x":"\\ud800"}', "INVALID_UNICODE_SCALAR"),
             (b"\xff", "INVALID_UTF8"),
             (b"\xef\xbb\xbf{}", "BOM_REJECTED"),
             (b"[1]", "TOP_LEVEL_OBJECT_REQUIRED"),
             (b'{"x":1.0}', "NUMERIC_REPRESENTATION_INVALID"),
+            (b'{"x":1e2}', "NUMERIC_REPRESENTATION_INVALID"),
+            (b'{"x":-0}', "NUMERIC_REPRESENTATION_INVALID"),
             (b'{"x":NaN}', "NUMERIC_REPRESENTATION_INVALID"),
             (b'{"x":Infinity}', "NUMERIC_REPRESENTATION_INVALID"),
             (b'{"x":9007199254740992}', "NUMERIC_REPRESENTATION_INVALID"),
@@ -147,7 +179,9 @@ class OfflineTclkAcceptPreflightTests(unittest.TestCase):
             result = preflight.validate_tclk_accept_preflight(raw, good)
             self.assertEqual(result["errors"], [code])
             self.assert_closed(result)
-        self.assertEqual(preflight.validate_tclk_accept_preflight("{}", good)["errors"], ["INPUT_TYPE_INVALID"])
+        for value in ("{}", bytearray(b"{}"), memoryview(b"{}"), [1], True):
+            self.assertEqual(preflight.validate_tclk_accept_preflight(value, good)["errors"], ["INPUT_TYPE_INVALID"])
+        self.assertEqual(preflight.validate_tclk_accept_preflight(b"", good)["errors"], ["MALFORMED_JSON"])
 
     def test_bool_is_not_integer_and_large_collections_rejected(self):
         offer, accept = vector(); offer["claimByMs"] = True
@@ -173,6 +207,29 @@ class OfflineTclkAcceptPreflightTests(unittest.TestCase):
         reversed_offer["id"] = preflight._offer_id(reversed_offer)
         base_accept["ref"] = reversed_offer["id"]; base_accept["contract"] = preflight._contract_id(reversed_offer, base_accept)
         self.assertEqual(run(reversed_offer, base_accept)["errors"], ["RAIL_ORDER_NONCANONICAL"])
+
+    def test_contract_mutations_exclusions_optional_and_boundary_nonce(self):
+        offer, accept = vector()
+        changed_offer = copy.deepcopy(offer)
+        changed_offer["amount"] = "1000001"
+        changed_offer["id"] = preflight._offer_id(changed_offer)
+        changed_accept = copy.deepcopy(accept); changed_accept["ref"] = changed_offer["id"]
+        self.assertEqual(run(changed_offer, changed_accept)["errors"], ["ACCEPT_CONTRACT_RECOMPUTATION_MISMATCH"])
+
+        changed_accept = copy.deepcopy(accept); changed_accept["nonce"] = "0011223344556678"
+        self.assertEqual(run(offer, changed_accept)["errors"], ["ACCEPT_CONTRACT_RECOMPUTATION_MISMATCH"])
+        self.assertEqual(preflight._contract_id(offer, accept),
+                         preflight._contract_id(offer, {**accept, "contract": "0x" + "00" * 32}))
+        self.assertEqual(preflight._contract_id(offer, accept),
+                         preflight._contract_id(offer, {**accept, "type": "excluded"}))
+
+        key = "0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        with_key = copy.deepcopy(accept); with_key["paymentKey"] = key
+        self.assertNotEqual(preflight._contract_id(offer, accept), preflight._contract_id(offer, with_key))
+        for nonce in ("00000000", "0" * 64):
+            candidate = copy.deepcopy(accept); candidate["nonce"] = nonce
+            candidate["contract"] = preflight._contract_id(offer, candidate)
+            self.assertEqual(run(offer, candidate)["overall_disposition"], "PREFLIGHT_PASS")
 
     def test_all_rails_duplicate_unknown_and_mixed(self):
         for rails, code, disposition in [
@@ -216,6 +273,8 @@ class OfflineTclkAcceptPreflightTests(unittest.TestCase):
             preflight.SNAPSHOT = Path("elsewhere")
         with self.assertRaises(AttributeError):
             preflight.CONTRACT_DOMAIN = b"replacement"
+        with self.assertRaises(AttributeError):
+            preflight.hashlib = object()
 
     def test_schema_index_and_compatibility_manifest(self):
         index = json.loads(Path("schemas/index.json").read_text())
