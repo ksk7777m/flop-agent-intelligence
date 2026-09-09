@@ -12,6 +12,9 @@ chronology artifact, which must contain exactly the complete candidate set,
 declare unique ordering, and bind the offer and candidate-set digests. The
 decision additionally binds the exact completeness and chronology bytes, policy
 digest, offer, candidate set, selected commitment, nonce, and freshness window.
+The replay identity consumes the decision nonce at the authority-version and
+key scope. Changing the offer, candidate set, policy, or selected winner cannot
+make the same authority nonce reusable.
 
 Both local authority manifests are intentionally empty in production. Tests use
 only in-memory ephemeral keys. Until a reviewed public winner authority is

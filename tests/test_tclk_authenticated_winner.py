@@ -22,6 +22,8 @@ class AuthenticatedWinnerTests(unittest.TestCase):
  def test_completeness_missing_invalid_and_cross_offer_rejected(self):
   for raw in (b"",b"{}",canonical({**json.loads(self.completeness),"completeness":"COMPLETENESS_NOT_ESTABLISHED"})):self.assertEqual(self.assess(completeness=raw)["winner"],"GLOBAL_WINNER_UNRESOLVED")
   changed=self.offer+b" ";self.assertEqual(self.assess(offer=changed)["errors"],["COMPLETENESS_INVALID"])
+  self.assertEqual(self.assess(transcript=self.transcript+b" ")["errors"],["COMPLETENESS_INVALID"])
+  c,d=self.artifacts(chron_changes={"offer_sha256":"0"*64});self.assertEqual(self.assess(c,d)["errors"],["WINNER_DIGEST_MISMATCH"])
  def test_empty_production_unknown_wrong_key_policy_and_expiry(self):
   c,d=self.artifacts();self.assertEqual(winner.assess_authenticated_winner(self.offer,self.transcript,self.completeness,c,d,b"[]")["errors"],["WINNER_AUTHORITY_UNKNOWN"])
   self.assertEqual(self.assess(manifest=canonical({"schema":"tclk-winner-authorities-v1","policy_revision":winner.POLICY,"authorities":[]}))["errors"],["WINNER_AUTHORITY_UNKNOWN"])
@@ -38,8 +40,13 @@ class AuthenticatedWinnerTests(unittest.TestCase):
   c,d=self.artifacts();v=json.loads(c);v["ordered_candidates"].reverse();self.assertEqual(self.assess(canonical(v),d)["errors"],["WINNER_SIGNATURE_INVALID"])
   c,d=self.artifacts(decision_changes={"chronology_sha256":"0"*64});self.assertEqual(self.assess(c,d)["errors"],["WINNER_DIGEST_MISMATCH"])
  def test_replay_conflicting_decision_nonce_bool_and_ambiguity(self):
-  c,d=self.artifacts();r=self.assess(c,d);decision=json.loads(d);rid=hashlib.sha256(canonical({"authority_id":decision["authority_id"],"decision_nonce":decision["decision_nonce"],"offer_sha256":decision["offer_sha256"],"candidate_set_sha256":self.set_sha,"policy_sha256":winner.POLICY_SHA256})).hexdigest();self.assertEqual(self.assess(c,d,replay=canonical([rid]))["errors"],["WINNER_REPLAY_DETECTED"])
+  c,d=self.artifacts();decision=json.loads(d);rid=hashlib.sha256(canonical({"authority_id":decision["authority_id"],"authority_version":decision["authority_version"],"key_id":decision["key_id"],"decision_nonce":decision["decision_nonce"]})).hexdigest();self.assertEqual(self.assess(c,d,replay=canonical([rid]))["errors"],["WINNER_REPLAY_DETECTED"])
+  # The authority-scoped nonce stays consumed even when mutable decision
+  # bindings differ; it cannot authorize another candidate set or winner.
+  conflicting={**decision,"offer_sha256":"0"*64,"candidate_set_sha256":"1"*64,"policy_sha256":"2"*64,"winner_commitment":"3"*64};self.assertEqual(winner._replay_id(conflicting),rid)
   c,d=self.artifacts(decision_changes={"decision_nonce":True});self.assertEqual(self.assess(c,d)["errors"],["ARTIFACT_SCHEMA_INVALID"])
+  for nonce in (1,1.0,"x"*129):
+   c,d=self.artifacts(decision_changes={"decision_nonce":nonce});self.assertEqual(self.assess(c,d)["errors"],["ARTIFACT_SCHEMA_INVALID"])
   c,d=self.artifacts(winner_id=self.ids[1]);self.assertEqual(self.assess(c,d)["errors"],["WINNER_AMBIGUOUS"])
  def test_schema_privacy_reachability_and_escalation_rejection(self):
   r=self.assess()
@@ -55,10 +62,19 @@ class AuthenticatedWinnerTests(unittest.TestCase):
   with self.assertRaises(Exception):winner._validate(forged)
   forged=copy.deepcopy(r);forged["stages"][0]["state"]="NOT_EVALUATED";forged["artifact_id"]=winner._hash(winner._canon({k:v for k,v in forged.items() if k!="artifact_id"}))
   with self.assertRaises(Exception):winner._validate(forged)
+  for field,value in (("candidate_set","CANDIDATE_SET_UNRESOLVED"),("winner_authority","WINNER_AUTHORITY_UNVERIFIED"),("policy","POLICY_UNVERIFIED"),("chronology","CHRONOLOGY_AUTHORITY_MISSING"),("uniqueness","WINNER_UNRESOLVED"),("replay","NOT_EVALUATED")):
+   forged=copy.deepcopy(r);forged["winner"]="GLOBAL_WINNER_UNRESOLVED";forged["winner_commitment"]="";forged["errors"]=["WINNER_AMBIGUOUS"];forged[field]=value;forged["stages"]=[{"ordinal":i+1,"stage_id":name,"state":"NOT_EVALUATED"} for i,name in enumerate(winner.STAGES)];forged["artifact_id"]=winner._hash(winner._canon({k:v for k,v in forged.items() if k!="artifact_id"}))
+   self.assertTrue(list(Draft202012Validator(json.loads(Path("schemas/tclk-authenticated-winner.v1.json").read_text())).iter_errors(forged)))
+   with self.assertRaises(Exception):winner._validate(forged)
   source=inspect.getsource(winner)
   for word in ("urlopen","requests.","socket.","subprocess.","PrivateKey","post_signed"):self.assertNotIn(word,source)
   self.assertEqual(winner.__all__,["assess_authenticated_winner"])
  def test_manifest_policy_pins_indexes_and_inventory(self):
   self.assertEqual(json.loads(Path("data/tclk_winner_authorities.json").read_bytes())["authorities"],[]);self.assertEqual(hashlib.sha256(Path("data/tclk_winner_authorities.json").read_bytes()).hexdigest(),winner.MANIFEST_SHA256);self.assertEqual(hashlib.sha256(self.policy).hexdigest(),winner.POLICY_SHA256)
   index=json.loads(Path("schemas/index.json").read_text());self.assertIn("schemas/tclk-authenticated-winner.v1.json",{x["path"] for x in index["schemas"]});item=json.loads(Path("data/technocore_compatibility.json").read_text())["tclk_authenticated_winner"];self.assertEqual(item["race_loss"],"NOT_ISSUED")
+ def test_authoritative_order_not_candidate_sort_and_policy_rollback(self):
+  order=list(reversed(self.ids));c,d=self.artifacts(order=order,winner_id=order[0]);self.assertEqual(self.assess(c,d)["winner_commitment"],order[0])
+  manifest=json.loads(self.manifest);manifest["authorities"][0]["policy_version"]="0";self.assertEqual(self.assess(manifest=canonical(manifest))["errors"],["WINNER_POLICY_INVALID"])
+ def test_resource_gates_precede_artifact_parsing(self):
+  oversized=b"{"+b" "*winner.MAX_ARTIFACT_BYTES+b"}";self.assertEqual(self.assess(chron=oversized,decision=b"not-json")["errors"],["INPUT_LIMIT_EXCEEDED"])
 if __name__=="__main__":unittest.main()

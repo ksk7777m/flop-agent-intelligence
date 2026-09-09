@@ -48,6 +48,8 @@ def _signed_ok(value:dict[str,Any],key:bytes,domain:bytes)->bool:
   if len(sig)!=64:return False
   Ed25519PublicKey.from_public_bytes(key).verify(sig,domain+_canon({k:v for k,v in value.items() if k!="signature"}));return True
  except Exception:return False
+def _replay_id(decision:Mapping[str,Any])->str:
+ return _hash(_canon({"authority_id":decision["authority_id"],"authority_version":decision["authority_version"],"key_id":decision["key_id"],"decision_nonce":decision["decision_nonce"]}))
 def _assess(offer:bytes,transcript:bytes,completeness_raw:bytes,chronology_raw:bytes,winner_raw:bytes,replay_raw:bytes,manifest_raw:bytes,policy_raw:bytes,now:int,winner_assessor:Any)->Mapping[str,Any]:
  r=_base((offer,transcript,completeness_raw,chronology_raw,winner_raw,replay_raw));s=r["stages"]
  if any(type(x) is not bytes for x in (offer,transcript,completeness_raw,chronology_raw,winner_raw,replay_raw)) or type(now) is not int:return _stop(r,"INPUT_TYPE_INVALID")
@@ -83,15 +85,18 @@ def _assess(offer:bytes,transcript:bytes,completeness_raw:bytes,chronology_raw:b
  if not _signed_ok(chron,key,CHRONOLOGY_DOMAIN) or not _signed_ok(decision,key,WINNER_DOMAIN):return _stop(r,"WINNER_SIGNATURE_INVALID")
  r["winner_authority"]="WINNER_AUTHORITY_VERIFIED";s[7]["state"]="VERIFIED"
  if decision["offer_sha256"]!=_hash(offer) or chron["offer_sha256"]!=_hash(offer) or decision["candidate_set_sha256"]!=candidate_set_sha or chron["candidate_set_sha256"]!=candidate_set_sha or decision["completeness_sha256"]!=_hash(completeness_raw) or decision["chronology_sha256"]!=_hash(chronology_raw) or decision["policy_sha256"]!=POLICY_SHA256:return _stop(r,"WINNER_DIGEST_MISMATCH")
- s[8]["state"]="VERIFIED"
+ r["chronology"]="AUTHENTICATED_CHRONOLOGY_VERIFIED";s[8]["state"]="VERIFIED"
  if chron["unique"] is not True or len(chron["ordered_candidates"])!=len(ids) or len(set(chron["ordered_candidates"]))!=len(ids) or set(chron["ordered_candidates"])!=set(ids) or not chron["ordered_candidates"] or decision["winner_commitment"]!=chron["ordered_candidates"][0] or decision["winner_commitment"] not in ids:return _stop(r,"WINNER_AMBIGUOUS")
  r["uniqueness"]="UNIQUE_WINNER_VERIFIED";s[9]["state"]="VERIFIED"
- replay_id=_hash(_canon({"authority_id":decision["authority_id"],"decision_nonce":decision["decision_nonce"],"offer_sha256":decision["offer_sha256"],"candidate_set_sha256":candidate_set_sha,"policy_sha256":POLICY_SHA256}))
+ # A nonce is consumed by the issuing authority, not by one particular result.
+ # Keeping mutable decision inputs out of this identity prevents the same nonce
+ # from being reused for a different offer, candidate set, policy, or winner.
+ replay_id=_replay_id(decision)
  if not isinstance(replays,list) or any(not _digest(x) for x in replays):return _stop(r,"WINNER_REPLAY_INVALID")
  if replay_id in replays:return _stop(r,"WINNER_REPLAY_DETECTED")
  if now<chron["issued_at"] or now>chron["expires_at"] or now<decision["issued_at"] or now>decision["expires_at"]:return _stop(r,"WINNER_AUTHORITY_EXPIRED")
  r["replay"]="UNSEEN_IN_PROVIDED_LEDGER";s[10]["state"]="VERIFIED"
- r["chronology"]="AUTHENTICATED_CHRONOLOGY_VERIFIED";r["winner"]="OFFER_GLOBAL_WINNER_VERIFIED";r["winner_commitment"]=decision["winner_commitment"];s[11]["state"]="VERIFIED";s[12]["state"]="BLOCKED";return _seal(r)
+ r["winner"]="OFFER_GLOBAL_WINNER_VERIFIED";r["winner_commitment"]=decision["winner_commitment"];s[11]["state"]="VERIFIED";s[12]["state"]="BLOCKED";return _seal(r)
 def _build(manifest_path:Path,manifest_hash:str,policy_path:Path,policy_hash:str,clock:Any,assessor:Any)->Any:
  def assess_authenticated_winner(offer_bytes:bytes,transcript_bytes:bytes,completeness_artifact_bytes:bytes,chronology_attestation_bytes:bytes,winner_attestation_bytes:bytes,replay_ledger_bytes:bytes)->Mapping[str,Any]:
   try:
@@ -109,12 +114,21 @@ def _validate(v:Any)->None:
  won=v["winner"]=="OFFER_GLOBAL_WINNER_VERIFIED";gates=(v["completeness"]=="OFFER_WIDE_COMPLETENESS_VERIFIED",v["candidate_set"]=="OFFER_GLOBAL_CANDIDATE_SET_VERIFIED",v["winner_authority"]=="WINNER_AUTHORITY_VERIFIED",v["policy"]=="PINNED_POLICY_VERIFIED",v["chronology"]=="AUTHENTICATED_CHRONOLOGY_VERIFIED",v["uniqueness"]=="UNIQUE_WINNER_VERIFIED",len(v["winner_commitment"])==64,v["replay"]=="UNSEEN_IN_PROVIDED_LEDGER")
  if won!=(not v["errors"] and all(gates)) or v["race_loss"]!="NOT_ISSUED" or v["lock"]!="NOT_VERIFIED" or v["settlement"]!="NOT_VERIFIED" or v["ready_to_act"] is not False or v["authorized_to_act"] is not False or v["live_action_enabled"] is not False:raise ValueError("WINNER_STATE_CONTRADICTION")
  if won and ([x["state"] for x in v["stages"][:12]]!=["VERIFIED"]*12 or v["stages"][12]["state"]!="BLOCKED"):raise ValueError("WINNER_STATE_CONTRADICTION")
- if not won and v["stages"][11]["state"]!="NOT_EVALUATED":raise ValueError("WINNER_STATE_CONTRADICTION")
+ if not won:
+  states=[x["state"] for x in v["stages"]]
+  first_not=next((i for i,x in enumerate(states) if x!="VERIFIED"),len(states))
+  if states[:first_not]!=["VERIFIED"]*first_not or states[first_not:]!=["NOT_EVALUATED"]*(len(states)-first_not):raise ValueError("WINNER_STATE_CONTRADICTION")
+ dependencies=(v["candidate_set"]=="OFFER_GLOBAL_CANDIDATE_SET_VERIFIED",v["chronology"]=="AUTHENTICATED_CHRONOLOGY_VERIFIED",v["uniqueness"]=="UNIQUE_WINNER_VERIFIED",v["replay"]=="UNSEEN_IN_PROVIDED_LEDGER")
+ prerequisites=(v["completeness"]=="OFFER_WIDE_COMPLETENESS_VERIFIED",v["winner_authority"]=="WINNER_AUTHORITY_VERIFIED" and v["policy"]=="PINNED_POLICY_VERIFIED",v["chronology"]=="AUTHENTICATED_CHRONOLOGY_VERIFIED",v["uniqueness"]=="UNIQUE_WINNER_VERIFIED")
+ if any(state and not prerequisite for state,prerequisite in zip(dependencies,prerequisites)):raise ValueError("WINNER_STATE_CONTRADICTION")
+ if (v["candidate_count"]>0)!=(v["candidate_set"]=="OFFER_GLOBAL_CANDIDATE_SET_VERIFIED"):raise ValueError("WINNER_STATE_CONTRADICTION")
+ state_stage=((v["completeness"]=="OFFER_WIDE_COMPLETENESS_VERIFIED",3),(v["candidate_set"]=="OFFER_GLOBAL_CANDIDATE_SET_VERIFIED",4),(v["policy"]=="PINNED_POLICY_VERIFIED",6),(v["winner_authority"]=="WINNER_AUTHORITY_VERIFIED",8),(v["chronology"]=="AUTHENTICATED_CHRONOLOGY_VERIFIED",9),(v["uniqueness"]=="UNIQUE_WINNER_VERIFIED",10),(v["replay"]=="UNSEEN_IN_PROVIDED_LEDGER",11))
+ if any(active and any(x["state"]!="VERIFIED" for x in v["stages"][:count]) for active,count in state_stage):raise ValueError("WINNER_STATE_CONTRADICTION")
  for i,(x,n) in enumerate(zip(v["stages"],STAGES),1):
   if type(x["ordinal"]) is not int or x["ordinal"]!=i or x["stage_id"]!=n:raise ValueError("STAGE_GRAMMAR_INVALID")
 __all__=["assess_authenticated_winner"]
 class _Sealed(types.ModuleType):
- _protected=frozenset({"MANIFEST","POLICY_FILE","MANIFEST_SHA256","POLICY_SHA256","SCHEMA","POLICY","CHRONOLOGY_DOMAIN","WINNER_DOMAIN","assess_authenticated_winner","_assess","_validate","__all__"})
+ _protected=frozenset({"MANIFEST","POLICY_FILE","MANIFEST_SHA256","POLICY_SHA256","SCHEMA","POLICY","CHRONOLOGY_DOMAIN","WINNER_DOMAIN","assess_authenticated_winner","_assess","_replay_id","_validate","__all__"})
  def __setattr__(self,n:str,v:Any)->None:
   if n in self._protected and n in self.__dict__:raise AttributeError("winner authority dependencies are sealed")
   super().__setattr__(n,v)
