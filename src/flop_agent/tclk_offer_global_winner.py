@@ -6,19 +6,24 @@ import hmac
 import json
 import sys
 import types
+from pathlib import Path
 from typing import Any, Mapping
 
+from jsonschema import Draft202012Validator
+
 from .tclk_accept_conformance import package_status
-from .tclk_accept_preflight import validate_tclk_accept_preflight
+from .tclk_accept_preflight import MAX_INPUT_BYTES as MAX_OFFER_BYTES, validate_tclk_accept_preflight
 from .tclk_schema_evidence import COMMIT, SCHEMA_BLOB, SCHEMA_SHA256, SPEC_BLOB, SPEC_SHA256
 from .tclk_transcript_boundary import (_canonical as _frame_canonical,
-    DID, GENERATION, NONCE, ROOM, SAFE_INTEGER_MAX, SIGNATURE, RECORD_FIELDS,
+    DID, GENERATION, MAX_TRANSCRIPT_BYTES, NONCE, ROOM, SAFE_INTEGER_MAX, SIGNATURE, RECORD_FIELDS,
     REQUIRED_RECORD_FIELDS, _strict_object, _timestamp, _verify, assess_tclk_transcript)
 
 SCHEMA = "tclk-offer-global-winner-boundary-v1"
 DOMAIN = "TCLK_OFFER_GLOBAL_WINNER_BOUNDARY\x00V1"
 POLICY = "tclk-offer-global-winner-policy-v1"
 MAX_CANDIDATES = 64
+ROOT = Path(__file__).resolve().parents[2]
+RESULT_SCHEMA = ROOT / "schemas" / "tclk-offer-global-winner-boundary.v1.json"
 STAGE_IDS = (
     "OFFER_IDENTITY", "OFFER_SCHEMA_VALIDITY", "CANDIDATE_STRUCTURE",
     "OFFICIAL_ACCEPT_SCHEMA", "SIGNATURE_VALIDITY", "SIGNER_FRAME_FROM_BINDING",
@@ -102,9 +107,11 @@ def _base(offer: Any, transcript: Any) -> dict[str, Any]:
             "hash_role": "CONTENT_FINGERPRINT_NOT_AUTHORITY"},
         "field_report_currentness": {"historical_artifact_id": historical_id,
             "historical_state": "POINT_IN_TIME_REPORTED_NOT_CURRENTLY_ATTESTED",
-            "correction_state": "CORRECTION_REPORTED", "source_evidence": "REQUIRED",
-            "currentness": "NOT_CONFIRMED", "quantitative_impact": "UNRESOLVED",
-            "supersession": "REVIEW_REQUIRED", "conflict": "NOT_ESTABLISHED"},
+            "correction_state": "CORRECTION_REPORTED",
+            "source_evidence": "SOURCE_EVIDENCE_REQUIRED",
+            "currentness": "CURRENTNESS_NOT_CONFIRMED",
+            "quantitative_impact": "QUANTITATIVE_IMPACT_UNRESOLVED",
+            "supersession": "SUPERSESSION_REVIEW_REQUIRED", "conflict": "NOT_ESTABLISHED"},
         "stages": _stages(), "errors": [], "candidate_count": 0, "candidates": [],
         "offer_view": {"identity": "OBSERVED", "schema_validity": "NOT_EVALUATED"},
         "ordering": {"local": "NOT_EVALUATED", "venue_authenticity": "UNKNOWN",
@@ -130,6 +137,12 @@ def _seal(result: dict[str, Any]) -> Mapping[str, Any]:
 
 
 def _validate_result(value: Any) -> None:
+    try:
+        schema = json.loads(RESULT_SCHEMA.read_bytes())
+        Draft202012Validator.check_schema(schema)
+        Draft202012Validator(schema).validate(value)
+    except Exception:
+        raise _BoundaryError("RESULT_SCHEMA_INVALID") from None
     if not isinstance(value, Mapping) or set(value) != TOP_FIELDS:
         raise _BoundaryError("RESULT_FIELD_SET_INVALID")
     stages = value.get("stages")
@@ -195,10 +208,10 @@ def _validate_result(value: Any) -> None:
             or field_report.get("historical_artifact_id") != package_status()["artifact_id"]
             or field_report.get("historical_state") != "POINT_IN_TIME_REPORTED_NOT_CURRENTLY_ATTESTED"
             or field_report.get("correction_state") != "CORRECTION_REPORTED"
-            or field_report.get("source_evidence") != "REQUIRED"
-            or field_report.get("currentness") != "NOT_CONFIRMED"
-            or field_report.get("quantitative_impact") != "UNRESOLVED"
-            or field_report.get("supersession") != "REVIEW_REQUIRED"
+            or field_report.get("source_evidence") != "SOURCE_EVIDENCE_REQUIRED"
+            or field_report.get("currentness") != "CURRENTNESS_NOT_CONFIRMED"
+            or field_report.get("quantitative_impact") != "QUANTITATIVE_IMPACT_UNRESOLVED"
+            or field_report.get("supersession") != "SUPERSESSION_REVIEW_REQUIRED"
             or field_report.get("conflict") != "NOT_ESTABLISHED"):
         raise _BoundaryError("FIELD_REPORT_AUTHORITY_INVALID")
     body = {key: value[key] for key in TOP_FIELDS if key != "artifact_id"}
@@ -210,6 +223,8 @@ def _validate_result(value: Any) -> None:
 def _records(raw: bytes) -> list[Mapping[str, Any]]:
     if type(raw) is not bytes:
         raise _BoundaryError("INPUT_TYPE_INVALID")
+    if len(raw) > MAX_TRANSCRIPT_BYTES:
+        raise _BoundaryError("TRANSCRIPT_LIMIT_EXCEEDED")
     if not raw or not raw.endswith(b"\n") or b"\r" in raw:
         raise _BoundaryError("TRANSCRIPT_PROFILE_INVALID")
     lines = raw[:-1].split(b"\n")
@@ -292,6 +307,9 @@ def assess_offer_global_winner(offer_bytes: bytes, transcript_bytes: bytes) -> M
     if type(offer_bytes) is not bytes or type(transcript_bytes) is not bytes:
         result["errors"] = ["INPUT_TYPE_INVALID"]
         return _seal(result)
+    if len(offer_bytes) > MAX_OFFER_BYTES:
+        result["errors"] = ["OFFER_LIMIT_EXCEEDED"]
+        return _seal(result)
     transcript = assess_tclk_transcript(transcript_bytes)
     result["evidence_boundary"]["transcript"] = transcript["completeness"]
     result["evidence_boundary"]["generation"] = transcript["metadata_evidence"]["generation_state"]
@@ -332,11 +350,13 @@ __all__ = ["assess_offer_global_winner"]
 
 
 class _SealedModule(types.ModuleType):
-    _protected = frozenset({"SCHEMA", "DOMAIN", "POLICY", "MAX_CANDIDATES", "STAGE_IDS", "STAGE_ALLOWED",
+    _protected = frozenset({"SCHEMA", "DOMAIN", "POLICY", "MAX_CANDIDATES", "MAX_OFFER_BYTES",
+        "MAX_TRANSCRIPT_BYTES", "ROOT", "RESULT_SCHEMA", "STAGE_IDS", "STAGE_ALLOWED",
         "TOP_FIELDS", "CANDIDATE_FIELDS", "RECORD_FIELDS", "REQUIRED_RECORD_FIELDS", "DID",
         "GENERATION", "NONCE", "ROOM", "SAFE_INTEGER_MAX", "SIGNATURE",
         "COMMIT", "SCHEMA_BLOB", "SCHEMA_SHA256",
-        "SPEC_BLOB", "SPEC_SHA256", "package_status", "validate_tclk_accept_preflight",
+        "SPEC_BLOB", "SPEC_SHA256", "Path", "Draft202012Validator", "package_status",
+        "validate_tclk_accept_preflight",
         "assess_tclk_transcript", "_strict_object", "_frame_canonical", "_verify", "_canonical",
         "_digest", "_identity", "_stages", "_base", "_seal", "_validate_result", "_records", "_timestamp",
         "_candidate", "assess_offer_global_winner", "__all__"})

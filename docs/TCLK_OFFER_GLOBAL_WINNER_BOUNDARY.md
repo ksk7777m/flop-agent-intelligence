@@ -18,6 +18,18 @@ complete lower/upper boundaries, complete offer-wide source coverage, or a
 durable Replay decision. Consequently the production API cannot emit
 `OFFER_GLOBAL_WINNER_VERIFIED` or definitive race loss.
 
+The closed grammar has these fixed ordinals: `OFFER_IDENTITY`,
+`OFFER_SCHEMA_VALIDITY`, `CANDIDATE_STRUCTURE`, `OFFICIAL_ACCEPT_SCHEMA`,
+`SIGNATURE_VALIDITY`, `SIGNER_FRAME_FROM_BINDING`,
+`OFFER_ACCEPT_REF_BINDING`, `CONTRACT_DERIVATION`, `REPLAY_EVIDENCE`,
+`TRANSCRIPT_SOURCE_COMPLETENESS`, `BOUNDARY_COMPLETENESS`,
+`VENUE_METADATA_AUTHENTICITY`, `VENUE_ORDERING_AUTHENTICITY`,
+`GENERATION_CONSISTENCY`, `CANDIDATE_ELIGIBILITY`, `CONTRACT_LOCAL_VIEW`,
+`GLOBAL_WINNER_UNIQUENESS`, `RACE_CLASSIFICATION`, `LOCK_OBSERVATION`,
+`SETTLEMENT_VERIFICATION`, `MALICIOUSNESS_ASSESSMENT`, `REPUTATION_IMPACT`,
+`READINESS`, and `AUTHORIZATION`. Runtime serialization and semantic validation
+apply the same public Draft 2020-12 schema before artifact issuance.
+
 Unsigned `seq`, `ts`, and `generation`, record position, minimum sequence, and
 earliest timestamp are descriptive local observations only. Reordering,
 deletion, duplication, gaps, regression, equal timestamps, and mixed generation

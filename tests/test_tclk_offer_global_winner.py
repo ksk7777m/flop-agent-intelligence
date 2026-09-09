@@ -1,4 +1,5 @@
 import base64
+import ast
 import copy
 import inspect
 import json
@@ -187,6 +188,12 @@ class OfferGlobalWinnerTests(unittest.TestCase):
                                  (b"{}", b'{"secret":"do-not-leak"\n', "TRANSCRIPT_PARSE_FAILED")):
             result = winner.assess_offer_global_winner(offer, raw)
             self.assertEqual(result["errors"], [code]); self.assertNotIn("do-not-leak", json.dumps(result))
+        result = winner.assess_offer_global_winner(b"x" * (winner.MAX_OFFER_BYTES + 1),
+                                                   transcript(self.records[:1]))
+        self.assertEqual(result["errors"], ["OFFER_LIMIT_EXCEEDED"])
+        result = winner.assess_offer_global_winner(canonical(self.offer),
+            b" " * winner.MAX_TRANSCRIPT_BYTES + b"\n")
+        self.assertEqual(result["errors"], ["TRANSCRIPT_LIMIT_EXCEEDED"])
         first = self.assess(); second = self.assess(); self.assertEqual(first, second)
         unknown = copy.deepcopy(self.records[0]); unknown["extra"] = "untrusted"
         result = self.assess([unknown])
@@ -201,6 +208,9 @@ class OfferGlobalWinnerTests(unittest.TestCase):
         state = result["field_report_currentness"]
         self.assertEqual(state["historical_state"], "POINT_IN_TIME_REPORTED_NOT_CURRENTLY_ATTESTED")
         self.assertEqual(state["correction_state"], "CORRECTION_REPORTED")
+        self.assertEqual(state["source_evidence"], "SOURCE_EVIDENCE_REQUIRED")
+        self.assertEqual(state["currentness"], "CURRENTNESS_NOT_CONFIRMED")
+        self.assertEqual(state["supersession"], "SUPERSESSION_REVIEW_REQUIRED")
         self.assertEqual(state["conflict"], "NOT_ESTABLISHED")
         projected = set(string_values(result))
         for value in ("90.2%", "93.7%", "77%", "9 signed", "1022", "922", "711", "666"):
@@ -215,6 +225,10 @@ class OfferGlobalWinnerTests(unittest.TestCase):
                           "completeness_bool", "callback", "filesystem_path"):
             self.assertNotIn(forbidden, source)
         with self.assertRaises(AttributeError): winner.DOMAIN = "changed"
+        imports = {node.names[0].name.split(".")[0] for node in ast.walk(ast.parse(source))
+                   if isinstance(node, ast.Import)}
+        self.assertTrue(imports.isdisjoint({"socket", "subprocess", "urllib", "requests",
+                                            "httpx", "aiohttp"}))
 
     def test_schema_index_compatibility_and_production_inventory(self):
         index = json.loads(Path("schemas/index.json").read_text())

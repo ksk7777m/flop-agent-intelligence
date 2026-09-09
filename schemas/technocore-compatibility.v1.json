@@ -182,7 +182,7 @@
         "winner": {"const": "GLOBAL_WINNER_UNRESOLVED"},
         "race_loss": {"const": "CANDIDATE_ONLY"},
         "venue_ordering": {"const": "AUTHENTICITY_UNKNOWN"},
-        "field_report_currentness": {"const": "NOT_CONFIRMED"},
+        "field_report_currentness": {"const": "CURRENTNESS_NOT_CONFIRMED"},
         "network": {"const": "NONE"}, "side_effect": {"const": "NONE"},
         "action": {"const": "NO_LIVE_ACTION"}
       }

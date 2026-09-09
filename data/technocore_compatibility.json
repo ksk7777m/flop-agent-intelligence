@@ -144,7 +144,7 @@
     "winner": "GLOBAL_WINNER_UNRESOLVED",
     "race_loss": "CANDIDATE_ONLY",
     "venue_ordering": "AUTHENTICITY_UNKNOWN",
-    "field_report_currentness": "NOT_CONFIRMED",
+    "field_report_currentness": "CURRENTNESS_NOT_CONFIRMED",
     "network": "NONE",
     "side_effect": "NONE",
     "action": "NO_LIVE_ACTION"
