@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-transcript-boundary.v1.json",
+  "title": "TCLK Transcript Completeness and Unsigned Venue Metadata Boundary V1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "domain", "content_label", "artifact_id", "policy_identity", "input_evidence", "resource_policy", "format", "dimensions", "errors", "record_count", "frame_evidence", "metadata_evidence", "replay_indicators", "boundary_evidence", "completeness", "replay", "final_state", "winner", "settlement", "currentness", "reference_time", "compatibility", "ready_to_act", "authorized_to_act", "live_action_enabled", "production_api"],
+  "properties": {
+    "schema": {"const": "tclk-transcript-completeness-boundary-v1"},
+    "domain": {"const": "TCLK_TRANSCRIPT_COMPLETENESS_BOUNDARY\u0000V1"},
+    "content_label": {"const": "PUBLIC_MINIMIZED_TRANSCRIPT_EVIDENCE"},
+    "artifact_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "policy_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["policy_revision", "repository", "commit_sha", "protocol", "schema", "signed_field_coverage", "venue_metadata_profile"],
+      "properties": {
+        "policy_revision": {"const": "tclk-transcript-boundary-policy-v1"}, "repository": {"const": "flop-labs/tclk"},
+        "commit_sha": {"const": "5cc4ab93efbc8999a3a7e1471b639deca25998ea"}, "protocol": {"const": "tclk/1"},
+        "schema": {"const": {"blob_sha1": "13e3ab92a698086df65c3be98385d546ff0bb99e", "sha256": "17071a2b3b21e8484cac9da7976088f3700e6fb6c1372268d4756b61ddd60c70", "byte_length": 6070}},
+        "signed_field_coverage": {"const": {"source": "SPEC.md", "blob_sha1": "99e3e677295354b88fe49efa69f84b1b78a1036c", "sha256": "f01b46edf747606402979e5bf09193e3d7032217461bf5af2135241e5d940b62", "byte_length": 31051, "signed_fields": ["room", "nonce", "text"], "unsigned_venue_metadata": ["seq", "ts", "generation"]}},
+        "venue_metadata_profile": {"const": "LOCAL_EXPORT_PROFILE_SEQ_INTEGER_RFC3339_UTC_V1"}
+      }
+    },
+    "input_evidence": {"$ref": "#/$defs/inputIdentity"},
+    "resource_policy": {"const": {"basis": "LOCAL_RESOURCE_SAFETY_POLICY", "max_transcript_bytes": 262144, "max_record_bytes": 8192, "max_records": 256}},
+    "format": {"const": {"encoding": "STRICT_UTF8", "framing": "LF_TERMINATED_JSON_LINES", "bom": "REJECTED", "empty_lines": "REJECTED", "crlf": "REJECTED", "partial_final_line": "TRUNCATION_DETECTED"}},
+    "dimensions": {
+      "type": "array", "minItems": 22, "maxItems": 22, "items": false,
+      "prefixItems": [
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "TRANSPORT_COMPLETION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "TRANSCRIPT_PARSE"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "RECORD_COUNT_BOUNDS"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "FRAME_SCHEMA_CONFORMANCE"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SIGNATURE_VERIFICATION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SIGNED_PAYLOAD_BINDING"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "DUPLICATE_DETECTION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "REPLAY_VALIDATION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "VENUE_METADATA_PRESENCE"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "VENUE_METADATA_TYPE_VALIDITY"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "INTERNAL_SEQ_CONTINUITY"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "INTERNAL_TIMESTAMP_ORDERING"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "VENUE_METADATA_AUTHENTICITY"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "LOWER_BOUND_COVERAGE"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "UPPER_BOUND_COVERAGE"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "EXPORT_TRUNCATION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SOURCE_SET_COMPLETENESS"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "TRANSCRIPT_COMPLETENESS"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "FINAL_STATE_DERIVATION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "WINNER_VERIFICATION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "SETTLEMENT_VERIFICATION"}}},
+        {"$ref": "#/$defs/dimension", "properties": {"dimension": {"const": "CURRENTNESS_FRESHNESS"}}}
+      ]
+    },
+    "errors": {"type": "array", "maxItems": 2, "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"}},
+    "record_count": {"type": "integer", "minimum": 0, "maximum": 256},
+    "frame_evidence": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/frameEvidence"}},
+    "metadata_evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["seq_presence", "timestamp_presence", "duplicate_state", "seq_state", "timestamp_state", "equal_timestamp_count", "generation_state", "authenticity", "signed"],
+      "properties": {
+        "seq_presence": {"enum": ["NOT_EVALUATED", "PRESENT_ALL"]}, "timestamp_presence": {"enum": ["NOT_EVALUATED", "PRESENT_ALL"]},
+        "duplicate_state": {"enum": ["NOT_EVALUATED", "NONE_OBSERVED", "DUPLICATE_DETECTED"]},
+        "seq_state": {"enum": ["NOT_EVALUATED", "INTERNAL_SEQ_CONTIGUOUS", "INTERNAL_SEQ_GAP_DETECTED", "INTERNAL_SEQ_REGRESSION"]},
+        "timestamp_state": {"enum": ["NOT_EVALUATED", "INTERNAL_TIMESTAMP_NONDECREASING", "TIMESTAMP_REGRESSION"]},
+        "equal_timestamp_count": {"type": "integer", "minimum": 0, "maximum": 255},
+        "generation_state": {"enum": ["NOT_EVALUATED", "GENERATION_ABSENT", "SINGLE_GENERATION_OBSERVED", "MULTIPLE_GENERATIONS_OBSERVED"]},
+        "authenticity": {"const": "UNKNOWN"}, "signed": {"const": false}
+      }
+    },
+    "replay_indicators": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repeated_signed_payload_count", "repeated_nonce_count", "reordered_records", "authority"],
+      "properties": {"repeated_signed_payload_count": {"type": "integer", "minimum": 0, "maximum": 255}, "repeated_nonce_count": {"type": "integer", "minimum": 0, "maximum": 255}, "reordered_records": {"type": "boolean"}, "authority": {"const": "DESCRIPTIVE_ONLY_NOT_DURABLE_REPLAY_STATE"}}
+    },
+    "boundary_evidence": {"const": {"lower": "LOWER_BOUNDARY_UNKNOWN", "upper": "UPPER_BOUNDARY_UNKNOWN", "prefix_truncation": "EXPORT_MAY_BE_PREFIX_TRUNCATED", "suffix_truncation": "EXPORT_MAY_BE_SUFFIX_TRUNCATED"}},
+    "completeness": {"enum": ["NOT_EVALUATED", "COMPLETE", "INCOMPLETE", "PARTIAL", "UNKNOWN"], "not": {"const": "COMPLETE"}},
+    "replay": {"const": "REPLAY_EVIDENCE_REQUIRED"}, "final_state": {"const": "FINAL_STATE_DERIVATION_BLOCKED"},
+    "winner": {"const": "WINNER_UNRESOLVED"}, "settlement": {"const": "SETTLEMENT_UNVERIFIED"},
+    "currentness": {"const": "CURRENTNESS_NOT_EVALUATED"}, "reference_time": {"const": "REFERENCE_TIME_NOT_PROVIDED"},
+    "compatibility": {"const": "COMPATIBILITY_REVIEW_REQUIRED"}, "ready_to_act": {"const": false},
+    "authorized_to_act": {"const": false}, "live_action_enabled": {"const": false},
+    "production_api": {"const": {"classification": "SAFE_PURE_VALIDATOR", "network": "NONE", "filesystem": "FIXED_READ_ONLY", "side_effect": "NONE", "authority": "NONE"}}
+  },
+  "$defs": {
+    "inputIdentity": {"type": "object", "additionalProperties": false, "required": ["byte_length", "sha256"], "properties": {"byte_length": {"type": ["integer", "null"], "minimum": 0}, "sha256": {"type": "string", "pattern": "^(?:[0-9a-f]{64}|UNAVAILABLE)$"}}},
+    "dimension": {"type": "object", "additionalProperties": false, "required": ["dimension", "state"], "properties": {"dimension": {"type": "string"}, "state": {"enum": ["VERIFIED", "FAILED", "INCOMPLETE", "UNKNOWN", "NOT_EVALUATED", "EVIDENCE_REQUIRED"]}}},
+    "frameEvidence": {"type": "object", "additionalProperties": false, "required": ["index", "frame_type", "record_sha256", "signed_payload_sha256", "venue_metadata_sha256", "signature", "signed_payload_binding", "venue_metadata_binding"], "properties": {"index": {"type": "integer", "minimum": 0, "maximum": 255}, "frame_type": {"enum": ["offer", "accept", "lock", "reveal", "refund", "cancel", "receipt", "heartbeat"]}, "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "signed_payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "venue_metadata_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "signature": {"enum": ["VERIFIED", "FAILED"]}, "signed_payload_binding": {"const": "VERIFIED"}, "venue_metadata_binding": {"const": "UNKNOWN"}}}
+  }
+}

@@ -9,7 +9,7 @@
     "source_evidence", "semantic_invariants", "capability_evidence",
     "deployment_observations", "observation_policy_binding", "freshness",
     "flop_specification_authority", "tclk_accept_conformance",
-    "tclk_official_schema_evidence", "offline_tclk_accept_preflight"
+    "tclk_official_schema_evidence", "offline_tclk_accept_preflight", "tclk_transcript_boundary"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -153,6 +153,21 @@
         "network": {"const": "NONE"},
         "side_effect": {"const": "NONE"},
         "authority": {"const": "NONE"},
+        "action": {"const": "NO_LIVE_ACTION"}
+      }
+    },
+    "tclk_transcript_boundary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "policy", "classification", "signed_scope", "venue_metadata", "completeness", "replay", "network", "side_effect", "action"],
+      "properties": {
+        "schema": {"const": "tclk-transcript-completeness-boundary-v1"},
+        "policy": {"const": "tclk-transcript-boundary-policy-v1"},
+        "classification": {"const": "SAFE_PURE_VALIDATOR"},
+        "signed_scope": {"const": "ROOM_NONCE_TEXT"},
+        "venue_metadata": {"const": "SEQ_TS_GENERATION_UNSIGNED_UNTRUSTED"},
+        "completeness": {"const": "FAIL_CLOSED"},
+        "replay": {"const": "EVIDENCE_REQUIRED"},
+        "network": {"const": "NONE"}, "side_effect": {"const": "NONE"},
         "action": {"const": "NO_LIVE_ACTION"}
       }
     }

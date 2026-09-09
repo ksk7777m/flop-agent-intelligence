@@ -108,7 +108,8 @@ Final public-effect API inventory (reviewed 2026-09-08):
   classification, observation retention/predicate-migration ceremony, the
   implemented-disabled manual reobservation plan/status, the descriptive-only
   production reobservation handoff/checklist, the sealed offline TCLK accept
-  preflight pure validator, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
+  preflight pure validator, the offline TCLK transcript signed/unsigned-metadata
+  boundary, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
   payment/Presence-write adapters
 - `DEPRECATED_INTERNAL`: underscore-prefixed fixture mechanisms and their
   private dependency-injecting factories only

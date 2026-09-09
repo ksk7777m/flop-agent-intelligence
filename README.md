@@ -136,6 +136,11 @@ recomputes offer and contract IDs, separates raw canonicality, and checks every
 rail. Its minimized result contains no frame or contract value and never grants
 signing, posting, settlement, readiness, or authorization.
 
+The [TCLK transcript completeness boundary](docs/TCLK_TRANSCRIPT_COMPLETENESS_BOUNDARY.md)
+verifies signed `room|nonce|text` independently from unsigned venue/export
+metadata, detects internal gaps and mutations, and keeps boundary completeness,
+Replay, final state, winner, settlement, and currentness fail-closed.
+
 ## Technocore Runtime Read-only Observation
 
 The sealed one-shot observer fetches only fixed official source IDs, rejects

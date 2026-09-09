@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "TCLK Transcript Completeness and Unsigned Venue Metadata Boundary V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-transcript-boundary.v1.json",
+      "path": "schemas/tclk-transcript-boundary.v1.json",
+      "purpose": "Validates minimized offline transcript evidence while keeping signed frame scope, unsigned venue metadata, replay, completeness, finality, and action authority independent.",
+      "related_endpoint": null
+    },
+    {
       "name": "Offline TCLK Accept Preflight V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/offline-tclk-accept-preflight.v1.json",
       "path": "schemas/offline-tclk-accept-preflight.v1.json",
