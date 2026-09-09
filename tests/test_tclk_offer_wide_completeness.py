@@ -23,7 +23,7 @@ class OfferWideCompletenessTests(unittest.TestCase):
   evidence=self.transcript if transcript_raw is None else transcript_raw;desc=self.descriptor if descriptor is None else descriptor
   context_raw,artifact=self.sealed(context,evidence,desc) if attestation_raw is None else (canonical(self.context_value if context is None else context),attestation_raw)
   verifier=lambda e,d,c,a,r:att._verify(e,d,c,a,r,self.manifest,now)
-  return complete._assess(self.offer_raw,evidence,desc,context_raw,artifact,self.checkpoint if checkpoint is None else checkpoint,replay,verifier,complete.assess_offer_wide_evidence)
+  return complete._assess(self.offer_raw,evidence,desc,context_raw,artifact,self.checkpoint if checkpoint is None else checkpoint,replay,verifier,complete.assess_offer_wide_evidence,complete.assess_offer_global_winner)
  def assert_blocked(self,r):
   self.assertEqual(r["winner"],"GLOBAL_WINNER_UNRESOLVED");self.assertEqual(r["race_loss"],"NOT_ISSUED");self.assertEqual(r["lock"],"NOT_VERIFIED");self.assertEqual(r["settlement"],"NOT_VERIFIED");self.assertFalse(r["ready_to_act"]);self.assertFalse(r["authorized_to_act"]);self.assertFalse(r["live_action_enabled"])
  def test_complete_attested_scope_issues_completeness_only(self):
@@ -48,17 +48,22 @@ class OfferWideCompletenessTests(unittest.TestCase):
   rows=copy.deepcopy(self.rows);rows[1]["seq"]=3;raw=transcript(rows);self.assertEqual(self.assess(transcript_raw=raw,context={**self.context_value,"high_water_seq":3})["errors"],["GAP_UNRESOLVED"])
   rows=copy.deepcopy(self.rows);rows[1]["generation"]="gen-2";raw=transcript(rows);self.assertEqual(self.assess(transcript_raw=raw)["errors"],["GENERATION_MISMATCH"])
  def test_cursor_types_ranges_and_generation(self):
-  cases=(({},"GENERATION_MISMATCH"),({"generation":"gen-2","last_delivered_seq":0},"GENERATION_MISMATCH"),({"generation":"gen-1","last_delivered_seq":True},"CURSOR_INTEGRITY_FAILED"),({"generation":"gen-1","last_delivered_seq":1.0},"CURSOR_INTEGRITY_FAILED"),({"generation":"gen-1","last_delivered_seq":-1},"CURSOR_INTEGRITY_FAILED"),({"generation":"gen-1","last_delivered_seq":9007199254740992},"CURSOR_INTEGRITY_FAILED"))
+  cases=(({},"CURSOR_INTEGRITY_FAILED"),([],"CURSOR_INTEGRITY_FAILED"),({"generation":"gen-1","last_delivered_seq":0,"extra":1},"CURSOR_INTEGRITY_FAILED"),({"generation":"gen-2","last_delivered_seq":0},"GENERATION_MISMATCH"),({"generation":"gen-1","last_delivered_seq":True},"CURSOR_INTEGRITY_FAILED"),({"generation":"gen-1","last_delivered_seq":1.0},"CURSOR_INTEGRITY_FAILED"),({"generation":"gen-1","last_delivered_seq":-1},"CURSOR_INTEGRITY_FAILED"),({"generation":"gen-1","last_delivered_seq":9007199254740992},"CURSOR_INTEGRITY_FAILED"))
   for value,code in cases:self.assertEqual(self.assess(checkpoint=canonical(value))["errors"],[code])
  def test_malformed_record_signer_and_contract_block(self):
   self.assertEqual(self.assess(transcript_raw=self.transcript+b'{"bad":true}\n',context={**self.context_value,"high_water_seq":3})["errors"],["MALFORMED_SCOPE_IMPACT_UNRESOLVED"])
   rows=copy.deepcopy(self.rows);rows[0]["sig"]="A"*86;self.assertEqual(self.assess(transcript_raw=transcript(rows))["errors"],["MALFORMED_SCOPE_IMPACT_UNRESOLVED"])
   rows=copy.deepcopy(self.rows);frame=json.loads(rows[0]["text"].split(" ",1)[1]);frame["contract"]="0x"+"0"*64;rows[0]["text"]="tclk1 "+canonical(frame).decode();self.assertEqual(self.assess(transcript_raw=transcript(rows))["errors"],["MALFORMED_SCOPE_IMPACT_UNRESOLVED"])
+  changed=copy.deepcopy(self.accepts[0]);changed["ref"]="0x"+"0"*64;rows=[record(changed,PAYEE_KEYS[0],1),self.rows[1]];self.assertEqual(self.assess(transcript_raw=transcript(rows))["errors"],["MALFORMED_SCOPE_IMPACT_UNRESOLVED"])
+  unknown={"type":"unknown","from":self.accepts[0]["from"]};rows=[record(unknown,PAYEE_KEYS[0],1),self.rows[1]];self.assertEqual(self.assess(transcript_raw=transcript(rows))["errors"],["MALFORMED_SCOPE_IMPACT_UNRESOLVED"])
  def test_schema_semantics_privacy_and_no_action_reachability(self):
   valid=self.assess()
   for field,value in (("source_attestation","SOURCE_ATTESTATION_INVALID"),("gap","GAP_UNRESOLVED"),("winner","OFFER_GLOBAL_WINNER_VERIFIED")):
    forged=copy.deepcopy(valid);forged[field]=value;forged["artifact_id"]=complete._hash(complete._canon({k:v for k,v in forged.items() if k!="artifact_id"}))
    with self.assertRaises(Exception):complete._validate(forged)
+  forged=copy.deepcopy(valid);forged["stages"][0]["state"]="NOT_EVALUATED";forged["artifact_id"]=complete._hash(complete._canon({k:v for k,v in forged.items() if k!="artifact_id"}))
+  with self.assertRaises(Exception):complete._validate(forged)
+  with self.assertRaises(Exception):Draft202012Validator(json.loads(Path("schemas/tclk-offer-wide-completeness.v1.json").read_text())).validate(forged)
   def leaves(v):
    if isinstance(v,str):yield v
    elif isinstance(v,dict):
@@ -71,6 +76,19 @@ class OfferWideCompletenessTests(unittest.TestCase):
   for word in ("urlopen","requests.","socket.","subprocess.","PrivateKey","post_signed"):self.assertNotIn(word,source)
   self.assertEqual(complete.__all__,["assess_offer_wide_completeness"])
   with self.assertRaises(AttributeError):complete.POLICY="x"
+ def test_failure_paths_are_fixed_and_raw_free(self):
+  cases=[self.assess(attestation_raw=b""),self.assess(context={**self.context_value,"lower_boundary":False}),self.assess(context={**self.context_value,"upper_boundary":False}),self.assess(context={**self.context_value,"truncated":True}),self.assess(checkpoint=canonical([])),self.assess(context={**self.context_value,"retention_loss":True})]
+  forbidden=(self.offer["id"],self.rows[0]["room"],self.rows[0]["sig"],self.rows[0]["ts"],self.accepts[0]["contract"],self.accepts[0]["statement"])
+  for result in cases:
+   rendered=json.dumps(result)
+   for value in forbidden:self.assertNotIn(value,rendered)
+   self.assertEqual(len(result["errors"]),1);self.assertNotIn("Traceback",rendered)
+ def test_resource_limits_stop_before_verification(self):
+  spy=[]
+  verifier=lambda *args:spy.append(args)
+  result=complete._assess(b"x"*(complete.MAX_OFFER_BYTES+1),b"",b"",b"",b"x",b"",b"[]",verifier,lambda *args:None,lambda *args:None)
+  self.assertEqual(result["errors"],["INPUT_LIMIT_EXCEEDED"]);self.assertEqual(spy,[])
+  oversized=b"{"+b"x"*(complete.MAX_RECORD_BYTES)+b"}\n";result=self.assess(transcript_raw=oversized,context={**self.context_value,"first_seq":0,"high_water_seq":0});self.assertEqual(result["errors"],["INPUT_LIMIT_EXCEEDED"])
  def test_schema_index_compatibility_and_production_inventory(self):
   index=json.loads(Path("schemas/index.json").read_text());self.assertIn("schemas/tclk-offer-wide-completeness.v1.json",{x["path"] for x in index["schemas"]})
   manifest=json.loads(Path("data/technocore_compatibility.json").read_text());item=manifest["tclk_offer_wide_completeness"];self.assertEqual(item["classification"],"SAFE_PURE_VALIDATOR");self.assertEqual(item["winner"],"GLOBAL_WINNER_UNRESOLVED")

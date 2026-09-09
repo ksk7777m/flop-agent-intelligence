@@ -66,7 +66,7 @@ class SourceAttestationTests(unittest.TestCase):
         artifact=self.artifact(source_type="MCP_PAGE"); self.assertEqual(self.verify(artifact)["errors"],["SOURCE_ATTESTATION_POLICY_MISMATCH"])
 
     def test_closed_canonical_grammar_bool_float_unknown_and_manifest(self):
-        for field,value in (("attestation_nonce",True),("attestation_nonce",1.0),("acquired_at",True),("expires_at",200.0)):
+        for field,value in (("attestation_nonce",True),("attestation_nonce",False),("attestation_nonce",1.0),("acquired_at",True),("expires_at",200.0)):
             self.assertEqual(self.verify(self.artifact(**{field:value}))["errors"],["SOURCE_ATTESTATION_CANONICAL_INVALID"])
         value=json.loads(self.artifact()); value["extra"]={"raw":"secret-marker"}; raw=canon(value); result=self.verify(raw); self.assertEqual(result["errors"],["SOURCE_ATTESTATION_SCHEMA_INVALID"]); self.assertNotIn("secret-marker",json.dumps(result))
         self.assertEqual(self.verify(manifest=canon({"schema":"bad","policy_revision":att.POLICY,"authorities":[]}))["errors"],["SOURCE_AUTHORITY_MANIFEST_INVALID"])

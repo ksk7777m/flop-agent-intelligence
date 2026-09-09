@@ -6,12 +6,15 @@ from typing import Any, Mapping
 from jsonschema import Draft202012Validator
 from .tclk_accept_preflight import MAX_INPUT_BYTES as MAX_OFFER_BYTES
 from .tclk_offer_wide_evidence import MAX_METADATA_BYTES, MAX_TRANSCRIPT_BYTES, assess_offer_wide_evidence
+from .tclk_offer_global_winner import assess_offer_global_winner
+from .tclk_transcript_boundary import MAX_RECORD_BYTES, MAX_RECORDS, _strict_object
 from .tclk_source_attestation import MAX_ARTIFACT_BYTES, MAX_REPLAY_BYTES, verify_source_attestation
 
 ROOT=Path(__file__).resolve().parents[2]
 RESULT_SCHEMA=ROOT/"schemas/tclk-offer-wide-completeness.v1.json"
 SCHEMA="tclk-offer-wide-completeness-v1";DOMAIN="TCLK_OFFER_WIDE_COMPLETENESS\x00V1";POLICY="tclk-offer-wide-completeness-policy-v1"
 STAGES=("INPUT_BOUNDS","SOURCE_ATTESTATION","SOURCE_SCOPE","GENERATION","CURSOR","LOWER_BOUNDARY","UPPER_BOUNDARY","GAP","TRUNCATION","MALFORMED_SCOPE","RETENTION","ARTIFACT_CONFLICT","COMPLETENESS_ISSUANCE","WINNER_BOUNDARY")
+class _ResourceLimit(ValueError):pass
 
 def _canon(v:Any)->bytes:return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False).encode("ascii")
 def _hash(v:bytes)->str:return hashlib.sha256(v).hexdigest()
@@ -32,12 +35,17 @@ def _records(raw:bytes)->list[dict[str,Any]]:
  rows=[]
  for line in raw.splitlines():
   if not line:continue
-  item=_parse(line)
+  if len(rows)>=MAX_RECORDS or len(line)>MAX_RECORD_BYTES:raise _ResourceLimit
+  try:item=_strict_object(line)
+  except Exception as e:
+   if getattr(e,"code","") in {"RECORD_TOO_LARGE","MEMBER_LIMIT_EXCEEDED"}:raise _ResourceLimit from None
+   raise
+  if _canon(item)!=line:raise ValueError
   if not isinstance(item,dict) or type(item.get("seq")) is not int or not 0<=item["seq"]<=9007199254740991 or not isinstance(item.get("generation"),str):raise ValueError
   rows.append(item)
  return rows
 
-def _assess(offer:bytes,transcript:bytes,descriptor:bytes,context:bytes,attestation:bytes,checkpoint:bytes,replay:bytes,attestation_verifier:Any,wide_assessor:Any)->Mapping[str,Any]:
+def _assess(offer:bytes,transcript:bytes,descriptor:bytes,context:bytes,attestation:bytes,checkpoint:bytes,replay:bytes,attestation_verifier:Any,wide_assessor:Any,winner_assessor:Any)->Mapping[str,Any]:
  r=_base((offer,transcript,descriptor,context,attestation,checkpoint,replay));s=r["stages"]
  if any(type(x) is not bytes for x in (offer,transcript,descriptor,context,attestation,checkpoint,replay)):return _stop(r,"INPUT_TYPE_INVALID")
  if len(offer)>MAX_OFFER_BYTES or len(transcript)>MAX_TRANSCRIPT_BYTES or len(descriptor)>MAX_METADATA_BYTES or len(context)>MAX_METADATA_BYTES or len(attestation)>MAX_ARTIFACT_BYTES or len(checkpoint)>MAX_METADATA_BYTES or len(replay)>MAX_REPLAY_BYTES:return _stop(r,"INPUT_LIMIT_EXCEEDED")
@@ -46,13 +54,17 @@ def _assess(offer:bytes,transcript:bytes,descriptor:bytes,context:bytes,attestat
  attested=attestation_verifier(transcript,descriptor,context,attestation,replay)
  if attested.get("source_attestation")!="SOURCE_ATTESTATION_VERIFIED":return _stop(r,"SOURCE_ATTESTATION_INVALID")
  r["source_attestation"]="SOURCE_ATTESTATION_VERIFIED";s[1]["state"]="VERIFIED"
- try:ctx=_parse(context);cp=_parse(checkpoint);rows=_records(transcript)
+ try:ctx=_parse(context);cp=_parse(checkpoint)
+ except Exception:return _stop(r,"MALFORMED_SCOPE_IMPACT_UNRESOLVED")
+ try:rows=_records(transcript)
+ except _ResourceLimit:return _stop(r,"INPUT_LIMIT_EXCEEDED")
  except Exception:return _stop(r,"MALFORMED_SCOPE_IMPACT_UNRESOLVED")
  if ctx.get("acquisition_scope")!="OFFER_WIDE" or ctx.get("source_type") not in {"DIRECT_EXPORT","LOCAL_ARCHIVE"} or not hmac.compare_digest(ctx.get("offer_sha256",""),_hash(offer)):
   return _stop(r,"SOURCE_SCOPE_INSUFFICIENT")
  r["source_scope"]="OFFER_WIDE_SCOPE_VERIFIED";s[2]["state"]="VERIFIED"
  generation=ctx.get("generation")
- if not isinstance(cp,dict) or set(cp)!={"generation","last_delivered_seq"} or cp.get("generation")!=generation or any(row.get("generation")!=generation for row in rows):return _stop(r,"GENERATION_MISMATCH")
+ if not isinstance(cp,dict) or set(cp)!={"generation","last_delivered_seq"}:return _stop(r,"CURSOR_INTEGRITY_FAILED")
+ if cp.get("generation")!=generation or any(row.get("generation")!=generation for row in rows):return _stop(r,"GENERATION_MISMATCH")
  r["generation"]="GENERATION_VERIFIED";s[3]["state"]="VERIFIED"
  if type(cp.get("last_delivered_seq")) is not int or not 0<=cp["last_delivered_seq"]<=9007199254740991:return _stop(r,"CURSOR_INTEGRITY_FAILED")
  r["cursor"]="CURSOR_INTEGRITY_VERIFIED";s[4]["state"]="VERIFIED"
@@ -66,8 +78,8 @@ def _assess(offer:bytes,transcript:bytes,descriptor:bytes,context:bytes,attestat
  if ctx.get("truncated") is not False or ctx.get("dropped_count")!=0 or ctx.get("bounded_page") is not False:return _stop(r,"TRUNCATION_DETECTED")
  r["truncation"]="NO_TRUNCATION_ATTESTED";s[8]["state"]="VERIFIED"
  source=_canon({"source_type":ctx["source_type"],"generation":generation,"first_seq":ctx["first_seq"],"last_seq":ctx["high_water_seq"],"truncated":False,"lower_boundary":True,"upper_boundary":True})
- wide=wide_assessor(offer,transcript,source,checkpoint);r["record_count"]=wide.get("record_count",0)
- if wide.get("errors") or wide.get("quarantined_count")!=0 or wide.get("signed_records")!="VERIFIED":return _stop(r,"MALFORMED_SCOPE_IMPACT_UNRESOLVED")
+ wide=wide_assessor(offer,transcript,source,checkpoint);winner=winner_assessor(offer,transcript);r["record_count"]=wide.get("record_count",0)
+ if wide.get("errors") or wide.get("quarantined_count")!=0 or wide.get("signed_records")!="VERIFIED" or winner.get("errors") or any(x.get("eligibility")!="LOCAL_ACCEPT_ELIGIBLE" for x in winner.get("candidates",[])):return _stop(r,"MALFORMED_SCOPE_IMPACT_UNRESOLVED")
  r["malformed"]="NO_MALFORMED_SCOPE_IMPACT";s[9]["state"]="VERIFIED"
  if ctx.get("retention_loss") is not False:return _stop(r,"RETENTION_LOSS_CONFIRMED")
  r["retention"]="NO_RETENTION_LOSS_ATTESTED";s[10]["state"]="VERIFIED"
@@ -76,11 +88,11 @@ def _assess(offer:bytes,transcript:bytes,descriptor:bytes,context:bytes,attestat
  r["completeness"]="OFFER_WIDE_COMPLETENESS_VERIFIED";s[12]["state"]="VERIFIED";s[13]["state"]="BLOCKED"
  return _seal(r)
 
-def _build(verifier:Any,wide:Any)->Any:
+def _build(verifier:Any,wide:Any,winner:Any)->Any:
  def assess_offer_wide_completeness(offer_bytes:bytes,transcript_bytes:bytes,source_descriptor_bytes:bytes,acquisition_context_bytes:bytes,attestation_bytes:bytes,checkpoint_bytes:bytes,replay_ledger_bytes:bytes)->Mapping[str,Any]:
-  return _assess(offer_bytes,transcript_bytes,source_descriptor_bytes,acquisition_context_bytes,attestation_bytes,checkpoint_bytes,replay_ledger_bytes,verifier,wide)
+  return _assess(offer_bytes,transcript_bytes,source_descriptor_bytes,acquisition_context_bytes,attestation_bytes,checkpoint_bytes,replay_ledger_bytes,verifier,wide,winner)
  return assess_offer_wide_completeness
-assess_offer_wide_completeness=_build(verify_source_attestation,assess_offer_wide_evidence)
+assess_offer_wide_completeness=_build(verify_source_attestation,assess_offer_wide_evidence,assess_offer_global_winner)
 
 def _validate(v:Any)->None:
  try:
@@ -91,6 +103,8 @@ def _validate(v:Any)->None:
  complete=v["completeness"]=="OFFER_WIDE_COMPLETENESS_VERIFIED"
  gates=(v["source_attestation"]=="SOURCE_ATTESTATION_VERIFIED",v["source_scope"]=="OFFER_WIDE_SCOPE_VERIFIED",v["generation"]=="GENERATION_VERIFIED",v["cursor"]=="CURSOR_INTEGRITY_VERIFIED",v["lower_boundary"]=="LOWER_BOUNDARY_VERIFIED",v["upper_boundary"]=="UPPER_BOUNDARY_VERIFIED",v["gap"]=="NO_GAP_VERIFIED",v["truncation"]=="NO_TRUNCATION_ATTESTED",v["malformed"]=="NO_MALFORMED_SCOPE_IMPACT",v["retention"]=="NO_RETENTION_LOSS_ATTESTED",v["artifact_conflict"]=="NO_SOURCE_CONFLICT_ATTESTED")
  if complete != (not v["errors"] and all(gates)):raise ValueError("COMPLETENESS_STATE_CONTRADICTION")
+ if complete and ([x["state"] for x in v["stages"][:13]]!=["VERIFIED"]*13 or v["stages"][13]["state"]!="BLOCKED"):raise ValueError("COMPLETENESS_STATE_CONTRADICTION")
+ if not complete and v["stages"][12]["state"]!="NOT_EVALUATED":raise ValueError("COMPLETENESS_STATE_CONTRADICTION")
  if v["winner"]!="GLOBAL_WINNER_UNRESOLVED" or v["race_loss"]!="NOT_ISSUED" or v["lock"]!="NOT_VERIFIED" or v["settlement"]!="NOT_VERIFIED" or v["ready_to_act"] is not False or v["authorized_to_act"] is not False or v["live_action_enabled"] is not False:raise ValueError("AUTHORITY_ESCALATION_REJECTED")
  for i,(item,name) in enumerate(zip(v["stages"],STAGES),1):
   if type(item["ordinal"]) is not int or item["ordinal"]!=i or item["stage_id"]!=name:raise ValueError("STAGE_GRAMMAR_INVALID")
