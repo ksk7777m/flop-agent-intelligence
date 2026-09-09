@@ -4,6 +4,13 @@
   "base_url": "https://ksk7777m.github.io/flop-agent-intelligence/",
   "schemas": [
     {
+      "name": "Production Reobservation Handoff V1",
+      "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/production-reobservation-handoff.v1.json",
+      "path": "schemas/production-reobservation-handoff.v1.json",
+      "purpose": "Validates descriptive human review, fail-closed activation checklist, and disabled operator handoff status.",
+      "related_endpoint": null
+    },
+    {
       "name": "Manual One-shot Read-only Reobservation Runner V1",
       "url": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/manual-readonly-reobservation-runner.v1.json",
       "path": "schemas/manual-readonly-reobservation-runner.v1.json",

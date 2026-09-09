@@ -133,6 +133,14 @@ durable journal only in fixture tests. Production is implemented-disabled: it
 has no permit issuer, execute API, CLI, scheduler or activation switch, and
 performs zero live GETs. See [Manual Read-only Reobservation Runner](docs/MANUAL_READONLY_REOBSERVATION_RUNNER.md).
 
+## Production Reobservation Handoff Specification
+
+The descriptive handoff model binds a reviewed commit to the fixed runner,
+plan, predicate, source order and journal identities, and publishes a closed,
+fail-closed activation checklist. It creates no permit or execution authority;
+production issuers, execute API, CLI, scheduler and live GET remain absent. See
+[Production Reobservation Handoff](docs/PRODUCTION_REOBSERVATION_HANDOFF.md).
+
 ## Wire Evidence, Signer, and Verifier Hardening V1
 
 The offline hardening layer preserves nonce values as exact decimal strings,

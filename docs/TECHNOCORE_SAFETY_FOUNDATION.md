@@ -106,7 +106,8 @@ Final public-effect API inventory (reviewed 2026-09-08):
 - `SAFE_STATIC`: remote classifiers/minimized evidence/receipt verification,
   dashboard text rendering, offline Technocore 0.13.0 transport evidence
   classification, observation retention/predicate-migration ceremony, the
-  implemented-disabled manual reobservation plan/status, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
+  implemented-disabled manual reobservation plan/status, the descriptive-only
+  production reobservation handoff/checklist, plus disabled subprocess/filesystem/secret/MCP/wallet/claim/
   payment/Presence-write adapters
 - `DEPRECATED_INTERNAL`: underscore-prefixed fixture mechanisms and their
   private dependency-injecting factories only
