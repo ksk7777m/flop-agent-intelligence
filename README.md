@@ -108,6 +108,13 @@ source, rules, referral, wallet-event, and network-use commitments. Production
 authorities are empty; attribution, rank, reward, lottery, agent airdrop, and
 all referral actions remain unverified or disabled.
 
+The offline [Delegation Signature-first Resolution boundary](docs/DELEGATION_SIGNATURE_FIRST_RESOLUTION.md)
+verifies root DID signatures before expiry filtering and per-agent lossless
+nonce ranking. Forged records never supersede valid records, provided history
+remains incomplete, production root authorities are empty, and delegation
+validity never authorizes network, signing, wallet, faucet, inference, or claim
+actions.
+
 ## FLOP Specification Authority and Tokenomics Conflict
 
 The closed [specification authority registry](docs/FLOP_SPEC_AUTHORITY_TOKENOMICS_CONFLICT.md)

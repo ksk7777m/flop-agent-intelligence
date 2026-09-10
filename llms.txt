@@ -68,3 +68,5 @@ Official sources:
 
 Recommended next reads: ai-onboarding.json, AI_ONBOARDING.md, SKILL.md, AGENTS.md,
 docs/OBSERVATORY_API.md, api/status.json.
+
+Delegation resolution: docs/DELEGATION_SIGNATURE_FIRST_RESOLUTION.md (offline, signature-first, incomplete-history, no action authority).

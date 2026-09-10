@@ -10,7 +10,7 @@
     "deployment_observations", "observation_policy_binding", "freshness",
     "flop_specification_authority", "tclk_accept_conformance",
     "tclk_official_schema_evidence", "offline_tclk_accept_preflight", "tclk_transcript_boundary",
-    "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation", "tclk_offer_wide_completeness", "tclk_authenticated_winner", "flop_testnet_readiness", "flop_kol_referral_readiness"
+    "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation", "tclk_offer_wide_completeness", "tclk_authenticated_winner", "flop_testnet_readiness", "flop_kol_referral_readiness", "delegation_signature_first_resolution"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -213,6 +213,10 @@
     "flop_kol_referral_readiness": {
       "type":"object","additionalProperties":false,"required":["schema","classification","program","authority_manifest","referral","leaderboard","attribution","reward","network","action"],
       "properties":{"schema":{"const":"flop-kol-referral-readiness-v1"},"classification":{"const":"SAFE_PURE_OFFLINE_VALIDATOR"},"program":{"const":"ANNOUNCED_DETAILS_PENDING"},"authority_manifest":{"const":"EMPTY_FAIL_CLOSED"},"referral":{"const":"NOT_ISSUED_CONFIRMED"},"leaderboard":{"const":"NOT_PUBLISHED_CONFIRMED"},"attribution":{"const":"NOT_ESTABLISHED"},"reward":{"const":"UNRESOLVED"},"network":{"const":"NONE"},"action":{"const":"NO_LIVE_ACTION"}}
+    },
+    "delegation_signature_first_resolution": {
+      "type":"object","additionalProperties":false,"required":["schema","classification","base_feature","signature_first_fix","authority_registry","history_completeness","network","action"],
+      "properties":{"schema":{"const":"delegation-signature-first-resolution-v1"},"classification":{"const":"SAFE_PURE_OFFLINE_VALIDATOR"},"base_feature":{"const":"UPSTREAM_719_MERGED"},"signature_first_fix":{"const":"UPSTREAM_783_OPEN_NOT_RUNTIME_GUARANTEE"},"authority_registry":{"const":"EMPTY_FAIL_CLOSED"},"history_completeness":{"const":"NOT_ESTABLISHED"},"network":{"const":"NONE"},"action":{"const":"NO_LIVE_ACTION"}}
     }
   },
   "$defs": {

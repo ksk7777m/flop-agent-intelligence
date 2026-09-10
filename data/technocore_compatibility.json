@@ -209,5 +209,15 @@
     "reward": "UNRESOLVED",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "delegation_signature_first_resolution": {
+    "schema": "delegation-signature-first-resolution-v1",
+    "classification": "SAFE_PURE_OFFLINE_VALIDATOR",
+    "base_feature": "UPSTREAM_719_MERGED",
+    "signature_first_fix": "UPSTREAM_783_OPEN_NOT_RUNTIME_GUARANTEE",
+    "authority_registry": "EMPTY_FAIL_CLOSED",
+    "history_completeness": "NOT_ESTABLISHED",
+    "network": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }
