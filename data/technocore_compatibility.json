@@ -185,5 +185,17 @@
     "race_loss": "NOT_ISSUED",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "flop_testnet_readiness": {
+    "schema": "flop-testnet-readiness-v1",
+    "classification": "SAFE_PURE_OFFLINE_VALIDATOR",
+    "yellow_paper": "V0.5.0_OFFICIAL_DRAFT_UPDATED_2026-09-05",
+    "technocore": "0.13.0",
+    "faucet": "NOT_LIVE_CONFIRMED",
+    "claim_endpoint": "NONE_CONFIRMED",
+    "scoring": "UNRESOLVED",
+    "authority_manifest": "EMPTY_FAIL_CLOSED",
+    "network": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }

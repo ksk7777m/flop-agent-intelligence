@@ -96,6 +96,12 @@ evidence-ledger interfaces. All official endpoints and runtime parameters remain
 unresolved; no runtime observation, readiness, authorization, signer, or live
 effect is introduced.
 
+The [Testnet, Faucet, and Inference Readiness boundary](docs/FLOP_TESTNET_FAUCET_INFERENCE_READINESS.md)
+adds hash-pinned reviewed spec status and commitment-only endpoint provenance.
+Its production authority manifest is empty, raw URLs and inference content are
+rejected, and even verified fixtures stop at human review with every action
+flag false.
+
 ## FLOP Specification Authority and Tokenomics Conflict
 
 The closed [specification authority registry](docs/FLOP_SPEC_AUTHORITY_TOKENOMICS_CONFLICT.md)

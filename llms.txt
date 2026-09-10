@@ -31,6 +31,7 @@ Machine-readable URLs:
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-source-attestation.v1.json — offline sealed acquisition-authority and exact-byte provenance verification boundary
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-offer-wide-completeness.v1.json — offline sealed-authority offer-wide completeness issuance boundary; winner remains unresolved
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/tclk-authenticated-winner.v1.json — offline authenticated chronology and coordination-winner issuance boundary
+- https://ksk7777m.github.io/flop-agent-intelligence/schemas/flop-testnet-readiness.v1.json — offline official-source endpoint provenance and inference evidence readiness; no claim or live action
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/status.json — KV allowlist coverage and empty-state status
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/namespaces.json — configured versus successfully observed namespaces
 - https://ksk7777m.github.io/flop-agent-intelligence/api/kv/changes.json — observer-derived hash changes; no raw values

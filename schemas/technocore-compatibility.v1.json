@@ -10,7 +10,7 @@
     "deployment_observations", "observation_policy_binding", "freshness",
     "flop_specification_authority", "tclk_accept_conformance",
     "tclk_official_schema_evidence", "offline_tclk_accept_preflight", "tclk_transcript_boundary",
-    "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation", "tclk_offer_wide_completeness", "tclk_authenticated_winner"
+    "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation", "tclk_offer_wide_completeness", "tclk_authenticated_winner", "flop_testnet_readiness"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -205,6 +205,10 @@
     "tclk_authenticated_winner": {
       "type":"object","additionalProperties":false,"required":["schema","classification","authority","winner","race_loss","network","action"],
       "properties":{"schema":{"const":"tclk-authenticated-winner-v1"},"classification":{"const":"SAFE_PURE_VALIDATOR"},"authority":{"const":"PINNED_WINNER_AUTHORITY_REQUIRED"},"winner":{"const":"CONDITIONALLY_ISSUABLE"},"race_loss":{"const":"NOT_ISSUED"},"network":{"const":"NONE"},"action":{"const":"NO_LIVE_ACTION"}}
+    },
+    "flop_testnet_readiness": {
+      "type":"object","additionalProperties":false,"required":["schema","classification","yellow_paper","technocore","faucet","claim_endpoint","scoring","authority_manifest","network","action"],
+      "properties":{"schema":{"const":"flop-testnet-readiness-v1"},"classification":{"const":"SAFE_PURE_OFFLINE_VALIDATOR"},"yellow_paper":{"const":"V0.5.0_OFFICIAL_DRAFT_UPDATED_2026-09-05"},"technocore":{"const":"0.13.0"},"faucet":{"const":"NOT_LIVE_CONFIRMED"},"claim_endpoint":{"const":"NONE_CONFIRMED"},"scoring":{"const":"UNRESOLVED"},"authority_manifest":{"const":"EMPTY_FAIL_CLOSED"},"network":{"const":"NONE"},"action":{"const":"NO_LIVE_ACTION"}}
     }
   },
   "$defs": {
