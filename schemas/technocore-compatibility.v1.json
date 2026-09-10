@@ -10,7 +10,7 @@
     "deployment_observations", "observation_policy_binding", "freshness",
     "flop_specification_authority", "tclk_accept_conformance",
     "tclk_official_schema_evidence", "offline_tclk_accept_preflight", "tclk_transcript_boundary",
-    "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation", "tclk_offer_wide_completeness", "tclk_authenticated_winner", "flop_testnet_readiness", "flop_kol_referral_readiness", "delegation_signature_first_resolution"
+    "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation", "tclk_offer_wide_completeness", "tclk_authenticated_winner", "flop_testnet_readiness", "flop_kol_referral_readiness", "delegation_signature_first_resolution", "settlement_rail_maturity"
   ],
   "properties": {
     "schema": {"const": "technocore-compatibility-manifest-v1"},
@@ -217,6 +217,10 @@
     "delegation_signature_first_resolution": {
       "type":"object","additionalProperties":false,"required":["schema","classification","base_feature","signature_first_fix","authority_registry","history_completeness","network","action"],
       "properties":{"schema":{"const":"delegation-signature-first-resolution-v1"},"classification":{"const":"SAFE_PURE_OFFLINE_VALIDATOR"},"base_feature":{"const":"UPSTREAM_719_MERGED"},"signature_first_fix":{"const":"UPSTREAM_783_OPEN_NOT_RUNTIME_GUARANTEE"},"authority_registry":{"const":"EMPTY_FAIL_CLOSED"},"history_completeness":{"const":"NOT_ESTABLISHED"},"network":{"const":"NONE"},"action":{"const":"NO_LIVE_ACTION"}}
+    },
+    "settlement_rail_maturity": {
+      "type":"object","additionalProperties":false,"required":["schema","classification","tclk_release","paper_rail","value_bearing_rail","evm_hash_rail_pr_125","flop_conformance_issue_132","public_testnet_faucet","network","action"],
+      "properties":{"schema":{"const":"settlement-rail-maturity-v1"},"classification":{"const":"SAFE_PURE_OFFLINE_VALIDATOR"},"tclk_release":{"const":"V0_1_0_ALPHA"},"paper_rail":{"const":"NO_VALUE"},"value_bearing_rail":{"const":"NONE_CONFIRMED"},"evm_hash_rail_pr_125":{"const":"OPEN_UNMERGED_NOT_RUNTIME_GUARANTEE"},"flop_conformance_issue_132":{"const":"OPEN_UNRESOLVED"},"public_testnet_faucet":{"const":"NONE_CONFIRMED"},"network":{"const":"NONE"},"action":{"const":"NO_LIVE_ACTION"}}
     }
   },
   "$defs": {

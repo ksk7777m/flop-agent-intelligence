@@ -219,5 +219,17 @@
     "history_completeness": "NOT_ESTABLISHED",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "settlement_rail_maturity": {
+    "schema": "settlement-rail-maturity-v1",
+    "classification": "SAFE_PURE_OFFLINE_VALIDATOR",
+    "tclk_release": "V0_1_0_ALPHA",
+    "paper_rail": "NO_VALUE",
+    "value_bearing_rail": "NONE_CONFIRMED",
+    "evm_hash_rail_pr_125": "OPEN_UNMERGED_NOT_RUNTIME_GUARANTEE",
+    "flop_conformance_issue_132": "OPEN_UNRESOLVED",
+    "public_testnet_faucet": "NONE_CONFIRMED",
+    "network": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }

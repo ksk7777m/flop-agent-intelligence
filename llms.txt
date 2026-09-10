@@ -70,3 +70,4 @@ Recommended next reads: ai-onboarding.json, AI_ONBOARDING.md, SKILL.md, AGENTS.m
 docs/OBSERVATORY_API.md, api/status.json.
 
 Delegation resolution: docs/DELEGATION_SIGNATURE_FIRST_RESOLUTION.md (offline, signature-first, incomplete-history, no action authority).
+Settlement rail maturity: docs/SETTLEMENT_RAIL_MATURITY.md (offline classification, no value-bearing or action authority).

@@ -115,6 +115,12 @@ remains incomplete, production root authorities are empty, and delegation
 validity never authorizes network, signing, wallet, faucet, inference, or claim
 actions.
 
+The offline [Settlement Rail Maturity boundary](docs/SETTLEMENT_RAIL_MATURITY.md)
+separates TCLK protocol validity from rail deployment, audit, network/asset
+binding, FLOP Yellow Paper conformance, settlement truth, and authorization.
+PaperRail remains no-value, value-bearing settlement is unverified, production
+authorities are empty, and every wallet or value action remains disabled.
+
 ## FLOP Specification Authority and Tokenomics Conflict
 
 The closed [specification authority registry](docs/FLOP_SPEC_AUTHORITY_TOKENOMICS_CONFLICT.md)
