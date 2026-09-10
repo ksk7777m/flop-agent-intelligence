@@ -231,5 +231,15 @@
     "public_testnet_faucet": "NONE_CONFIRMED",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "security_consolidation": {
+    "schema": "flop-security-consolidation-v1",
+    "classification": "CROSS_PACKAGE_REGRESSION_ONLY",
+    "production_authorities": 0,
+    "release_main_runtime": "DISTINCT",
+    "compatibility_freshness": "REVIEW_REQUIRED",
+    "official_trigger_state": "WAITING",
+    "network": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }

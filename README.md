@@ -121,6 +121,12 @@ binding, FLOP Yellow Paper conformance, settlement truth, and authorization.
 PaperRail remains no-value, value-bearing settlement is unverified, production
 authorities are empty, and every wallet or value action remains disabled.
 
+The [Compatibility and Security Consolidation](docs/SECURITY_CONSOLIDATION.md)
+adds no capability. It pins the current cross-package trust-chain inventory and
+tests empty production authorities, lossless numeric boundaries, minimized
+errors, resource gates, and zero live-client reachability across the evidence,
+readiness, KOL, delegation, and settlement packages.
+
 ## FLOP Specification Authority and Tokenomics Conflict
 
 The closed [specification authority registry](docs/FLOP_SPEC_AUTHORITY_TOKENOMICS_CONFLICT.md)
