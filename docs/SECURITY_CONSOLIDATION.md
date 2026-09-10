@@ -18,3 +18,9 @@ documentation, and deployed runtime distinct. Historical observations remain
 immutable. Material official changes to Testnet, Faucet, claim/provisioning,
 Yellow Paper, value-bearing rails, or KOL rules are triggers for a separate
 review—not automatic activation.
+
+The general-purpose `runtime-capability` schema retains a future `AUTHORIZED`
+state, but it is not an authority issuer and is separate from current
+Production policy. No checked-in Production manifest or consolidation artifact
+can select that state. This package fixes `authorized_to_act=false` and
+`live_action_enabled=false`; callers cannot override either flag.

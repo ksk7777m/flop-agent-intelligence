@@ -17,7 +17,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from jsonschema import Draft202012Validator
 
-from .identity import did_from_public_key, public_key_from_did
+from .did_key import did_from_public_key, public_key_from_did
 from .tclk_schema_evidence import (COMMIT, SCHEMA_BLOB, SCHEMA_SHA256, SCHEMA_SIZE,
     SPEC_BLOB, SPEC_SHA256, SPEC_SIZE, load_pinned_evidence)
 

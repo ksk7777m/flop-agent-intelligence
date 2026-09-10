@@ -5,7 +5,7 @@ from pathlib import Path
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from jsonschema import Draft202012Validator
-from .identity import public_key_from_did
+from .did_key import public_key_from_did
 
 SCHEMA="delegation-signature-first-resolution-v1";DOMAIN=b"TECHNOCORE-DELEGATION-V1|"
 MAX_NOTE_BYTES=262144;MAX_AUTHORITY_BYTES=65536;MAX_PRIOR_BYTES=16384;MAX_RECORD_BYTES=4096;MAX_RECORDS=128;MAX_DEPTH=6

@@ -1,4 +1,4 @@
-import inspect,json,unittest
+import ast,inspect,json,unittest
 from pathlib import Path
 from jsonschema import Draft202012Validator
 from flop_agent import delegation_resolution as delegation
@@ -10,7 +10,7 @@ from flop_agent import testnet_readiness as testnet
 
 class SecurityConsolidationTests(unittest.TestCase):
  def test_closed_consolidation_artifact_and_current_assumptions(self):
-  value=json.loads(Path("data/security_consolidation.json").read_text());schema=json.loads(Path("schemas/security-consolidation.v1.json").read_text());Draft202012Validator.check_schema(schema);Draft202012Validator(schema).validate(value);self.assertEqual(value["authority"]["production_authorities_total"],0);self.assertEqual(value["production_api"],"OFFLINE_ONLY")
+  value=json.loads(Path("data/security_consolidation.json").read_text());schema=json.loads(Path("schemas/security-consolidation.v1.json").read_text());Draft202012Validator.check_schema(schema);Draft202012Validator(schema).validate(value);self.assertEqual(value["authority"]["production_authorities_total"],0);self.assertEqual(value["production_api"],"OFFLINE_ONLY");self.assertIs(value["authorized_to_act"],False);self.assertIs(value["live_action_enabled"],False)
  def test_all_production_authority_manifests_are_empty(self):
   paths=("tclk_source_authorities.json","tclk_winner_authorities.json","flop_endpoint_authorities.json","flop_kol_authorities.json","delegation_authorities.json","settlement_rail_authorities.json")
   for name in paths:
@@ -26,12 +26,24 @@ class SecurityConsolidationTests(unittest.TestCase):
  def test_bool_lossless_and_unknown_field_matrix(self):
   self.assertFalse(kol._token(True));self.assertFalse(kol._uint(True));self.assertFalse(settlement._decimal(True));self.assertFalse(settlement._decimal(1.0))
   bad=json.dumps({"schema":"technocore-delegation-note-v1","records":[{"version":"technocore-delegation-v1","root_did":"x","agent_did":"y","scope":"*","expires":"200","nonce":True,"signature":"x"}]},sort_keys=True,separators=(",",":")).encode();self.assertEqual(delegation._resolve(bad,b'{"evaluated_at":"100","root_did_sha256":[],"schema":"delegation-root-authority-v1"}',b"{}")["errors"],["ARTIFACT_SCHEMA_INVALID"])
+ def test_general_runtime_schema_cannot_promote_current_package(self):
+  current=json.loads(Path("data/security_consolidation.json").read_text());current_schema=json.loads(Path("schemas/security-consolidation.v1.json").read_text());future_schema=json.loads(Path("schemas/runtime-capability.v1.json").read_text());self.assertIn("AUTHORIZED",future_schema["$defs"]["overall"]["enum"])
+  for key in ("authorized_to_act","live_action_enabled"):
+   forged=dict(current);forged[key]=True;self.assertTrue(list(Draft202012Validator(current_schema).iter_errors(forged)),key)
  def test_public_error_privacy_resource_gates_and_no_live_imports(self):
   marker="CROSS-PACKAGE-PRIVATE-MARKER";attack=json.dumps([{"raw_secret":marker}],separators=(",",":")).encode();results=(kol.assess_kol_referral_readiness(b"[]",attack,b"{}"),settlement.assess_settlement_rail_maturity(attack,b"[]"))
   for result in results:self.assertNotIn(marker,json.dumps(result));self.assertTrue(result["errors"])
   self.assertEqual(settlement.assess_settlement_rail_maturity(b" "*(settlement.MAX_BYTES+1),b"[]")["errors"],["INPUT_LIMIT_EXCEEDED"])
-  modules=(source,winner,testnet,kol,delegation,settlement);forbidden=("requests.","urlopen","socket.","subprocess.","web3","playwright","selenium","PrivateKey")
-  for module in modules:
-   text=inspect.getsource(module)
-   for token in forbidden:self.assertNotIn(token,text,module.__name__)
+  modules=(source,winner,testnet,kol,delegation,settlement);forbidden=("requests","urllib","httpx","aiohttp","socket","subprocess","web3","playwright","selenium");root=Path("src/flop_agent");pending=[module.__name__.rsplit(".",1)[-1] for module in modules];seen=set()
+  while pending:
+   name=pending.pop()
+   if name in seen:continue
+   seen.add(name);tree=ast.parse((root/f"{name}.py").read_text())
+   for node in ast.walk(tree):
+    if isinstance(node,ast.Import):
+     for alias in node.names:self.assertNotIn(alias.name.split(".")[0],forbidden,(name,alias.name))
+    elif isinstance(node,ast.ImportFrom):
+     if node.level and node.module and (root/f"{node.module.split('.')[0]}.py").exists():pending.append(node.module.split(".")[0])
+     elif node.module:self.assertNotIn(node.module.split(".")[0],forbidden,(name,node.module))
+    elif isinstance(node,ast.Name):self.assertNotIn(node.id,{"Ed25519PrivateKey","PrivateKey","sign","wallet","claim","faucet","transaction_builder","contract_call"},(name,node.id))
 if __name__=="__main__":unittest.main()
