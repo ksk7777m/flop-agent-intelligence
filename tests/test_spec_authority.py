@@ -195,6 +195,11 @@ class SpecificationAuthorityTests(unittest.TestCase):
         jsonschema.Draft202012Validator(compatibility_schema).validate(compatibility)
         self.assertEqual(compatibility["flop_specification_authority"]["action"], "NO_LIVE_ACTION")
         self.assertEqual(compatibility["status"], "COMPATIBILITY_REVIEW_REQUIRED")
+        nonce = compatibility["nonce_compatibility"]
+        self.assertEqual(nonce["local_bool_mitigation"], "ENFORCED")
+        self.assertEqual(nonce["current_lifecycle_assessment"], "LIVE_CURRENTNESS_UNREVIEWED")
+        self.assertEqual(nonce["server_acceptance"], "NOT_CANONICAL_AUTHORITY")
+        self.assertEqual(nonce["action"], "NO_LIVE_ACTION")
 
 
 if __name__ == "__main__":

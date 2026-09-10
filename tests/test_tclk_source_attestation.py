@@ -66,12 +66,14 @@ class SourceAttestationTests(unittest.TestCase):
         artifact=self.artifact(source_type="MCP_PAGE"); self.assertEqual(self.verify(artifact)["errors"],["SOURCE_ATTESTATION_POLICY_MISMATCH"])
 
     def test_closed_canonical_grammar_bool_float_unknown_and_manifest(self):
-        for field,value in (("attestation_nonce",True),("attestation_nonce",False),("attestation_nonce",1.0),("acquired_at",True),("expires_at",200.0)):
+        for field,value in (("attestation_nonce",True),("attestation_nonce",False),("attestation_nonce",1.0),("attestation_nonce",9007199254740993),("attestation_nonce","1e3"),("attestation_nonce","0x10"),("attestation_nonce","+1"),("attestation_nonce"," 1"),("attestation_nonce","\N{ARABIC-INDIC DIGIT ONE}"),("attestation_nonce","01"),("attestation_nonce","1"*20),("attestation_nonce","1"*1000),("acquired_at",True),("expires_at",200.0)):
             self.assertEqual(self.verify(self.artifact(**{field:value}))["errors"],["SOURCE_ATTESTATION_CANONICAL_INVALID"])
         value=json.loads(self.artifact()); value["extra"]={"raw":"secret-marker"}; raw=canon(value); result=self.verify(raw); self.assertEqual(result["errors"],["SOURCE_ATTESTATION_SCHEMA_INVALID"]); self.assertNotIn("secret-marker",json.dumps(result))
         self.assertEqual(self.verify(manifest=canon({"schema":"bad","policy_revision":att.POLICY,"authorities":[]}))["errors"],["SOURCE_AUTHORITY_MANIFEST_INVALID"])
         self.assertEqual(self.verify(replay=canon([True]))["errors"],["SOURCE_ATTESTATION_REPLAY_INVALID"])
         self.assertEqual(self.verify(self.artifact(attestation_nonce="x"*129))["errors"],["SOURCE_ATTESTATION_CANONICAL_INVALID"])
+        for nonce in ("9007199254740991","9007199254740992","9007199254740993","9999999999999999999"):
+            result=self.verify(self.artifact(attestation_nonce=nonce)); self.assertEqual(result["source_attestation"],"SOURCE_ATTESTATION_VERIFIED"); self.assertEqual(result["attestation_replay_id"],hashlib.sha256(canon({"authority_id":"fixture-authority","authority_version":"1","attestation_nonce":nonce})).hexdigest())
         for changes in ({"acquired_at":120,"issued_at":110},{"issued_at":201,"expires_at":200},{"issued_at":"110"}): self.assertEqual(self.verify(self.artifact(**changes))["errors"],["SOURCE_ATTESTATION_CANONICAL_INVALID"])
 
     def test_manifest_duplicates_and_pinned_empty_production_manifest(self):

@@ -83,6 +83,22 @@
     "status": "REVIEW_REQUIRED",
     "reason": "One-shot cache metadata was potentially stale and does not establish latest state or continuing live compatibility"
   },
+  "nonce_compatibility": {
+    "profile": "LOCAL_CANONICAL_DECIMAL_V1",
+    "technocore_bool_nonce_upstream": "UPSTREAM_REPORTED_STATUS_UNREVIEWED",
+    "local_bool_mitigation": "ENFORCED",
+    "tclk_large_nonce_upstream": "UPSTREAM_CHANGE_STATUS_UNREVIEWED",
+    "lifecycle_states": [
+      "RELEASED",
+      "MERGED_NOT_RELEASED",
+      "UNRELEASED",
+      "LIVE_CONFIRMED",
+      "LIVE_CURRENTNESS_UNREVIEWED"
+    ],
+    "current_lifecycle_assessment": "LIVE_CURRENTNESS_UNREVIEWED",
+    "server_acceptance": "NOT_CANONICAL_AUTHORITY",
+    "action": "NO_LIVE_ACTION"
+  },
   "flop_specification_authority": {
     "schema": "flop-spec-authority-v1",
     "artifact": "data/spec_authority.json",

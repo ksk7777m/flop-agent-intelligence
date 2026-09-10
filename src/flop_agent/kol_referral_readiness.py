@@ -1,6 +1,6 @@
 """Offline-only KOL program, referral, and attribution evidence readiness."""
 from __future__ import annotations
-import hashlib,json
+import hashlib,json,re
 from pathlib import Path
 from typing import Any,Mapping
 from jsonschema import Draft202012Validator
@@ -14,10 +14,12 @@ REFERRAL_FIELDS=frozenset({"source_class","source_id","source_document_sha256","
 AUTH_FIELDS=frozenset({"source_class","source_id","source_document_sha256","program_id","announcement_version","rules_version","rules_sha256","details","leaderboard","referrals"})
 AUTH_REF_FIELDS=frozenset({"referrer_sha256","referral_link_sha256","domain_endpoint_sha256","issued_context_sha256","issued_at","expires_at"})
 ATTR_FIELDS=frozenset({"program_id","rules_sha256","referral_link_sha256","wallet_identity_sha256","wallet_creation_event_sha256","network_usage_sha256","event_source_sha256","event_timestamp_sha256","evidence_nonce","self_referral_claimed"})
+DECIMAL=re.compile(r"^(?:0|[1-9][0-9]{0,18})$")
 def _canon(v:Any)->bytes:return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False).encode("ascii")
 def _hash(v:bytes)->str:return hashlib.sha256(v).hexdigest()
 def _digest(v:Any)->bool:return isinstance(v,str) and len(v)==64 and all(c in "0123456789abcdef" for c in v)
 def _token(v:Any)->bool:return isinstance(v,str) and 0<len(v)<=128 and v.isascii() and all(c.isalnum() or c in "._:-" for c in v)
+def _decimal(v:Any)->bool:return isinstance(v,str) and DECIMAL.fullmatch(v) is not None
 def _uint(v:Any)->bool:return type(v) is int and 0<=v<=9007199254740991
 def _parse(raw:bytes)->Any:
  payload=raw[:-1] if raw.endswith(b"\n") else raw;value=json.loads(payload)
@@ -28,12 +30,12 @@ def _seal(result:dict[str,Any])->Mapping[str,Any]:result["artifact_id"]=_hash(_c
 def _stop(result:dict[str,Any],code:str)->Mapping[str,Any]:result["errors"]=[code];return _seal(result)
 def _valid_program(value:Any)->bool:
  if not isinstance(value,dict) or set(value)!=PROGRAM_FIELDS or value["source_class"] not in OFFICIAL|UNTRUSTED:return False
- return all(_token(value[k]) for k in ("source_id","program_id","announcement_version","source_nonce")) and _digest(value["source_document_sha256"]) and (value["rules_version"] is None or _token(value["rules_version"])) and (value["rules_sha256"] is None or _digest(value["rules_sha256"])) and value["details"] in {"PENDING","PUBLISHED"} and value["leaderboard"] in {"NOT_PUBLISHED","CANDIDATE","PUBLISHED"} and ((value["rules_version"] is None)==(value["rules_sha256"] is None))
+ return all(_token(value[k]) for k in ("source_id","program_id","announcement_version")) and _decimal(value["source_nonce"]) and _digest(value["source_document_sha256"]) and (value["rules_version"] is None or _token(value["rules_version"])) and (value["rules_sha256"] is None or _digest(value["rules_sha256"])) and value["details"] in {"PENDING","PUBLISHED"} and value["leaderboard"] in {"NOT_PUBLISHED","CANDIDATE","PUBLISHED"} and ((value["rules_version"] is None)==(value["rules_sha256"] is None))
 def _valid_referral(value:Any)->bool:
- return isinstance(value,dict) and set(value)==REFERRAL_FIELDS and value["source_class"] in OFFICIAL|UNTRUSTED and all(_token(value[k]) for k in ("source_id","program_id","announcement_version","rules_version","source_nonce")) and all(_digest(value[k]) for k in ("source_document_sha256","rules_sha256","referrer_sha256","referral_link_sha256","domain_endpoint_sha256","issued_context_sha256")) and _uint(value["issued_at"]) and _uint(value["expires_at"]) and value["issued_at"]<=value["expires_at"]
+ return isinstance(value,dict) and set(value)==REFERRAL_FIELDS and value["source_class"] in OFFICIAL|UNTRUSTED and all(_token(value[k]) for k in ("source_id","program_id","announcement_version","rules_version")) and _decimal(value["source_nonce"]) and all(_digest(value[k]) for k in ("source_document_sha256","rules_sha256","referrer_sha256","referral_link_sha256","domain_endpoint_sha256","issued_context_sha256")) and _uint(value["issued_at"]) and _uint(value["expires_at"]) and value["issued_at"]<=value["expires_at"]
 def _valid_attribution(value:Any)->bool:
  if value=={}:return True
- return isinstance(value,dict) and set(value)==ATTR_FIELDS and all(_token(value[k]) for k in ("program_id","evidence_nonce")) and all(value[k] is None or _digest(value[k]) for k in ("rules_sha256","referral_link_sha256","wallet_identity_sha256","wallet_creation_event_sha256","network_usage_sha256","event_source_sha256","event_timestamp_sha256")) and type(value["self_referral_claimed"]) is bool
+ return isinstance(value,dict) and set(value)==ATTR_FIELDS and _token(value["program_id"]) and _decimal(value["evidence_nonce"]) and all(value[k] is None or _digest(value[k]) for k in ("rules_sha256","referral_link_sha256","wallet_identity_sha256","wallet_creation_event_sha256","network_usage_sha256","event_source_sha256","event_timestamp_sha256")) and type(value["self_referral_claimed"]) is bool
 def _manifest(value:Any)->list[dict[str,Any]]:
  if not isinstance(value,dict) or set(value)!={"schema","authorities"} or value["schema"]!="flop-kol-authorities-v1" or not isinstance(value["authorities"],list):raise ValueError
  for item in value["authorities"]:

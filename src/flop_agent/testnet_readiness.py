@@ -1,6 +1,6 @@
 """Pure offline FLOP Testnet, Faucet, and inference readiness boundary."""
 from __future__ import annotations
-import hashlib,json
+import hashlib,json,re
 from pathlib import Path
 from typing import Any,Mapping
 from jsonschema import Draft202012Validator
@@ -16,10 +16,12 @@ CANDIDATE_FIELDS=frozenset({"source_class","source_id","source_document_sha256",
 AUTHORITY_FIELDS=frozenset({"source_class","source_id","source_document_sha256","source_version","source_updated","endpoints"})
 AUTHORITY_ENDPOINT_FIELDS=frozenset({"endpoint_class","endpoint_sha256","network_identity_sha256","asset_class","asset_identity_sha256"})
 INFERENCE_FIELDS=frozenset({"workload_id","agent_identity_sha256","network_session_sha256","request_sha256","result_sha256","model_task_id","compute_units","test_token_spend","provider_identity_sha256","receipt_sha256","timestamp_provenance_sha256","self_reported_usage","evidence_nonce"})
+DECIMAL=re.compile(r"^(?:0|[1-9][0-9]{0,18})$")
 def _canon(v:Any)->bytes:return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False).encode("ascii")
 def _hash(v:bytes)->str:return hashlib.sha256(v).hexdigest()
 def _digest(v:Any)->bool:return isinstance(v,str) and len(v)==64 and all(c in "0123456789abcdef" for c in v)
 def _token(v:Any,n:int=128)->bool:return isinstance(v,str) and 0<len(v)<=n and v.isascii() and all(c.isalnum() or c in "._:-" for c in v)
+def _decimal(v:Any)->bool:return isinstance(v,str) and DECIMAL.fullmatch(v) is not None
 def _amount(v:Any)->bool:
  if not isinstance(v,str) or not v:return False
  left,dot,right=v.partition(".")
@@ -44,10 +46,10 @@ def _manifest(value:Any)->list[dict[str,Any]]:
   seen.add(identity)
  return value["authorities"]
 def _candidate(value:Any)->bool:
- return isinstance(value,dict) and set(value)==CANDIDATE_FIELDS and value["source_class"] in OFFICIAL|UNTRUSTED and _token(value["source_id"]) and _digest(value["source_document_sha256"]) and _token(value["source_version"]) and _token(value["source_updated"]) and value["endpoint_class"] in ENDPOINTS and _digest(value["endpoint_sha256"]) and _digest(value["network_identity_sha256"]) and value["asset_class"] in {"TEST_TOKEN","MAINNET_ASSET","UNVERIFIED_ASSET","THIRD_PARTY_ASSET"} and (value["asset_identity_sha256"] is None or _digest(value["asset_identity_sha256"])) and value["published_status"] in {"PUBLISHED","CANDIDATE","NOT_PUBLISHED"} and _digest(value["spec_parameter_sha256"]) and _token(value["observation_nonce"])
+ return isinstance(value,dict) and set(value)==CANDIDATE_FIELDS and value["source_class"] in OFFICIAL|UNTRUSTED and _token(value["source_id"]) and _digest(value["source_document_sha256"]) and _token(value["source_version"]) and _token(value["source_updated"]) and value["endpoint_class"] in ENDPOINTS and _digest(value["endpoint_sha256"]) and _digest(value["network_identity_sha256"]) and value["asset_class"] in {"TEST_TOKEN","MAINNET_ASSET","UNVERIFIED_ASSET","THIRD_PARTY_ASSET"} and (value["asset_identity_sha256"] is None or _digest(value["asset_identity_sha256"])) and value["published_status"] in {"PUBLISHED","CANDIDATE","NOT_PUBLISHED"} and _digest(value["spec_parameter_sha256"]) and _decimal(value["observation_nonce"])
 def _inference(value:Any)->bool:
  if value=={}:return True
- return isinstance(value,dict) and set(value)==INFERENCE_FIELDS and all(_digest(value[k]) for k in ("agent_identity_sha256","request_sha256","result_sha256","provider_identity_sha256","timestamp_provenance_sha256")) and all(value[k] is None or _digest(value[k]) for k in ("network_session_sha256","receipt_sha256")) and _token(value["workload_id"]) and _token(value["model_task_id"]) and _token(value["evidence_nonce"]) and _amount(value["compute_units"]) and _amount(value["test_token_spend"]) and type(value["self_reported_usage"]) is bool
+ return isinstance(value,dict) and set(value)==INFERENCE_FIELDS and all(_digest(value[k]) for k in ("agent_identity_sha256","request_sha256","result_sha256","provider_identity_sha256","timestamp_provenance_sha256")) and all(value[k] is None or _digest(value[k]) for k in ("network_session_sha256","receipt_sha256")) and _token(value["workload_id"]) and _token(value["model_task_id"]) and _decimal(value["evidence_nonce"]) and _amount(value["compute_units"]) and _amount(value["test_token_spend"]) and type(value["self_reported_usage"]) is bool
 def _assess(candidates_raw:bytes,inference_raw:bytes,request_raw:bytes,response_raw:bytes,baseline_raw:bytes,authorities_raw:bytes)->Mapping[str,Any]:
  result=_base(0)
  if any(type(x) is not bytes for x in (candidates_raw,inference_raw,request_raw,response_raw)):return _stop(result,"INPUT_TYPE_INVALID")

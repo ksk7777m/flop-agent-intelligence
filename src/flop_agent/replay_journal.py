@@ -1,7 +1,7 @@
 """Unprivileged Replay client facade backed by a reviewed local helper."""
 from __future__ import annotations
 
-import hashlib,json,secrets,socket,struct,subprocess,sys
+import hashlib,json,re,secrets,socket,struct,subprocess,sys
 from dataclasses import asdict,dataclass
 from enum import Enum
 from pathlib import Path
@@ -25,13 +25,16 @@ class ConfirmationEvidenceType(str,Enum):
 @dataclass(frozen=True)
 class CanonicalAction:
     actor_did:str;action_class:str;context:str;nonce:str;signed_payload_sha256:str;signing_bytes_sha256:str;target:str;schema_version:str
+    def __post_init__(self)->None:
+        if type(self.nonce) is not str or re.fullmatch(r"(?:0|[1-9][0-9]{0,127})",self.nonce) is None:
+            raise ReplaySafetyError("NONCE_INVALID","nonce","bounded exact canonical decimal string required")
 
 def _build_facade():
     jsonm,pack,unpack=json,struct.pack,struct.unpack
     socketpair,af_unix,sock_stream,shutdown_write=socket.socketpair,socket.AF_UNIX,socket.SOCK_STREAM,socket.SHUT_WR
     popen,devnull,timeout_error=subprocess.Popen,subprocess.DEVNULL,subprocess.TimeoutExpired
     executable=str(Path(sys.executable).resolve());repo=Path(__file__).resolve().parents[2];helper=repo/"libexec"/"flop_replay_store_helper"
-    expected="f11c9acec9c5fd19b9cb6b790dfb6eff4806adcfea6ab4038d4a7f4478cd5ad2"
+    expected="f066e3ec64a1c2962428683be38af7042820b21d39351650f7d58b138969959d"
     if not helper.is_absolute() or not helper.is_file() or helper.is_symlink() or hashlib.sha256(helper.read_bytes()).hexdigest()!=expected:raise ReplaySafetyError("HELPER_PROVENANCE_INVALID","helper","reviewed helper artifact required")
     environment=MappingProxyType({"PATH":"/usr/bin:/bin","PYTHONNOUSERSITE":"1","LC_ALL":"C"})
     action_type,effect_type,error_type,proxy=CanonicalAction,EffectClass,ReplaySafetyError,MappingProxyType

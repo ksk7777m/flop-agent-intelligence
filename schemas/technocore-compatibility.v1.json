@@ -7,7 +7,7 @@
   "required": [
     "schema", "status", "reviewed_at", "reviewed_technocore_agent_version",
     "source_evidence", "semantic_invariants", "capability_evidence",
-    "deployment_observations", "observation_policy_binding", "freshness",
+    "deployment_observations", "observation_policy_binding", "freshness", "nonce_compatibility",
     "flop_specification_authority", "tclk_accept_conformance",
     "tclk_official_schema_evidence", "offline_tclk_accept_preflight", "tclk_transcript_boundary",
     "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation", "tclk_offer_wide_completeness", "tclk_authenticated_winner", "flop_testnet_readiness", "flop_kol_referral_readiness", "delegation_signature_first_resolution", "settlement_rail_maturity", "security_consolidation"
@@ -97,6 +97,22 @@
       "properties": {
         "status": {"const": "REVIEW_REQUIRED"},
         "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "nonce_compatibility": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "technocore_bool_nonce_upstream", "local_bool_mitigation", "tclk_large_nonce_upstream", "lifecycle_states", "current_lifecycle_assessment", "server_acceptance", "action"],
+      "properties": {
+        "profile": {"const": "LOCAL_CANONICAL_DECIMAL_V1"},
+        "technocore_bool_nonce_upstream": {"const": "UPSTREAM_REPORTED_STATUS_UNREVIEWED"},
+        "local_bool_mitigation": {"const": "ENFORCED"},
+        "tclk_large_nonce_upstream": {"const": "UPSTREAM_CHANGE_STATUS_UNREVIEWED"},
+        "lifecycle_states": {
+          "const": ["RELEASED", "MERGED_NOT_RELEASED", "UNRELEASED", "LIVE_CONFIRMED", "LIVE_CURRENTNESS_UNREVIEWED"]
+        },
+        "current_lifecycle_assessment": {"const": "LIVE_CURRENTNESS_UNREVIEWED"},
+        "server_acceptance": {"const": "NOT_CANONICAL_AUTHORITY"},
+        "action": {"const": "NO_LIVE_ACTION"}
       }
     },
     "flop_specification_authority": {

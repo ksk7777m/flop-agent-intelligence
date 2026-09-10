@@ -45,7 +45,12 @@ class KOLReferralReadinessTests(unittest.TestCase):
   result=self.assess([self.program],[self.referral],self.evidence(self_referral_claimed=True));self.assertEqual(result["attribution"],"ATTRIBUTION_RULES_UNRESOLVED");self.assertEqual(result["reward_formula"],"UNRESOLVED");self.assertEqual(result["ranking_formula"],"UNRESOLVED");self.assertFalse(result["reward_verified"]);self.assertFalse(result["agent_airdrop_eligible"])
  def test_nonce_replay_bool_float_and_oversized_rejected(self):
   for change in ({"referral_link_sha256":"0"*64},{"announcement_version":"announcement-v2"},{"source_document_sha256":"0"*64}):self.assertEqual(self.assess([self.program],[self.referral,{**self.referral,**change}])["errors"],["REPLAY_CANDIDATE"])
-  for nonce in (True,False,1.0,"x"*129):self.assertEqual(self.assess([{**self.program,"source_nonce":nonce}])["errors"],["ARTIFACT_SCHEMA_INVALID"])
+  invalid=(True,False,1.0,9007199254740993,"1e3","0x10","+1"," 1","\N{ARABIC-INDIC DIGIT ONE}","01","1"*20,"1"*1000)
+  for nonce in invalid:self.assertEqual(self.assess([{**self.program,"source_nonce":nonce}])["errors"],["ARTIFACT_SCHEMA_INVALID"])
+  for nonce in invalid:self.assertEqual(self.assess([self.program],[{**self.referral,"source_nonce":nonce}])["errors"],["ARTIFACT_SCHEMA_INVALID"])
+  for nonce in invalid:self.assertEqual(self.assess([self.program],[self.referral],self.evidence(evidence_nonce=nonce))["errors"],["ARTIFACT_SCHEMA_INVALID"])
+  for nonce in ("9007199254740991","9007199254740992","9007199254740993","9999999999999999999"):
+   self.assertNotEqual(self.assess([{**self.program,"source_nonce":nonce}])["errors"],["ARTIFACT_SCHEMA_INVALID"])
  def test_privacy_closed_inputs_resource_and_reachability(self):
   attacks=({**self.referral,"raw_url":"https://fake.invalid/r?ref=PRIVATE"},{**self.referral,"wallet_address":"PRIVATE"},{**self.referral,"referral_code":"PRIVATE"})
   for attack in attacks:

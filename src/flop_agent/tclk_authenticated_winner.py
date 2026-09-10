@@ -1,6 +1,6 @@
 """Offline authenticated coordination-winner issuance boundary."""
 from __future__ import annotations
-import base64,hashlib,hmac,json,sys,time,types
+import base64,hashlib,hmac,json,re,sys,time,types
 from pathlib import Path
 from typing import Any,Mapping
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -13,6 +13,7 @@ ROOT=Path(__file__).resolve().parents[2];MANIFEST=ROOT/"data/tclk_winner_authori
 MANIFEST_SHA256="7b9f2e8f28192b8699080c93ec63eb435fef36f1cb5f271a4bf4a0832f37781c";POLICY_SHA256="4016a20c4c5ae385915260cea52e5b151a6d8fabbea827279ac6855de316e2bf"
 SCHEMA="tclk-authenticated-winner-v1";POLICY="tclk-authenticated-winner-policy-v1";CHRONOLOGY_DOMAIN=b"TCLK_CHRONOLOGY_AUTHORITY\x00V1|";WINNER_DOMAIN=b"TCLK_WINNER_AUTHORITY\x00V1|"
 MAX_ARTIFACT_BYTES=16384;MAX_REPLAY_BYTES=65536
+DECIMAL=re.compile(r"^(?:0|[1-9][0-9]{0,18})$")
 AUTH_FIELDS=frozenset({"authority_id","authority_version","key_id","public_key_b64url","policy_id","policy_version"})
 CHRON_FIELDS=frozenset({"version","authority_id","authority_version","key_id","policy_id","policy_version","offer_sha256","candidate_set_sha256","ordered_candidates","unique","issued_at","expires_at","nonce","signature"})
 WIN_FIELDS=frozenset({"version","authority_id","authority_version","key_id","policy_id","policy_version","policy_sha256","offer_sha256","candidate_set_sha256","completeness_sha256","chronology_sha256","winner_commitment","decision_nonce","issued_at","expires_at","signature"})
@@ -29,6 +30,7 @@ def _b64(v:str)->bytes:
  if base64.urlsafe_b64encode(x).decode().rstrip("=")!=v:raise ValueError
  return x
 def _token(v:Any)->bool:return isinstance(v,str) and 0<len(v)<=128 and v.isascii() and all(c.isalnum() or c in "._:-" for c in v)
+def _decimal(v:Any)->bool:return isinstance(v,str) and DECIMAL.fullmatch(v) is not None
 def _uint(v:Any)->bool:return type(v) is int and 0<=v<=9007199254740991
 def _digest(v:Any)->bool:return isinstance(v,str) and len(v)==64 and all(c in "0123456789abcdef" for c in v)
 def _base(vals:tuple[Any,...])->dict[str,Any]:return {"schema":SCHEMA,"content_label":"PUBLIC_MINIMIZED_EVIDENCE","artifact_id":"","policy_revision":POLICY,"input_byte_lengths":[len(x) if type(x) is bytes else None for x in vals],"stages":[{"ordinal":i+1,"stage_id":n,"state":"NOT_EVALUATED"} for i,n in enumerate(STAGES)],"errors":[],"completeness":"COMPLETENESS_NOT_VERIFIED","candidate_set":"CANDIDATE_SET_UNRESOLVED","winner_authority":"WINNER_AUTHORITY_UNVERIFIED","policy":"POLICY_UNVERIFIED","chronology":"CHRONOLOGY_AUTHORITY_MISSING","uniqueness":"WINNER_UNRESOLVED","winner":"GLOBAL_WINNER_UNRESOLVED","winner_commitment":"","candidate_count":0,"replay":"NOT_EVALUATED","race_loss":"NOT_ISSUED","lock":"NOT_VERIFIED","settlement":"NOT_VERIFIED","ready_to_act":False,"authorized_to_act":False,"live_action_enabled":False,"production_api":{"classification":"SAFE_PURE_VALIDATOR","network":"NONE","technocore":"NONE","remote_mcp":"NONE","signer":"NONE","wallet":"NONE","settlement":"NONE","winner_issuance_reachable":True,"race_loss_reachable":False}}
@@ -58,8 +60,8 @@ def _assess(offer:bytes,transcript:bytes,completeness_raw:bytes,chronology_raw:b
  try:complete=_parse(completeness_raw);chron=_parse(chronology_raw);decision=_parse(winner_raw);replays=_parse(replay_raw)
  except Exception:return _stop(r,"ARTIFACT_SCHEMA_INVALID")
  if not isinstance(chron,dict) or set(chron)!=CHRON_FIELDS or not isinstance(decision,dict) or set(decision)!=WIN_FIELDS:return _stop(r,"ARTIFACT_SCHEMA_INVALID")
- chron_tokens=("authority_id","authority_version","key_id","policy_id","policy_version","nonce");decision_tokens=("authority_id","authority_version","key_id","policy_id","policy_version","decision_nonce")
- if chron.get("version")!="tclk-chronology-attestation-v1" or not all(_token(chron.get(k)) for k in chron_tokens) or any(not _digest(chron.get(k)) for k in ("offer_sha256","candidate_set_sha256")) or not isinstance(chron.get("ordered_candidates"),list) or len(chron["ordered_candidates"])>MAX_CANDIDATES or any(not _digest(x) for x in chron["ordered_candidates"]) or type(chron.get("unique")) is not bool or any(not _uint(chron.get(k)) for k in ("issued_at","expires_at")) or chron["issued_at"]>chron["expires_at"] or decision.get("version")!="tclk-winner-decision-v1" or not all(_token(decision.get(k)) for k in decision_tokens) or any(not _digest(decision.get(k)) for k in ("policy_sha256","offer_sha256","candidate_set_sha256","completeness_sha256","chronology_sha256","winner_commitment")) or any(not _uint(decision.get(k)) for k in ("issued_at","expires_at")) or decision["issued_at"]>decision["expires_at"]:return _stop(r,"ARTIFACT_SCHEMA_INVALID")
+ chron_tokens=("authority_id","authority_version","key_id","policy_id","policy_version");decision_tokens=("authority_id","authority_version","key_id","policy_id","policy_version")
+ if chron.get("version")!="tclk-chronology-attestation-v1" or not all(_token(chron.get(k)) for k in chron_tokens) or not _decimal(chron.get("nonce")) or any(not _digest(chron.get(k)) for k in ("offer_sha256","candidate_set_sha256")) or not isinstance(chron.get("ordered_candidates"),list) or len(chron["ordered_candidates"])>MAX_CANDIDATES or any(not _digest(x) for x in chron["ordered_candidates"]) or type(chron.get("unique")) is not bool or any(not _uint(chron.get(k)) for k in ("issued_at","expires_at")) or chron["issued_at"]>chron["expires_at"] or decision.get("version")!="tclk-winner-decision-v1" or not all(_token(decision.get(k)) for k in decision_tokens) or not _decimal(decision.get("decision_nonce")) or any(not _digest(decision.get(k)) for k in ("policy_sha256","offer_sha256","candidate_set_sha256","completeness_sha256","chronology_sha256","winner_commitment")) or any(not _uint(decision.get(k)) for k in ("issued_at","expires_at")) or decision["issued_at"]>decision["expires_at"]:return _stop(r,"ARTIFACT_SCHEMA_INVALID")
  s[1]["state"]="VERIFIED"
  try:validate_completeness(complete)
  except Exception:return _stop(r,"COMPLETENESS_INVALID")
@@ -128,7 +130,7 @@ def _validate(v:Any)->None:
   if type(x["ordinal"]) is not int or x["ordinal"]!=i or x["stage_id"]!=n:raise ValueError("STAGE_GRAMMAR_INVALID")
 __all__=["assess_authenticated_winner"]
 class _Sealed(types.ModuleType):
- _protected=frozenset({"MANIFEST","POLICY_FILE","MANIFEST_SHA256","POLICY_SHA256","SCHEMA","POLICY","CHRONOLOGY_DOMAIN","WINNER_DOMAIN","assess_authenticated_winner","_assess","_replay_id","_validate","__all__"})
+ _protected=frozenset({"MANIFEST","POLICY_FILE","MANIFEST_SHA256","POLICY_SHA256","SCHEMA","POLICY","CHRONOLOGY_DOMAIN","WINNER_DOMAIN","DECIMAL","assess_authenticated_winner","_decimal","_assess","_replay_id","_validate","__all__"})
  def __setattr__(self,n:str,v:Any)->None:
   if n in self._protected and n in self.__dict__:raise AttributeError("winner authority dependencies are sealed")
   super().__setattr__(n,v)

@@ -216,7 +216,8 @@ class NonceLexeme:
     decimal: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.decimal, str) or re.fullmatch(r"[1-9][0-9]*", self.decimal) is None:
+        if (not isinstance(self.decimal, str)
+                or re.fullmatch(r"[1-9][0-9]{0,18}", self.decimal) is None):
             raise WireSafetyError(
                 "NONCE_INVALID", "nonce", self.decimal,
                 "canonical decimal digits required")
@@ -391,7 +392,7 @@ def signing_capability_material(
 def _capture_signing_policy() -> tuple[Any, Any]:
     """Return context/material builders with every policy dependency frozen."""
     room_pattern = ROOM_RE
-    nonce_pattern = re.compile(r"[1-9][0-9]*")
+    nonce_pattern = re.compile(r"[1-9][0-9]{0,18}")
     revision_pattern = REVISION_RE
     nonce_limit = MAX_PROTOCOL_NONCE
     text_policy = SIGNER_TEXT_FRAME_POLICY

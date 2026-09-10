@@ -45,8 +45,12 @@ class AuthenticatedWinnerTests(unittest.TestCase):
   # bindings differ; it cannot authorize another candidate set or winner.
   conflicting={**decision,"offer_sha256":"0"*64,"candidate_set_sha256":"1"*64,"policy_sha256":"2"*64,"winner_commitment":"3"*64};self.assertEqual(winner._replay_id(conflicting),rid)
   c,d=self.artifacts(decision_changes={"decision_nonce":True});self.assertEqual(self.assess(c,d)["errors"],["ARTIFACT_SCHEMA_INVALID"])
-  for nonce in (1,1.0,"x"*129):
+  for nonce in (False,1,1.0,9007199254740993,"1e3","0x10","+1"," 1","\N{ARABIC-INDIC DIGIT ONE}","01","1"*20,"1"*1000):
    c,d=self.artifacts(decision_changes={"decision_nonce":nonce});self.assertEqual(self.assess(c,d)["errors"],["ARTIFACT_SCHEMA_INVALID"])
+  for nonce in ("9007199254740991","9007199254740992","9007199254740993","9999999999999999999"):
+   c,d=self.artifacts(decision_changes={"decision_nonce":nonce});self.assertEqual(self.assess(c,d)["winner"],"OFFER_GLOBAL_WINNER_VERIFIED");self.assertEqual(winner._replay_id(json.loads(d)),hashlib.sha256(canonical({"authority_id":"fixture-winner-authority","authority_version":"1","key_id":"fixture-winner-key","decision_nonce":nonce})).hexdigest())
+  for nonce in (True,False,1.0,"1e3","0x10","\N{ARABIC-INDIC DIGIT ONE}","01","1"*20):
+   c,d=self.artifacts(nonce=nonce);self.assertEqual(self.assess(c,d)["errors"],["ARTIFACT_SCHEMA_INVALID"])
   c,d=self.artifacts(winner_id=self.ids[1]);self.assertEqual(self.assess(c,d)["errors"],["WINNER_AMBIGUOUS"])
  def test_schema_privacy_reachability_and_escalation_rejection(self):
   r=self.assess()

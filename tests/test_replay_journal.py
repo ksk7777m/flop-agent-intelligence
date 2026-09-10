@@ -26,6 +26,10 @@ class ReplayJournalTests(unittest.TestCase):
             conflict=w.observe(action(payload=C));self.assertEqual(conflict["decision"],"REPLAY_IDENTITY_CONFLICT")
             self.assertEqual(w.inspect(item)["state"],"OBSERVED")
             with self.assertRaises(j.ReplaySafetyError):action(nonce=1e30)
+            unsafe_low=action(nonce="9007199254740992");unsafe_high=action(nonce="9007199254740993")
+            self.assertNotEqual(w.replay_id(unsafe_low),w.replay_id(unsafe_high))
+            self.assertEqual(w.observe(unsafe_low)["state"],"OBSERVED")
+            self.assertEqual(w.observe(unsafe_high)["state"],"OBSERVED")
 
     def test_attempted_and_unknown_cannot_fail_safe_without_sealed_proof(self):
         with tempfile.TemporaryDirectory() as d:
@@ -86,7 +90,7 @@ class ReplayJournalTests(unittest.TestCase):
     def test_forged_actions_are_revalidated_before_identity_or_storage(self):
         with tempfile.TemporaryDirectory() as d:
             fam=family(Path(d));w=fam.worker();path=Path(d)/"replay-safety"/"ledger.sqlite3"
-            bad_values=(1e30,1.0,123,Decimal("123"),"1e30","+1"," 1","-1","1.0")
+            bad_values=(True,False,1e30,1.0,123,Decimal("123"),"1e30","+1"," 1","-1","1.0","0x10","\N{ARABIC-INDIC DIGIT ONE}","01","1"*129,"1"*1000)
             for value in bad_values:
                 forged=object.__new__(j.CanonicalAction)
                 for name,field in action().__dict__.items():object.__setattr__(forged,name,field)
@@ -228,7 +232,7 @@ channel.sendall(frame+EXTRA);channel.close()
                 base=Path(d).resolve();pkg=base/"src"/"flop_agent";pkg.mkdir(parents=True);helper=base/"libexec"/"flop_replay_store_helper";helper.parent.mkdir()
                 helper.write_text(helper_template.replace("EXTRA",extra))
                 digest=__import__("hashlib").sha256(helper.read_bytes()).hexdigest()
-                source=Path(client.__file__).read_text().replace("f11c9acec9c5fd19b9cb6b790dfb6eff4806adcfea6ab4038d4a7f4478cd5ad2",digest)
+                source=Path(client.__file__).read_text().replace("f066e3ec64a1c2962428683be38af7042820b21d39351650f7d58b138969959d",digest)
                 module=types.ModuleType("response_framing_fixture");module.__file__=str(pkg/"replay_journal.py");module.__package__="flop_agent";sys.modules[module.__name__]=module
                 exec(compile(source,module.__file__,"exec"),module.__dict__)
                 fixture_action=module.CanonicalAction(DID,"SIGNED_ACTION","lobby","1",A,B,"resource:fixture","replay-action-v1")
@@ -237,7 +241,7 @@ channel.sendall(frame+EXTRA);channel.close()
                 sys.modules.pop(module.__name__,None)
 
     def test_production_subprocess_transactions_roll_back_under_test_artifact_faults(self):
-        helper_source=HELPER_PATH.read_text();client_source=Path(client.__file__).read_text();original_digest="f11c9acec9c5fd19b9cb6b790dfb6eff4806adcfea6ab4038d4a7f4478cd5ad2"
+        helper_source=HELPER_PATH.read_text();client_source=Path(client.__file__).read_text();original_digest="f066e3ec64a1c2962428683be38af7042820b21d39351650f7d58b138969959d"
         script="""from flop_agent import replay_journal as j
 import json,os,sys
 a=j.CanonicalAction(%r,'SIGNED_ACTION','lobby','1',os.environ.get('PAYLOAD','a'*64),'b'*64,'resource:fixture','replay-action-v1')

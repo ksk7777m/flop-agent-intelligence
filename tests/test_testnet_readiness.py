@@ -48,11 +48,14 @@ class TestnetReadinessTests(unittest.TestCase):
   for changes in ({"endpoint_sha256":"9"*64},{"network_identity_sha256":"9"*64},{"source_document_sha256":"9"*64}):
    replay={**self.testnet,**changes};self.assertEqual(self.assess([self.testnet,replay])["errors"],["REPLAY_CANDIDATE"])
  def test_raw_material_extra_fields_and_bool_nonce_are_rejected_without_echo(self):
-  attacks=({**self.testnet,"raw_url":"https://secret.invalid/?key=PRIVATE"},{**self.testnet,"observation_nonce":True},{**self.testnet,"observation_nonce":False},{**self.testnet,"observation_nonce":1.0},{**self.testnet,"observation_nonce":"x"*129})
+  invalid=(True,False,1.0,9007199254740993,"1e3","0x10","+1"," 1","\N{ARABIC-INDIC DIGIT ONE}","01","1"*20,"1"*1000)
+  attacks=({**self.testnet,"raw_url":"https://secret.invalid/?key=PRIVATE"},*({**self.testnet,"observation_nonce":nonce} for nonce in invalid))
   for attack in attacks:
    result=self.assess([attack]);self.assertEqual(result["errors"],["ARTIFACT_SCHEMA_INVALID"]);self.assertNotIn("PRIVATE",json.dumps(result));self.assertNotIn("secret.invalid",json.dumps(result))
-  for change in ({"raw_prompt":"PRIVATE PROMPT"},{"raw_response":"PRIVATE RESPONSE"},{"evidence_nonce":True}):
+  for change in ({"raw_prompt":"PRIVATE PROMPT"},{"raw_response":"PRIVATE RESPONSE"},*({"evidence_nonce":nonce} for nonce in invalid)):
    result=self.assess([self.testnet,self.inference_endpoint],{**self.draft(),**change});self.assertEqual(result["errors"],["ARTIFACT_SCHEMA_INVALID"]);self.assertNotIn("PRIVATE",json.dumps(result))
+  for nonce in ("9007199254740991","9007199254740992","9007199254740993","9999999999999999999"):
+   self.assertNotEqual(self.assess([{**self.testnet,"observation_nonce":nonce}])["errors"],["ARTIFACT_SCHEMA_INVALID"])
  def test_scoring_usefulness_settlement_and_claim_are_never_derived(self):
   result=self.assess([self.testnet,self.faucet,self.inference_endpoint],self.draft());rendered=json.dumps(result);self.assertEqual(result["agent_scoring"],"UNRESOLVED");self.assertEqual(result["airdrop_rule_status"],"PROVISIONAL");self.assertNotIn("USEFUL_INFERENCE_VERIFIED",rendered);self.assertNotIn("PRIVATE PROMPT",rendered);self.assertNotIn("PRIVATE RESPONSE",rendered);self.assertNotIn("settlement",rendered.lower())
  def test_schema_semantic_resource_and_reachability_boundaries(self):

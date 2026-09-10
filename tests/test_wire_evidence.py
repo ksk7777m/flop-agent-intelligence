@@ -67,13 +67,21 @@ def signing_store(action, context, target, purpose, config="fixture-v1"):
 
 class NonceAndSignerTests(unittest.TestCase):
     def test_nonce_exact_string_in_context_and_proof(self):
-        for value in ("9007199254740992", "9223372036854775807",
+        for value in ("9007199254740991", "9007199254740992",
+                      "9007199254740993", "9223372036854775807",
                       str(wire.MAX_PROTOCOL_NONCE)):
             self.assertEqual(wire.parse_nonce(value).decimal, value)
             self.assertEqual(ProofRecord("x", "x", "x", None, "x", "x", nonce=value).nonce, value)
-        for value in (1, 1.0, "01", "1e3", str(wire.MAX_PROTOCOL_NONCE + 1)):
+        for value in (True, False, 1, 1.0, 9007199254740993, "01", "1e3",
+                      "0x10", "+1", " 1", "\N{ARABIC-INDIC DIGIT ONE}",
+                      str(wire.MAX_PROTOCOL_NONCE + 1), "1" * 1000):
             with self.subTest(value=value), self.assertRaises(wire.WireSafetyError):
                 ProofRecord("x", "x", "x", None, "x", "x", nonce=value)
+        parsed = json.loads(b'{"nonce":true}')
+        with self.assertRaises(wire.WireSafetyError):
+            wire.parse_nonce(parsed["nonce"])
+        exact = wire.build_signing_context("lobby", "9007199254740993", "fixture")
+        self.assertEqual(exact.canonical_bytes, b"lobby|9007199254740993|fixture")
         activity = Path(__file__).resolve().parents[1] / "data" / "activity.jsonl"
         for line in activity.read_text(encoding="utf-8").splitlines():
             if not line.strip():

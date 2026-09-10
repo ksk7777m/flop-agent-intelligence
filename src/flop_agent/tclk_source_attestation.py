@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import sys
 import time
 import types
@@ -30,6 +31,7 @@ MAX_ARTIFACT_BYTES = 8192
 MAX_BOUND_BYTES = 8 * 1024 * 1024
 MAX_REPLAY_BYTES = 64 * 1024
 STAGES = ("SCHEMA_VALIDATION", "CANONICAL_VALIDATION", "AUTHORITY_LOOKUP", "AUTHORITY_POLICY", "SIGNATURE_VERIFICATION", "DIGEST_BINDING", "GENERATION_CONTEXT_BINDING", "FRESHNESS_REPLAY", "RESULT_ISSUANCE")
+DECIMAL = re.compile(r"^(?:0|[1-9][0-9]{0,18})$")
 
 
 def _canon(value: Any) -> bytes:
@@ -82,6 +84,10 @@ def _valid_token(value: Any, limit: int = 128) -> bool:
     return isinstance(value, str) and 0 < len(value) <= limit and value.isascii() and all(c.isalnum() or c in "._:-" for c in value)
 
 
+def _valid_decimal(value: Any) -> bool:
+    return isinstance(value, str) and DECIMAL.fullmatch(value) is not None
+
+
 def _valid_uint(value: Any) -> bool:
     return type(value) is int and 0 <= value <= 9007199254740991
 
@@ -120,8 +126,8 @@ def _verify(evidence: bytes, descriptor: bytes, context: bytes, artifact_raw: by
     if not isinstance(artifact, dict) or set(artifact) != ARTIFACT_FIELDS:
         return _fail(result, "SOURCE_ATTESTATION_SCHEMA_INVALID")
     stages[0]["state"] = "VERIFIED"
-    tokens = ("authority_id", "authority_version", "policy_id", "key_id", "source_binding_sha256", "generation", "attestation_nonce")
-    if artifact["version"] != ARTIFACT_VERSION or not all(_valid_token(artifact[k]) for k in tokens) or artifact["policy_id"] != POLICY or artifact["source_type"] not in SOURCE_TYPES or any(not isinstance(artifact[k], str) or len(artifact[k]) != 64 or any(c not in "0123456789abcdef" for c in artifact[k]) for k in ("evidence_sha256", "context_sha256")) or any(not _valid_uint(artifact[k]) for k in ("acquired_at", "issued_at", "expires_at")) or artifact["acquired_at"] > artifact["issued_at"] or artifact["issued_at"] > artifact["expires_at"]:
+    tokens = ("authority_id", "authority_version", "policy_id", "key_id", "source_binding_sha256", "generation")
+    if artifact["version"] != ARTIFACT_VERSION or not all(_valid_token(artifact[k]) for k in tokens) or not _valid_decimal(artifact["attestation_nonce"]) or artifact["policy_id"] != POLICY or artifact["source_type"] not in SOURCE_TYPES or any(not isinstance(artifact[k], str) or len(artifact[k]) != 64 or any(c not in "0123456789abcdef" for c in artifact[k]) for k in ("evidence_sha256", "context_sha256")) or any(not _valid_uint(artifact[k]) for k in ("acquired_at", "issued_at", "expires_at")) or artifact["acquired_at"] > artifact["issued_at"] or artifact["issued_at"] > artifact["expires_at"]:
         return _fail(result, "SOURCE_ATTESTATION_CANONICAL_INVALID")
     stages[1]["state"] = "VERIFIED"
     try: manifest = _load_manifest(manifest_raw)
@@ -203,7 +209,7 @@ __all__ = ["verify_source_attestation"]
 
 
 class _Sealed(types.ModuleType):
-    _protected = frozenset({"MANIFEST", "MANIFEST_SHA256", "RESULT_SCHEMA", "SCHEMA", "ARTIFACT_VERSION", "DOMAIN", "POLICY", "SOURCE_TYPES", "ARTIFACT_FIELDS", "AUTHORITY_FIELDS", "CONTEXT_FIELDS", "STAGES", "verify_source_attestation", "_verify", "_build_public_verifier", "_validate_result", "__all__"})
+    _protected = frozenset({"MANIFEST", "MANIFEST_SHA256", "RESULT_SCHEMA", "SCHEMA", "ARTIFACT_VERSION", "DOMAIN", "POLICY", "SOURCE_TYPES", "ARTIFACT_FIELDS", "AUTHORITY_FIELDS", "CONTEXT_FIELDS", "STAGES", "DECIMAL", "verify_source_attestation", "_valid_decimal", "_verify", "_build_public_verifier", "_validate_result", "__all__"})
     def __setattr__(self, name: str, value: Any) -> None:
         if name in self._protected and name in self.__dict__: raise AttributeError("source attestation dependencies are sealed")
         super().__setattr__(name, value)
