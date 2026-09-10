@@ -20,3 +20,5 @@ prompts and responses are rejected. Spend does not establish usefulness,
 settlement, eligibility, or an airdrop score. Claim, wallet, signer, HTTP,
 Technocore, MCP, RPC, settlement, and inference clients are absent. Every action
 flag remains false; a future verified endpoint stops at human review.
+`INFERENCE_EVIDENCE_READY` explicitly leaves inference execution, usefulness,
+spend verification, settlement, and airdrop eligibility false.

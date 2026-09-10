@@ -28,7 +28,7 @@ def _parse(raw:bytes)->Any:
  payload=raw[:-1] if raw.endswith(b"\n") else raw;value=json.loads(payload)
  if _canon(value)!=payload:raise ValueError
  return value
-def _base(count:int)->dict[str,Any]:return {"schema":SCHEMA,"content_label":"PUBLIC_MINIMIZED_EVIDENCE","artifact_id":"","policy_revision":POLICY,"reviewed_as_of":"2026-09-10","spec":"OFFICIAL_DRAFT_COMMITMENT_UNRESOLVED","testnet":"TESTNET_NOT_PUBLISHED","faucet":"FAUCET_NOT_PUBLISHED","inference":"INFERENCE_ENDPOINT_NOT_PUBLISHED","asset_identity":"UNVERIFIED_ASSET","endpoint_candidate_count":count,"inference_evidence":"INFERENCE_WORKLOAD_SCHEMA_READY","airdrop_rule_status":"PROVISIONAL","testnet_to_mainnet_conversion":"UNRESOLVED","agent_scoring":"UNRESOLVED","spend_to_unlock":"PROVISIONAL_OR_UNRESOLVED","errors":[],"claim_authorized":False,"inference_spend_authorized":False,"ready_to_act":False,"authorized_to_act":False,"live_action_enabled":False,"production_api":{"classification":"SAFE_PURE_OFFLINE_VALIDATOR","network":"NONE","http":"NONE","technocore":"NONE","remote_mcp":"NONE","signer":"NONE","wallet":"NONE","chain_rpc":"NONE","inference_rpc":"NONE","faucet_client":"NONE"}}
+def _base(count:int)->dict[str,Any]:return {"schema":SCHEMA,"content_label":"PUBLIC_MINIMIZED_EVIDENCE","artifact_id":"","policy_revision":POLICY,"reviewed_as_of":"2026-09-10","spec":"OFFICIAL_DRAFT_COMMITMENT_UNRESOLVED","testnet":"TESTNET_NOT_PUBLISHED","faucet":"FAUCET_NOT_PUBLISHED","inference":"INFERENCE_ENDPOINT_NOT_PUBLISHED","network_identity":"NETWORK_IDENTITY_UNVERIFIED","asset_identity":"UNVERIFIED_ASSET","endpoint_candidate_count":count,"inference_evidence":"INFERENCE_WORKLOAD_SCHEMA_READY","inference_executed":False,"useful_inference_verified":False,"spend_verified":False,"airdrop_eligibility_verified":False,"airdrop_rule_status":"PROVISIONAL","testnet_to_mainnet_conversion":"UNRESOLVED","agent_scoring":"UNRESOLVED","spend_to_unlock":"PROVISIONAL_OR_UNRESOLVED","errors":[],"claim_authorized":False,"inference_spend_authorized":False,"ready_to_act":False,"authorized_to_act":False,"live_action_enabled":False,"production_api":{"classification":"SAFE_PURE_OFFLINE_VALIDATOR","network":"NONE","http":"NONE","technocore":"NONE","remote_mcp":"NONE","signer":"NONE","wallet":"NONE","chain_rpc":"NONE","inference_rpc":"NONE","faucet_client":"NONE"}}
 def _seal(result:dict[str,Any])->Mapping[str,Any]:
  result["artifact_id"]=_hash(_canon({k:v for k,v in result.items() if k!="artifact_id"}));validate_readiness_projection(result);return result
 def _stop(result:dict[str,Any],code:str)->Mapping[str,Any]:result["errors"]=[code];return _seal(result)
@@ -51,7 +51,7 @@ def _inference(value:Any)->bool:
 def _assess(candidates_raw:bytes,inference_raw:bytes,request_raw:bytes,response_raw:bytes,baseline_raw:bytes,authorities_raw:bytes)->Mapping[str,Any]:
  result=_base(0)
  if any(type(x) is not bytes for x in (candidates_raw,inference_raw,request_raw,response_raw)):return _stop(result,"INPUT_TYPE_INVALID")
- if any(len(x)>MAX_INPUT_BYTES for x in (candidates_raw,inference_raw,request_raw,response_raw)):return _stop(result,"INPUT_LIMIT_EXCEEDED")
+ if any(len(x)>MAX_INPUT_BYTES for x in (candidates_raw,inference_raw,request_raw,response_raw,baseline_raw,authorities_raw)):return _stop(result,"INPUT_LIMIT_EXCEEDED")
  try:candidates=_parse(candidates_raw);draft=_parse(inference_raw);baseline=_parse(baseline_raw);manifest=_parse(authorities_raw)
  except Exception:return _stop(result,"ARTIFACT_SCHEMA_INVALID")
  if not isinstance(candidates,list) or len(candidates)>MAX_CANDIDATES or any(not _candidate(x) for x in candidates) or not _inference(draft):return _stop(result,"ARTIFACT_SCHEMA_INVALID")
@@ -72,24 +72,26 @@ def _assess(candidates_raw:bytes,inference_raw:bytes,request_raw:bytes,response_
    if any(x["endpoint_class"]==kind for x in candidates):result[kind.lower()]=label
   same_source=any(any(candidate[k]==a[k] for k in ("source_class","source_id","source_version")) for candidate in candidates for a in authorities)
   return _stop(result,"SOURCE_BINDING_MISMATCH" if same_source else "SOURCE_UNVERIFIED")
- groups={kind:[x for x in verified if x["endpoint_class"]==kind and x["published_status"]=="PUBLISHED"] for kind in ENDPOINTS}
+ considered={kind:[x for x in verified if x["endpoint_class"]==kind and x["published_status"]!="NOT_PUBLISHED"] for kind in ENDPOINTS}
+ groups={kind:[x for x in considered[kind] if x["published_status"]=="PUBLISHED"] for kind in ENDPOINTS}
  for kind,label in (("TESTNET","TESTNET_OFFICIAL_SOURCE_VERIFIED"),("FAUCET","FAUCET_OFFICIAL_SOURCE_VERIFIED"),("INFERENCE","INFERENCE_OFFICIAL_SOURCE_VERIFIED")):
   if any(x["endpoint_class"]==kind and x["published_status"]=="CANDIDATE" for x in verified):result[kind.lower()]=label
- if any(len({(x["endpoint_sha256"],x["network_identity_sha256"]) for x in group})>1 for group in groups.values()):
-  for kind,group in groups.items():
-   if len({(x["endpoint_sha256"],x["network_identity_sha256"]) for x in group})>1:result[kind.lower()]=kind+"_CONFLICT"
+ if any(len({(x["endpoint_sha256"],x["network_identity_sha256"],x["asset_class"],x["asset_identity_sha256"]) for x in group})>1 for group in considered.values()):
+  for kind,group in considered.items():
+   if len({(x["endpoint_sha256"],x["network_identity_sha256"],x["asset_class"],x["asset_identity_sha256"]) for x in group})>1:result[kind.lower()]=kind+"_CONFLICT"
   return _stop(result,"ENDPOINT_CONFLICT")
  if len({x["spec_parameter_sha256"] for x in groups["TESTNET"]})>1:result["spec"]="SPEC_CONFLICT";return _stop(result,"SPEC_CONFLICT")
  network={x["network_identity_sha256"] for x in verified if x["published_status"]=="PUBLISHED"}
  if len(network)>1:return _stop(result,"NETWORK_BINDING_MISMATCH")
- for kind,ready in (("TESTNET","TESTNET_READY_FOR_HUMAN_REVIEW"),("FAUCET","FAUCET_READY_FOR_HUMAN_REVIEW"),("INFERENCE","INFERENCE_READY_FOR_HUMAN_REVIEW")):
-  if groups[kind]:result[kind.lower()]=ready
+ if network:result["network_identity"]="NETWORK_IDENTITY_VERIFIED"
  if groups["TESTNET"]:result["spec"]="SPEC_SOURCE_VERIFIED"
  for endpoint in groups["TESTNET"]+groups["FAUCET"]:
   if endpoint["asset_class"]!="TEST_TOKEN" or endpoint["asset_identity_sha256"] is None:return _stop(result,"ASSET_UNVERIFIED")
+ if groups["TESTNET"] or groups["FAUCET"]:result["asset_identity"]="TEST_TOKEN"
  if groups["FAUCET"]:
-  result["asset_identity"]="TEST_TOKEN"
   if not groups["TESTNET"]:return _stop(result,"NETWORK_BINDING_MISMATCH")
+ for kind,ready in (("TESTNET","TESTNET_READY_FOR_HUMAN_REVIEW"),("FAUCET","FAUCET_READY_FOR_HUMAN_REVIEW"),("INFERENCE","INFERENCE_READY_FOR_HUMAN_REVIEW")):
+  if groups[kind]:result[kind.lower()]=ready
  if draft!={}:
   result["inference_evidence"]="INFERENCE_EVIDENCE_INCOMPLETE"
   if draft["request_sha256"]!=_hash(request_raw) or draft["result_sha256"]!=_hash(response_raw):return _stop(result,"INFERENCE_COMMITMENT_MISMATCH")
@@ -109,7 +111,8 @@ def validate_readiness_projection(value:Any)->None:
  try:schema=json.loads(RESULT_SCHEMA.read_bytes());Draft202012Validator.check_schema(schema);Draft202012Validator(schema).validate(value)
  except Exception:raise ValueError("RESULT_SCHEMA_INVALID") from None
  if value["artifact_id"]!=_hash(_canon({k:v for k,v in value.items() if k!="artifact_id"})):raise ValueError("ARTIFACT_IDENTITY_MISMATCH")
- if any(value[x] is not False for x in ("claim_authorized","inference_spend_authorized","ready_to_act","authorized_to_act","live_action_enabled")):raise ValueError("ACTION_BOUNDARY_VIOLATION")
+ if any(value[x] is not False for x in ("inference_executed","useful_inference_verified","spend_verified","airdrop_eligibility_verified","claim_authorized","inference_spend_authorized","ready_to_act","authorized_to_act","live_action_enabled")):raise ValueError("ACTION_BOUNDARY_VIOLATION")
+ if value["testnet"]=="TESTNET_READY_FOR_HUMAN_REVIEW" and (value["spec"]!="SPEC_SOURCE_VERIFIED" or value["network_identity"]!="NETWORK_IDENTITY_VERIFIED" or value["asset_identity"]!="TEST_TOKEN"):raise ValueError("READINESS_CONTRADICTION")
  if value["faucet"]=="FAUCET_READY_FOR_HUMAN_REVIEW" and value["testnet"]!="TESTNET_READY_FOR_HUMAN_REVIEW":raise ValueError("READINESS_CONTRADICTION")
  if value["inference_evidence"]=="INFERENCE_EVIDENCE_READY" and value["inference"]!="INFERENCE_READY_FOR_HUMAN_REVIEW":raise ValueError("READINESS_CONTRADICTION")
 __all__=["assess_testnet_readiness","validate_readiness_projection"]
