@@ -5,12 +5,12 @@ import flop_agent.settlement_rail_maturity as rail
 def canon(v):return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode("ascii")
 class SettlementRailMaturityTests(unittest.TestCase):
  def setUp(self):
-  self.base=Path("data/settlement_rail_baseline.json").read_bytes();self.paper=self.candidate("paper","PAPER",source_status="RELEASED");self.evm=self.candidate("evm-hash","EVM_HASH",source_status="PR_OPEN_UNMERGED",deployment_state="MOCK_ONLY",asset_class="TEST_TOKEN",network_sha256="4"*64);self.identity="9"*64
+  self.base=Path("data/settlement_rail_baseline.json").read_bytes();self.paper=self.candidate("paper","PAPER",source_status="RELEASED");self.evm=self.candidate("evm-hash","EVM_HASH",source_status="PR_OPEN_UNMERGED",deployment_state="MOCK_ONLY",asset_class="TEST_TOKEN",network_sha256="4"*64,asset_sha256="3"*64);self.identity="9"*64
  def candidate(self,rail_id,rail_type,**changes):
-  v={"rail_id":rail_id,"rail_type":rail_type,"implementation_version":"v0.1.0","source_class":"TCLK_RELEASE","source_id":"reviewed-tclk-source","source_sha256":"1"*64,"code_sha256":"2"*64,"source_status":"REFERENCE_ONLY","audit_state":"NOT_AUDITED","deployment_state":"NOT_DEPLOYED","network_sha256":None,"asset_class":"UNVERIFIED_ASSET"};v.update(changes);return v
- def authority(self,v):return {**v,"rail_identity_sha256":self.identity}
+  v={"rail_id":rail_id,"rail_type":rail_type,"implementation_version":"v0.1.0","source_class":"TCLK_RELEASE","source_id":"reviewed-tclk-source","source_sha256":"1"*64,"code_sha256":"2"*64,"source_status":"REFERENCE_ONLY","audit_state":"NOT_AUDITED","deployment_state":"NOT_DEPLOYED","network_sha256":None,"asset_class":"UNVERIFIED_ASSET","asset_sha256":None};v.update(changes);return v
+ def authority(self,v,observations=None):return {**v,"rail_identity_sha256":self.identity,"observations":[] if observations is None else observations}
  def observation(self,**changes):
-  v={"rail_id":"evm-hash","rail_identity_sha256":self.identity,"network_sha256":"4"*64,"deployment_sha256":"5"*64,"transaction_sha256":"6"*64,"lock_state":"LOCK_OBSERVED","terminal_state":"CLAIM_OBSERVED","locked_max":"100","actual_settlement":"80","timestamp_sha256":"7"*64,"finality_state":"FINALITY_VERIFIED","timelock_policy_verified":True,"safety_margin_verified":True,"cross_chain_margin_verified":True,"contract_identity_verified":True,"source_provenance_verified":True};v.update(changes);return v
+  v={"rail_id":"evm-hash","rail_identity_sha256":self.identity,"network_sha256":"4"*64,"asset_sha256":"3"*64,"deployment_sha256":"5"*64,"transaction_sha256":"6"*64,"lock_state":"LOCK_OBSERVED","terminal_state":"CLAIM_OBSERVED","locked_max":"100","actual_settlement":"80","timestamp_sha256":"7"*64,"finality_state":"FINALITY_VERIFIED","yellow_paper_version":"draft-v0.5.0","yellow_paper_sha256":"8"*64,"timelock_policy_verified":True,"safety_margin_verified":True,"cross_chain_margin_verified":True,"contract_identity_verified":True,"source_provenance_verified":True};v.update(changes);return v
  def assess(self,rails=None,obs=None,authorities=None):return rail._assess(canon([] if rails is None else rails),canon([] if obs is None else obs),canon({"schema":"settlement-rail-authorities-v1","authorities":[] if authorities is None else authorities}),self.base)
  def test_production_empty_authority_and_baseline_states(self):
   r=rail.assess_settlement_rail_maturity(b"[]",b"[]");self.assertEqual((r["paper_rail"],r["memory_rail"],r["evm_hash_rail"],r["point_lock"]),("PAPER_ONLY","REFERENCE_IMPLEMENTATION","UNMERGED_BINDING","EXPERIMENTAL_UNAUDITED"));self.assertFalse(r["economic_value_verified"]);self.assertEqual(json.loads(Path("data/settlement_rail_authorities.json").read_text())["authorities"],[])
@@ -24,15 +24,17 @@ class SettlementRailMaturityTests(unittest.TestCase):
    v={**self.evm,"source_class":source};self.assertEqual(self.assess([v],authorities=[])["errors"],["SOURCE_UNVERIFIED"])
   self.assertEqual(self.assess([{**self.evm,"raw_contract":"PRIVATE"}])["errors"],["ARTIFACT_SCHEMA_INVALID"])
  def test_observation_exact_network_contract_source_and_asset_boundary(self):
-  auth=self.authority(self.evm);valid=self.assess([self.evm],[self.observation()],[auth]);self.assertTrue(valid["ready_for_human_review"]);self.assertFalse(valid["settlement_verified"])
-  for change in ({"network_sha256":"8"*64},{"rail_identity_sha256":"8"*64},{"contract_identity_verified":False},{"source_provenance_verified":False}):self.assertTrue(self.assess([self.evm],[self.observation(**change)],[auth])["errors"])
+  observed=self.observation();auth=self.authority(self.evm,[observed]);valid=self.assess([self.evm],[observed],[auth]);self.assertTrue(valid["ready_for_human_review"]);self.assertFalse(valid["settlement_verified"])
+  for change in ({"network_sha256":"8"*64},{"asset_sha256":"8"*64},{"rail_identity_sha256":"8"*64},{"deployment_sha256":"8"*64},{"transaction_sha256":"8"*64},{"timestamp_sha256":"8"*64},{"yellow_paper_version":"draft-v0.4.0"},{"yellow_paper_sha256":"a"*64},{"contract_identity_verified":False},{"source_provenance_verified":False}):self.assertEqual(self.assess([self.evm],[self.observation(**change)],[auth])["errors"],["OBSERVATION_BINDING_MISMATCH"])
  def test_yellow_paper_gates_and_amount_policy_remain_unresolved(self):
-  auth=self.authority(self.evm)
+  auth=self.authority(self.evm,[self.observation()])
   for field in ("timelock_policy_verified","safety_margin_verified","cross_chain_margin_verified"):
    r=self.assess([self.evm],[self.observation(**{field:False})],[auth]);self.assertEqual(r["flop_yellowpaper_conformance"],"UNRESOLVED");self.assertFalse(r["settlement_verified"])
-  self.assertEqual(self.assess([self.evm],[self.observation(actual_settlement="101")],[auth])["errors"],["AMOUNT_POLICY_VIOLATION"])
+  excessive=self.observation(actual_settlement="101");self.assertEqual(self.assess([self.evm],[excessive],[self.authority(self.evm,[excessive])])["errors"],["AMOUNT_POLICY_VIOLATION"])
+  for amount in (True,False,1.0,"1e3","١","01","1"*20):self.assertEqual(self.assess([self.evm],[self.observation(actual_settlement=amount)],[auth])["errors"],["ARTIFACT_SCHEMA_INVALID"])
+  large=self.observation(locked_max="9999999999999999999",actual_settlement="9999999999999999998");self.assertTrue(self.assess([self.evm],[large],[self.authority(self.evm,[large])])["ready_for_human_review"])
  def test_missing_finality_fake_deployment_and_asset_mismatch_never_promote(self):
-  auth=self.authority(self.evm)
+  auth=self.authority(self.evm,[self.observation()])
   for change in ({"finality_state":"UNRESOLVED"},{"deployment_sha256":None},{"terminal_state":"NOT_OBSERVED"}):self.assertFalse(self.assess([self.evm],[self.observation(**change)],[auth])["settlement_verified"])
   wrong={**self.evm,"asset_class":"THIRD_PARTY_ASSET"};self.assertEqual(self.assess([wrong],authorities=[auth])["errors"],["SOURCE_UNVERIFIED"])
  def test_privacy_resource_schema_and_action_reachability(self):

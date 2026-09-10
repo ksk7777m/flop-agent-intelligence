@@ -7,7 +7,9 @@ state is TCLK alpha v0.1.0: PaperRail is a no-value rehearsal, MemoryRail is a
 reference implementation, the EvmHashRail binding is unmerged, and point-lock
 crypto is experimental and unaudited. No value-bearing rail is confirmed.
 
-Production rail authorities are empty and hash-pinned. Rail names, PRs, mocks,
+Production rail authorities are empty and hash-pinned. Reviewed authorities
+exact-bind observation, deployment, transaction, timestamp, asset identity,
+network identity, and Yellow Paper version/source commitments. Rail names, PRs, mocks,
 transcripts, state notes, community claims, and caller labels cannot raise
 maturity. Observation candidates use commitments only and must bind exact rail,
 network, deployment, contract, source, amount, timestamp, and finality evidence.
