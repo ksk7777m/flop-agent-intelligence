@@ -102,6 +102,12 @@ Its production authority manifest is empty, raw URLs and inference content are
 rejected, and even verified fixtures stop at human review with every action
 flag false.
 
+The [KOL Referral Attribution and Program Readiness boundary](docs/FLOP_KOL_REFERRAL_READINESS.md)
+pins the announced-but-details-pending program state and validates only offline
+source, rules, referral, wallet-event, and network-use commitments. Production
+authorities are empty; attribution, rank, reward, lottery, agent airdrop, and
+all referral actions remain unverified or disabled.
+
 ## FLOP Specification Authority and Tokenomics Conflict
 
 The closed [specification authority registry](docs/FLOP_SPEC_AUTHORITY_TOKENOMICS_CONFLICT.md)

@@ -197,5 +197,17 @@
     "authority_manifest": "EMPTY_FAIL_CLOSED",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "flop_kol_referral_readiness": {
+    "schema": "flop-kol-referral-readiness-v1",
+    "classification": "SAFE_PURE_OFFLINE_VALIDATOR",
+    "program": "ANNOUNCED_DETAILS_PENDING",
+    "authority_manifest": "EMPTY_FAIL_CLOSED",
+    "referral": "NOT_ISSUED_CONFIRMED",
+    "leaderboard": "NOT_PUBLISHED_CONFIRMED",
+    "attribution": "NOT_ESTABLISHED",
+    "reward": "UNRESOLVED",
+    "network": "NONE",
+    "action": "NO_LIVE_ACTION"
   }
 }
