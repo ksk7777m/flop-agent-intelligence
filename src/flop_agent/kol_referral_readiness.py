@@ -11,7 +11,7 @@ SCHEMA="flop-kol-referral-readiness-v1";POLICY="flop-kol-referral-readiness-poli
 OFFICIAL=frozenset({"FLOP_LABS_OFFICIAL","REVIEWED_OFFICIAL_STATEMENT"});UNTRUSTED=frozenset({"TECHNOCORE_USER_CONTENT","COMMUNITY_SIGNED","X_COMMUNITY_POST","SEARCH_RESULT","AGGREGATOR","UNOFFICIAL_GITHUB","LOOKALIKE_DOMAIN","SHORTENED_URL","THIRD_PARTY_REFERRAL","USER_OFFICIAL_LABEL"})
 PROGRAM_FIELDS=frozenset({"source_class","source_id","source_document_sha256","program_id","announcement_version","rules_version","rules_sha256","details","leaderboard","source_nonce"})
 REFERRAL_FIELDS=frozenset({"source_class","source_id","source_document_sha256","program_id","announcement_version","rules_version","rules_sha256","referrer_sha256","referral_link_sha256","domain_endpoint_sha256","issued_context_sha256","issued_at","expires_at","source_nonce"})
-AUTH_FIELDS=frozenset({"source_class","source_id","source_document_sha256","program_id","announcement_version","rules_version","rules_sha256","referrals"})
+AUTH_FIELDS=frozenset({"source_class","source_id","source_document_sha256","program_id","announcement_version","rules_version","rules_sha256","details","leaderboard","referrals"})
 AUTH_REF_FIELDS=frozenset({"referrer_sha256","referral_link_sha256","domain_endpoint_sha256","issued_context_sha256","issued_at","expires_at"})
 ATTR_FIELDS=frozenset({"program_id","rules_sha256","referral_link_sha256","wallet_identity_sha256","wallet_creation_event_sha256","network_usage_sha256","event_source_sha256","event_timestamp_sha256","evidence_nonce","self_referral_claimed"})
 def _canon(v:Any)->bytes:return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True,allow_nan=False).encode("ascii")
@@ -37,7 +37,7 @@ def _valid_attribution(value:Any)->bool:
 def _manifest(value:Any)->list[dict[str,Any]]:
  if not isinstance(value,dict) or set(value)!={"schema","authorities"} or value["schema"]!="flop-kol-authorities-v1" or not isinstance(value["authorities"],list):raise ValueError
  for item in value["authorities"]:
-  if not isinstance(item,dict) or set(item)!=AUTH_FIELDS or item["source_class"] not in OFFICIAL or not all(_token(item[k]) for k in ("source_id","program_id","announcement_version","rules_version")) or not all(_digest(item[k]) for k in ("source_document_sha256","rules_sha256")) or not isinstance(item["referrals"],list):raise ValueError
+  if not isinstance(item,dict) or set(item)!=AUTH_FIELDS or item["source_class"] not in OFFICIAL or not all(_token(item[k]) for k in ("source_id","program_id","announcement_version","rules_version")) or not all(_digest(item[k]) for k in ("source_document_sha256","rules_sha256")) or item["details"]!="PUBLISHED" or item["leaderboard"] not in {"NOT_PUBLISHED","CANDIDATE","PUBLISHED"} or not isinstance(item["referrals"],list):raise ValueError
   for ref in item["referrals"]:
    if not isinstance(ref,dict) or set(ref)!=AUTH_REF_FIELDS or not all(_digest(ref[k]) for k in AUTH_REF_FIELDS if k.endswith("sha256")) or not _uint(ref["issued_at"]) or not _uint(ref["expires_at"]) or ref["issued_at"]>ref["expires_at"]:raise ValueError
  return value["authorities"]
@@ -55,7 +55,9 @@ def _assess(program_raw:bytes,referral_raw:bytes,attribution_raw:bytes,baseline_
  nonces=[(x["source_class"],x["source_id"],x["source_nonce"]) for x in programs+referrals]
  if len(set(nonces))!=len(nonces):return _stop(result,"REPLAY_CANDIDATE")
  def authority_for(value:dict[str,Any])->list[dict[str,Any]]:
-  return [a for a in authorities if all(value[k]==a[k] for k in ("source_class","source_id","source_document_sha256","program_id","announcement_version","rules_version","rules_sha256"))]
+  fields=("source_class","source_id","source_document_sha256","program_id","announcement_version","rules_version","rules_sha256")
+  if "details" in value:fields+=("details","leaderboard")
+  return [a for a in authorities if all(value[k]==a[k] for k in fields)]
  if programs:
   if any(x["source_class"] in UNTRUSTED or not authority_for(x) for x in programs):return _stop(result,"SOURCE_UNVERIFIED")
   rules={(x["program_id"],x["rules_version"],x["rules_sha256"]) for x in programs}
@@ -75,7 +77,8 @@ def _assess(program_raw:bytes,referral_raw:bytes,attribution_raw:bytes,baseline_
    if binding not in matches[0]["referrals"]:continue
    verified_refs.append(ref)
   if len(verified_refs)!=len(referrals):return _stop(result,"SOURCE_BINDING_MISMATCH" if any(authority_for(x) for x in referrals) else "SOURCE_UNVERIFIED")
-  identities={(x["referral_link_sha256"],x["domain_endpoint_sha256"],x["referrer_sha256"],x["rules_sha256"]) for x in verified_refs}
+  if programs and any(any(ref[k]!=current[k] for k in ("source_class","source_id","source_document_sha256","program_id","announcement_version","rules_version","rules_sha256")) for ref in verified_refs):return _stop(result,"SOURCE_BINDING_MISMATCH")
+  identities={tuple(x[k] for k in ("referral_link_sha256","domain_endpoint_sha256","referrer_sha256","issued_context_sha256","issued_at","expires_at","program_id","announcement_version","rules_version","rules_sha256")) for x in verified_refs}
   if len(identities)>1:result["referral"]="REFERRAL_LINK_CONFLICT";return _stop(result,"REFERRAL_CONFLICT")
   if result["program"]!="KOL_PROGRAM_READY_FOR_HUMAN_REVIEW":result["referral"]="REFERRAL_LINK_SOURCE_VERIFIED";return _stop(result,"PROGRAM_RULES_REQUIRED")
   result["referral"]="REFERRAL_LINK_READY_FOR_HUMAN_REVIEW"
