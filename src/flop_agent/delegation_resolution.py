@@ -55,17 +55,23 @@ def _resolve(note_bytes,authority_bytes,prior_state_bytes):
   if signature_ok and not root_ok:state="DELEGATION_ROOT_UNVERIFIED"
   elif signature_ok and int(item["expires"])<=now:state="DELEGATION_EXPIRED"
   elif signature_ok and root_ok:state="DELEGATION_VALID_CURRENT"
-  parsed.append({"raw":item,"record_id":rid,"agent_id":_hash(item["agent_did"].encode()),"root_verified":root_ok,"signature_valid":signature_ok,"state":state,"superseded_by":None})
+  parsed.append({"raw":item,"record_id":rid,"agent_id":_hash(item["agent_did"].encode()),"root_id":_hash(item["root_did"].encode()),"root_verified":root_ok,"signature_valid":signature_ok,"state":state,"valid_nonce_rank":None,"superseded_by":None})
  valid=[x for x in parsed if x["state"]=="DELEGATION_VALID_CURRENT"]
  for agent in {x["agent_id"] for x in valid}:
-  group=[x for x in valid if x["agent_id"]==agent];highest=max(int(x["raw"]["nonce"]) for x in group);top=[x for x in group if int(x["raw"]["nonce"])==highest];identities={_hash(_canonical({k:v for k,v in x["raw"].items() if k!="signature"})) for x in top}
-  if len(identities)>1:
+  group=[x for x in valid if x["agent_id"]==agent]
+  if len({x["root_id"] for x in group})>1:
    for x in group:x["state"]="DELEGATION_CONFLICT"
+   continue
+  ordered=sorted({int(x["raw"]["nonce"]) for x in group});ranks={nonce:index+1 for index,nonce in enumerate(ordered)}
+  for x in group:x["valid_nonce_rank"]=ranks[int(x["raw"]["nonce"])]
+  highest=ordered[-1];top=[x for x in group if int(x["raw"]["nonce"])==highest];identities={_hash(_canonical({k:v for k,v in x["raw"].items() if k!="signature"})) for x in top}
+  if len(identities)>1:
+   for x in group:x["state"]="DELEGATION_CONFLICT";x["valid_nonce_rank"]=None
   else:
    winner=top[0]
    for x in group:
     if int(x["raw"]["nonce"])<highest:x["state"]="DELEGATION_SUPERSEDED";x["superseded_by"]=winner["record_id"]
- for x in parsed:result["records"].append({k:x[k] for k in ("record_id","agent_id","state","root_verified","signature_valid","superseded_by")})
+ for x in parsed:result["records"].append({k:x[k] for k in ("record_id","agent_id","root_id","state","root_verified","signature_valid","valid_nonce_rank","superseded_by")})
  for field,state in (("current_count","DELEGATION_VALID_CURRENT"),("superseded_count","DELEGATION_SUPERSEDED"),("expired_count","DELEGATION_EXPIRED"),("forged_count","DELEGATION_FORGED"),("conflict_count","DELEGATION_CONFLICT")):result[field]=sum(x["state"]==state for x in parsed)
  result["record_count"]=len(parsed);result["valid_signature_count"]=sum(x["signature_valid"] for x in parsed);result["root_identity_verified"]=any(x["root_verified"] and x["signature_valid"] for x in parsed);result["delegation_signature_valid"]=any(x["signature_valid"] for x in parsed)
  if result["conflict_count"]:result["resolution"]="DELEGATION_CONFLICT"
@@ -90,7 +96,11 @@ def validate_delegation_projection(value):
  records=value["records"]
  expected={"record_count":len(records),"valid_signature_count":sum(x["signature_valid"] for x in records),"current_count":sum(x["state"]=="DELEGATION_VALID_CURRENT" for x in records),"superseded_count":sum(x["state"]=="DELEGATION_SUPERSEDED" for x in records),"expired_count":sum(x["state"]=="DELEGATION_EXPIRED" for x in records),"forged_count":sum(x["state"]=="DELEGATION_FORGED" for x in records),"conflict_count":sum(x["state"]=="DELEGATION_CONFLICT" for x in records)}
  if any(value[k]!=v for k,v in expected.items()):raise ValueError("DELEGATION_COUNT_MISMATCH")
- ids={x["record_id"] for x in records}
- if any(x["state"]=="DELEGATION_SUPERSEDED" and x["superseded_by"] not in ids for x in records):raise ValueError("SUPERSESSION_EVIDENCE_INVALID")
+ by_id={x["record_id"]:x for x in records}
+ for record in records:
+  if record["state"]=="DELEGATION_SUPERSEDED":
+   target=by_id.get(record["superseded_by"])
+   if target is None or target["state"]!="DELEGATION_VALID_CURRENT" or target["agent_id"]!=record["agent_id"] or target["root_id"]!=record["root_id"] or target["valid_nonce_rank"] is None or record["valid_nonce_rank"] is None or target["valid_nonce_rank"]<=record["valid_nonce_rank"]:raise ValueError("SUPERSESSION_EVIDENCE_INVALID")
+  elif record["superseded_by"] is not None:raise ValueError("SUPERSESSION_EVIDENCE_INVALID")
  if any(value[x] is not False for x in ("authorized_to_act","wallet_action_authorized","faucet_action_authorized","inference_spend_authorized","live_signing_authorized","network_access_authorized")):raise ValueError("ACTION_BOUNDARY_VIOLATION")
 __all__=["resolve_delegations","validate_delegation_projection"]

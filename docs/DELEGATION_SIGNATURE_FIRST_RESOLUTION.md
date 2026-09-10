@@ -6,6 +6,10 @@ verifies Ed25519 signatures and reviewed root commitments, filters expired
 records, and only then ranks lossless decimal nonces per agent. Forged records
 never participate in supersession. Equal-nonce valid conflicts fail closed and
 duplicate exact records are counted once.
+Different reviewed roots for the same agent are conflicting chains and never
+supersede one another. Public records expose only a dense relative nonce rank,
+which lets semantic validation prove that a supersession target is a higher
+current record in the same root-agent chain without exposing the nonce.
 
 The provided note is not assumed to contain complete history. Current means
 current only within the provided evidence scope. Production's reviewed root

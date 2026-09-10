@@ -36,6 +36,13 @@ class DelegationResolutionTests(unittest.TestCase):
  def test_equal_nonce_conflicting_reviewed_root_binding_is_conflict(self):
   other_did=did_from_public_key(self.other.public_key().public_bytes_raw());authority=canon({"schema":"delegation-root-authority-v1","evaluated_at":"100","root_did_sha256":[hashlib.sha256(self.root_did.encode()).hexdigest(),hashlib.sha256(other_did.encode()).hexdigest()]});other=self.record(key=self.other,root_did=other_did)
   result=delegation._resolve(canon({"schema":"technocore-delegation-note-v1","records":[self.record(),other]}),authority,b"{}");self.assertEqual(result["resolution"],"DELEGATION_CONFLICT");self.assertEqual(result["conflict_count"],2)
+ def test_different_reviewed_roots_never_cross_supersede(self):
+  other_did=did_from_public_key(self.other.public_key().public_bytes_raw());authority=canon({"schema":"delegation-root-authority-v1","evaluated_at":"100","root_did_sha256":[hashlib.sha256(self.root_did.encode()).hexdigest(),hashlib.sha256(other_did.encode()).hexdigest()]});high=self.record("999",key=self.other,root_did=other_did)
+  result=delegation._resolve(canon({"schema":"technocore-delegation-note-v1","records":[self.record("5"),high]}),authority,b"{}");self.assertEqual(result["resolution"],"DELEGATION_CONFLICT");self.assertEqual(result["superseded_count"],0)
+ def test_expired_high_nonce_does_not_supersede_valid_lower(self):
+  result=self.assess([self.record("5"),self.record("999",expires="100")]);self.assertEqual(result["current_count"],1);self.assertEqual(result["expired_count"],1);self.assertEqual(result["superseded_count"],0)
+ def test_equal_nonce_conflict_is_input_order_independent(self):
+  left=self.record();right=self.record(scope="kv:public");a=self.assess([left,right]);b=self.assess([right,left]);self.assertEqual((a["resolution"],a["conflict_count"]),(b["resolution"],b["conflict_count"]))
  def test_root_identity_is_independent_and_production_registry_empty(self):
   unknown=canon({"schema":"delegation-root-authority-v1","evaluated_at":"100","root_did_sha256":[]});result=delegation._resolve(canon({"schema":"technocore-delegation-note-v1","records":[self.record()]}),unknown,b"{}");self.assertEqual(result["resolution"],"DELEGATION_ROOT_UNVERIFIED");self.assertTrue(result["delegation_signature_valid"]);self.assertFalse(result["root_identity_verified"])
   self.assertEqual(delegation.resolve_delegations(b"{}",self.authority)["errors"],["ROOT_AUTHORITY_UNAPPROVED"])
@@ -46,6 +53,8 @@ class DelegationResolutionTests(unittest.TestCase):
  def test_resources_schema_compatibility_and_no_reachability(self):
   self.assertEqual(delegation._resolve(b" "*(delegation.MAX_NOTE_BYTES+1),self.authority,b"{}")["errors"],["INPUT_LIMIT_EXCEEDED"])
   schema=json.loads(Path("schemas/delegation-signature-first-resolution.v1.json").read_text());Draft202012Validator.check_schema(schema);Draft202012Validator(schema).validate(self.assess([self.record()]))
+  result=self.assess([self.record("5"),self.record("6")]);forged=copy.deepcopy(result);victim=next(x for x in forged["records"] if x["state"]=="DELEGATION_SUPERSEDED");victim["valid_nonce_rank"]=3;forged["artifact_id"]=delegation._hash(delegation._canonical({k:v for k,v in forged.items() if k!="artifact_id"}))
+  with self.assertRaises(ValueError):delegation.validate_delegation_projection(forged)
   source=inspect.getsource(delegation)
   for word in ("requests.","urlopen","socket.","subprocess.","PrivateKey","web3","playwright","selenium","testnet_readiness","kol_referral") :self.assertNotIn(word,source)
   self.assertEqual(json.loads(Path("data/delegation_authorities.json").read_text())["approved_authority_artifact_sha256"],[])
