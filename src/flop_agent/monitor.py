@@ -250,7 +250,9 @@ def extract_yellow_paper_snapshot(raw: bytes) -> Dict[str, Any]:
         if len(matches) != 1:
             raise ValueError("yellow paper parameter is missing or duplicated")
         anchors, cells = matches[0]
-        if anchors != [name] or len(cells) != 2 or cells[0] != name:
+        # The official responsive table may include descriptive cells after the
+        # canonical name/value pair. They are never interpreted as parameters.
+        if anchors != [name] or len(cells) < 2 or cells[0] != name:
             raise ValueError("yellow paper parameter row is ambiguous")
         value_match = re.fullmatch(r"([0-9]+(?:_[0-9]{3})*) " + re.escape(unit), cells[1])
         if not value_match:
