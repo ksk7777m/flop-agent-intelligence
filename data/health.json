@@ -1,18 +1,19 @@
 {
   "schema": "flop-health-v1",
-  "last_checked": "2026-08-27T12:34:04Z",
-  "last_successful": "2026-08-27T12:34:04Z",
-  "next_scheduled_check": "2026-08-28T09:00:00+09:00",
+  "last_checked": "2026-09-11T03:29:35Z",
+  "last_successful": "2026-09-11T03:29:35Z",
+  "next_scheduled_check": "GitHub Actions schedule",
   "checks": [
     {"id": "technocore", "label": "Technocore reachable", "status": "READY"},
     {"id": "github-official", "label": "Official GitHub reachable", "status": "READY"},
-    {"id": "did-note", "label": "DID Note readable", "status": "READY"},
+    {"id": "did-note", "label": "Historical DID Note (evicted; offline evidence verified)", "status": "READY"},
     {"id": "mailbox", "label": "Mailbox migration", "status": "PENDING"},
     {"id": "public-repo", "label": "Public repo reachable", "status": "READY"},
     {"id": "contribution", "label": "Technocore contribution recorded", "status": "VERIFIED"},
     {"id": "receipt", "label": "Local receipt verification", "status": "VERIFIED"},
     {"id": "official-sources", "label": "Official source check", "status": "READY"},
     {"id": "official-teaser", "label": "FLOP official teaser", "status": "READY"},
+    {"id": "yellow-paper", "label": "FLOP Yellow Paper v0.5.0 parameter baseline", "status": "READY"},
     {"id": "capacity", "label": "Capacity contract", "status": "READY"},
     {"id": "engagement", "label": "Engagement aggregates (not airdrop scoring)", "status": "READY"}
   ]

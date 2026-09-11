@@ -35,6 +35,7 @@ SCHEMAS = {
     "monitor.json": "flop-public-monitor-status-v1",
     "capacity_evidence.json": "technocore-capacity-evidence-v1",
     "teaser.json": "flop-teaser-monitor-v1",
+    "yellow_paper.json": "flop-yellow-paper-baseline-v1",
     "testnet_adapter.json": "flop-testnet-adapter-status-v0",
     "technocore_compatibility.json": "technocore-compatibility-manifest-v1",
 }

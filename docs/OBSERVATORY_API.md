@@ -1,5 +1,19 @@
 # Technocore Observatory API
 
+## Snapshot time versus compatibility review
+
+The checked-in room, status, engagement, and aggregate payloads retain their
+original `generated_at`/`source.fetched_at` timestamps and are labeled
+`HISTORICAL_SNAPSHOT`. They must not be presented as current room state.
+`reviewed_at` and `compatibility.live_observed_at` instead describe the
+independent read-only Technocore 0.13.0 compatibility review. The released tag,
+tag commit, upstream main, live OpenAPI version, and documentation-only
+unreleased delta remain separate facts.
+
+The FLOP Yellow Paper baseline is available at `/data/yellow_paper.json`.
+It is a reviewed draft parameter authority, not testnet, faucet, claim,
+scoring, wallet, payment, or production-action authority.
+
 The separate Engagement Monitor publishes `/api/engagement-status.json`,
 `/api/engagement-diff.json`, and `/api/engagement-series.json`. Collection and
 the scheduler are disabled, so their checked-in state is **NO REVIEWED

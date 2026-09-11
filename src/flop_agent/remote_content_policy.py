@@ -208,6 +208,7 @@ class ReviewedSourceId(str, Enum):
     PUBLIC_EVIDENCE = "PUBLIC_EVIDENCE"
     FLOP_FINANCE = "FLOP_FINANCE"
     FLOP_FINANCE_TEASER = "FLOP_FINANCE_TEASER"
+    FLOP_YELLOW_PAPER = "FLOP_YELLOW_PAPER"
     FLOP_LABS_X = "FLOP_LABS_X"
     CONTRIBUTION_X = "CONTRIBUTION_X"
 
@@ -259,6 +260,7 @@ _REVIEWED_SOURCES: Mapping[ReviewedSourceId, ReviewedSource] = MappingProxyType(
     ReviewedSourceId.PUBLIC_EVIDENCE: ReviewedSource(ReviewedSourceId.PUBLIC_EVIDENCE, "https://ksk7777m.github.io/flop-agent-intelligence/data/evidence.json"),
     ReviewedSourceId.FLOP_FINANCE: ReviewedSource(ReviewedSourceId.FLOP_FINANCE, "https://flop.finance/"),
     ReviewedSourceId.FLOP_FINANCE_TEASER: ReviewedSource(ReviewedSourceId.FLOP_FINANCE_TEASER, "https://flop.finance/teaser/"),
+    ReviewedSourceId.FLOP_YELLOW_PAPER: ReviewedSource(ReviewedSourceId.FLOP_YELLOW_PAPER, "https://flop.finance/intro/yellowpaper/"),
     ReviewedSourceId.FLOP_LABS_X: ReviewedSource(ReviewedSourceId.FLOP_LABS_X, "https://x.com/flop_labs"),
     ReviewedSourceId.CONTRIBUTION_X: ReviewedSource(ReviewedSourceId.CONTRIBUTION_X, "https://x.com/Giappone_Medici/status/2092613806434218126"),
 })

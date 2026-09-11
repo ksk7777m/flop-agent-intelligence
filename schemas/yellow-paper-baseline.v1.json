@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/yellow-paper-baseline.v1.json",
+  "title": "FLOP Yellow Paper Reviewed Baseline V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "artifact_generated_at", "reviewed_at", "source", "status", "parameters", "semantic_diff_review", "unresolved", "safety"],
+  "properties": {
+    "schema": {"const": "flop-yellow-paper-baseline-v1"},
+    "artifact_generated_at": {"type": "string", "format": "date-time"},
+    "reviewed_at": {"type": "string", "format": "date-time"},
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_id", "url", "authority", "version", "document_status", "updated", "raw_sha256_at_review", "normalized_text_sha256", "semantic_commitment_sha256", "discovered_url_navigation"],
+      "properties": {
+        "source_id": {"const": "FLOP_YELLOW_PAPER"},
+        "url": {"const": "https://flop.finance/intro/yellowpaper/"},
+        "authority": {"const": "OFFICIAL_PARAMETER_VALUES"},
+        "version": {"const": "0.5.0 (draft)"},
+        "document_status": {"const": "Implementation spec — iterating"},
+        "updated": {"const": "2026-09-05"},
+        "raw_sha256_at_review": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "normalized_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "semantic_commitment_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "discovered_url_navigation": {"const": "INERT"}
+      }
+    },
+    "status": {"const": "OFFICIAL_DRAFT_REVIEWED"},
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "required": ["genesis_supply", "genesis_miner_airdrop", "genesis_validator_airdrop", "genesis_agent_airdrop", "genesis_reserve", "initial_block_reward", "miner_share_ppt", "validator_share_ppt", "agent_share_ppt", "staker_share_ppt", "max_halvings", "floor_reward", "subsidy_per_block_per_recipient"],
+      "properties": {
+        "genesis_supply": {"const": 4400000000},
+        "genesis_miner_airdrop": {"const": 1200000000},
+        "genesis_validator_airdrop": {"const": 1200000000},
+        "genesis_agent_airdrop": {"const": 1200000000},
+        "genesis_reserve": {"const": 800000000},
+        "initial_block_reward": {"const": 96},
+        "miner_share_ppt": {"const": 750},
+        "validator_share_ppt": {"const": 100},
+        "agent_share_ppt": {"const": 100},
+        "staker_share_ppt": {"const": 50},
+        "max_halvings": {"const": 5},
+        "floor_reward": {"const": 3},
+        "subsidy_per_block_per_recipient": {"const": 8}
+      }
+    },
+    "semantic_diff_review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["previous_reported_genesis_pool", "previous_validator_airdrop", "classification"],
+      "properties": {
+        "previous_reported_genesis_pool": {"const": 2483460000},
+        "previous_validator_airdrop": {"const": 305505000},
+        "classification": {"const": "SUPERSEDED_REPORTED_VALUES_NOT_CURRENT_AUTHORITY"}
+      }
+    },
+    "unresolved": {"type": "array", "minItems": 15, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z0-9_]+$"}},
+    "safety": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ready_to_act", "authorized_to_act", "live_action_enabled", "production_authorities", "external_writes"],
+      "properties": {
+        "ready_to_act": {"const": false}, "authorized_to_act": {"const": false},
+        "live_action_enabled": {"const": false}, "production_authorities": {"const": 0},
+        "external_writes": {"const": 0}
+      }
+    }
+  }
+}

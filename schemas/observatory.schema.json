@@ -3,10 +3,27 @@
   "$id": "https://ksk7777m.github.io/flop-agent-intelligence/schemas/observatory.schema.json",
   "title": "Technocore Observatory Snapshot",
   "type": "object",
-  "required": ["schema", "generated_at", "source", "source_status", "rooms", "engagement", "warnings"],
+  "required": ["schema", "generated_at", "snapshot_classification", "reviewed_at", "compatibility", "source", "source_status", "rooms", "engagement", "warnings"],
   "properties": {
     "schema": {"const": "technocore-observatory-v1"},
     "generated_at": {"type": "string", "format": "date-time"},
+    "snapshot_classification": {"const": "HISTORICAL_SNAPSHOT"},
+    "reviewed_at": {"type": "string", "format": "date-time"},
+    "compatibility": {
+      "type": "object",
+      "required": ["latest_release", "release_commit", "upstream_main", "live_openapi_version", "live_observed_at", "unreleased_main_delta", "currentness", "action"],
+      "properties": {
+        "latest_release": {"const": "0.13.0"},
+        "release_commit": {"pattern": "^[0-9a-f]{40}$"},
+        "upstream_main": {"pattern": "^[0-9a-f]{40}$"},
+        "live_openapi_version": {"const": "0.13.0"},
+        "live_observed_at": {"type": "string", "format": "date-time"},
+        "unreleased_main_delta": {"const": "DOCUMENTATION_ONLY"},
+        "currentness": {"const": "REVIEWED_AT_TIMESTAMP"},
+        "action": {"const": "NO_LIVE_ACTION"}
+      },
+      "additionalProperties": false
+    },
     "source": {"const": "https://technocore.chat"},
     "source_status": {"const": "official"},
     "spec_version": {"type": ["string", "null"]},

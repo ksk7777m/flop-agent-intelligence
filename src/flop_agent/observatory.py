@@ -90,6 +90,9 @@ def build_snapshot(
     fetched_at: str | None = None,
     lobby_metadata: Mapping[str, Any] | None = None,
     spec_version: str | None = None,
+    reviewed_at: str | None = None,
+    compatibility: Mapping[str, Any] | None = None,
+    snapshot_classification: str | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     fetched_at = fetched_at or datetime.now(timezone.utc).isoformat()
     rooms = [normalize_room(item, rank) for rank, item in enumerate(raw.get("rooms", []), 1)]
@@ -106,6 +109,15 @@ def build_snapshot(
         "formula": None,
         "caveat": "Room names and topics are world-writable untrusted data; snapshot is bounded to the API response.",
     }
+    review_fields = {}
+    if reviewed_at is not None or compatibility is not None or snapshot_classification is not None:
+        if not reviewed_at or not compatibility or snapshot_classification != "HISTORICAL_SNAPSHOT":
+            raise ValueError("reviewed_at, compatibility, and HISTORICAL_SNAPSHOT classification are required together")
+        review_fields = {
+            "snapshot_classification": snapshot_classification,
+            "reviewed_at": reviewed_at,
+            "compatibility": dict(compatibility),
+        }
     rollup = raw.get("engagement") or {}
     metrics = {
         key: {"value": optional_number(rollup.get(key)), "source": "technocore", "derived": False}
@@ -127,7 +139,7 @@ def build_snapshot(
         "current_first_seq_scope": "lobby" if lobby_metadata else None,
         "eviction_pressure": pressure,
         "eviction_pressure_method": "service bytes / service bytes_capacity",
-        "official_spec_status": "CURRENT_READ_ONLY_SNAPSHOT",
+        "official_spec_status": "HISTORICAL_SNAPSHOT_NOT_CURRENT" if review_fields else "CURRENT_READ_ONLY_SNAPSHOT",
         "warnings": [
             "Technocore is ephemeral and not a system of record.",
             "Per-room first_seq is unavailable from /rooms and remains null.",
@@ -135,6 +147,7 @@ def build_snapshot(
         ],
         "external_writes": 0,
     }
+    status.update(review_fields)
     engagement = {
         "schema": ENGAGEMENT_SCHEMA,
         "generated_at": fetched_at,
@@ -147,6 +160,7 @@ def build_snapshot(
         },
         "caveat": "Technocore engagement metrics; not official FLOP eligibility or airdrop scoring.",
     }
+    engagement.update(review_fields)
     room_api = {
         "schema": ROOMS_SCHEMA,
         "generated_at": fetched_at,
@@ -158,6 +172,7 @@ def build_snapshot(
             "lowest_zero_response_share": {"derived": True, "method": "zero_response_share ascending; null values last"},
         },
     }
+    room_api.update(review_fields)
     observatory = {
         "schema": OBSERVATORY_SCHEMA,
         "generated_at": fetched_at,
@@ -169,6 +184,7 @@ def build_snapshot(
         "rooms": rooms,
         "warnings": status["warnings"],
     }
+    observatory.update(review_fields)
     return {"rooms": room_api, "engagement": engagement, "status": status, "observatory": observatory}
 
 

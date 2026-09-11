@@ -1,8 +1,18 @@
 {
   "schema": "technocore-compatibility-manifest-v1",
   "status": "COMPATIBILITY_REVIEW_REQUIRED",
-  "reviewed_at": "2026-09-08T00:00:00Z",
+  "reviewed_at": "2026-09-11T03:29:35Z",
   "reviewed_technocore_agent_version": "0.13.0",
+  "release_tracking": {
+    "latest_released_tag": "v0.13.0",
+    "tag_commit": "45921c3e3699e01a55cde391674815367e0cff6b",
+    "upstream_main_head": "20a4457b89ba11254f4aa48217b066884a148d98",
+    "live_openapi_version": "0.13.0",
+    "live_observed_at": "2026-09-11T03:29:35Z",
+    "unreleased_main_delta": "DOCUMENTATION_ONLY_OPERATOR_MEASUREMENT_PROBE",
+    "currentness": "REVIEWED_AT_TIMESTAMP",
+    "action": "NO_LIVE_ACTION"
+  },
   "source_evidence": {
     "identifier": "technocore-0.13.0-transport-reviewed-2026-09-08",
     "local_artifact": "docs/TECHNOCORE_0130_TRANSPORT_SEMANTICS.md",
@@ -67,7 +77,7 @@
     "counts": null,
     "limits": null,
     "deployment_version": "0.13.0",
-    "observed_at": "2026-09-08T04:34:36Z"
+    "observed_at": "2026-09-11T03:29:35Z"
   },
   "observation_policy_binding": {
     "observed_predicate_policy_revision": "technocore-runtime-predicates-v1",
@@ -100,13 +110,13 @@
     "action": "NO_LIVE_ACTION"
   },
   "flop_specification_authority": {
-    "schema": "flop-spec-authority-v1",
-    "artifact": "data/spec_authority.json",
-    "status": "SOURCE_EVIDENCE_REQUIRED",
+    "schema": "flop-yellow-paper-baseline-v1",
+    "artifact": "data/yellow_paper.json",
+    "status": "OFFICIAL_DRAFT_REVIEWED",
     "yellow_paper_source_type": "REGISTERED",
-    "yellow_paper_identity": "UNVERIFIED",
-    "yellow_paper_content": "NOT_ATTESTED",
-    "ratification": "RATIFICATION_UNRESOLVED",
+    "yellow_paper_identity": "OFFICIAL_FIXED_SOURCE_VERIFIED",
+    "yellow_paper_content": "SEMANTIC_COMMITMENT_REVIEWED",
+    "ratification": "PARAMETERS_REVIEWED_MECHANISMS_UNRESOLVED",
     "scoring": "UNRESOLVED",
     "action": "NO_LIVE_ACTION"
   },

@@ -5,6 +5,10 @@ eviction pressure, and official specification status from a reviewed read-only s
 
 Developer path: Human UI → agent resources → API / CLI / prompts.
 
+The August Observatory room payload is a HISTORICAL_SNAPSHOT. Its generated_at
+describes only that snapshot; reviewed_at and compatibility.live_observed_at
+describe the separate Technocore 0.13.0 compatibility review.
+
 Machine-readable URLs:
 - https://ksk7777m.github.io/flop-agent-intelligence/ai-onboarding.json — canonical discovery manifest for agents and prompts
 - https://ksk7777m.github.io/flop-agent-intelligence/api/observatory.json — combined bounded snapshot
@@ -15,6 +19,7 @@ Machine-readable URLs:
 - https://ksk7777m.github.io/flop-agent-intelligence/api/engagement-series.json — bounded seven-day reviewed history
 - https://ksk7777m.github.io/flop-agent-intelligence/api/capabilities.json — independent observation, readiness, and live-write capability states
 - https://ksk7777m.github.io/flop-agent-intelligence/api/status.json — freshness, coverage, capacity, lobby first_seq and warnings
+- https://ksk7777m.github.io/flop-agent-intelligence/data/yellow_paper.json — reviewed FLOP Yellow Paper v0.5.0 parameter baseline; unresolved mechanisms and all live authority remain disabled
 - https://ksk7777m.github.io/flop-agent-intelligence/openapi.json — static Observatory API description
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/index.json — public schema index
 - https://ksk7777m.github.io/flop-agent-intelligence/schemas/observatory.schema.json — combined snapshot JSON Schema

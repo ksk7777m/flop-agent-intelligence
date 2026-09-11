@@ -14,11 +14,15 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping
 from .classifier import classify
 from .receipt import read_receipt, verify_receipt
 from .readiness import OFFICIAL_SPECS
-from .remote_content_policy import RemoteOrigin, ReviewedSourceId, discovered_remote_value, read_configured_endpoint
+from .remote_content_policy import (
+    RemoteOrigin, ReviewedSourceId, SafeRemoteError, discovered_remote_value,
+    read_configured_endpoint,
+)
 
 
 VERSION = "flop-readiness-health-monitor-v1"
 TEASER_URL = "https://flop.finance/teaser/"
+YELLOW_PAPER_URL = "https://flop.finance/intro/yellowpaper/"
 DID = "did:key:z6MkkTuFggpkYcZ61zGxej2Ae7Lf6MHk3AbsYASULYTqiqXy"
 DID_NOTE_VALUE = (
     f"{DID} x25519:a-EbwHNshrhf00Aqq4P7xrZ8Cqmncxr3HW_wTSOoXW0 "
@@ -42,11 +46,36 @@ ENDPOINTS = {
     "official_repo": ReviewedSourceId.TECHNOCORE_REPOSITORY_API,
     "flop_site": ReviewedSourceId.FLOP_FINANCE,
     "teaser": ReviewedSourceId.FLOP_FINANCE_TEASER,
+    "yellow_paper": ReviewedSourceId.FLOP_YELLOW_PAPER,
     "x_official": ReviewedSourceId.FLOP_LABS_X,
     "x_evidence": ReviewedSourceId.CONTRIBUTION_X,
     "capacity_manifest": ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST,
     "rooms_summary": ReviewedSourceId.TECHNOCORE_ROOMS_SUMMARY,
 }
+YELLOW_PAPER_PARAMETERS = MappingProxyType({
+    "genesis_supply": ("FLOP", 4_400_000_000),
+    "genesis_miner_airdrop": ("FLOP", 1_200_000_000),
+    "genesis_validator_airdrop": ("FLOP", 1_200_000_000),
+    "genesis_agent_airdrop": ("FLOP", 1_200_000_000),
+    "genesis_reserve": ("FLOP", 800_000_000),
+    "initial_block_reward": ("FLOP", 96),
+    "miner_share_ppt": ("parts-per-thousand", 750),
+    "validator_share_ppt": ("parts-per-thousand", 100),
+    "agent_share_ppt": ("parts-per-thousand", 100),
+    "staker_share_ppt": ("parts-per-thousand", 50),
+    "max_halvings": ("count", 5),
+    "floor_reward": ("FLOP", 3),
+    "subsidy_per_block_per_recipient": ("FLOP", 8),
+})
+YELLOW_PAPER_UNRESOLVED = (
+    "TESTNET_ENDPOINT", "FAUCET_ENDPOINT", "CLAIM_ENDPOINT",
+    "REGISTRATION_OR_PROVISIONING_ENDPOINT", "TOKEN_OR_CONTRACT_ENDPOINT",
+    "AGENT_SCORING_FORMULA", "TESTNET_TO_MAINNET_CONVERSION",
+    "MINIMUM_ACTIVITY", "SNAPSHOT_DATE", "CLAIM_WINDOW",
+    "AIRDROP_CAP_FORMULA", "SPEND_TO_UNLOCK_FINAL_RULE",
+    "VESTING_RELEASE_RECONCILIATION", "UNALLOCATED_REMAINDER_DISPOSITION",
+    "AGENT_STAKER_REWARD_DISTRIBUTION",
+)
 SENSITIVE_TERMS = {
     "testnet", "faucet", "did task", "did-gated", "reward", "snapshot",
     "eligibility", "claim", "contract", "deadline", "security", "upgrade",
@@ -120,6 +149,178 @@ class _TeaserHTML(HTMLParser):
             self.current_link["text"] += data
 
 
+class _YellowPaperHTML(HTMLParser):
+    """Extract only anchored parameter rows and document metadata."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hidden = 0
+        self.parts: List[str] = []
+        self.in_meta = False
+        self.meta_span: List[str] | None = None
+        self.meta_spans: List[str] = []
+        self.row_cells: List[str] | None = None
+        self.cell_parts: List[str] | None = None
+        self.row_anchors: List[str] = []
+        self.rows: List[tuple[List[str], List[str]]] = []
+        self.link_count = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = dict(attrs)
+        if tag in {"script", "style"}:
+            self.hidden += 1
+            return
+        if self.hidden:
+            return
+        if tag == "div" and "meta" in attributes.get("class", "").split():
+            self.in_meta = True
+        elif self.in_meta and tag == "span":
+            self.meta_span = []
+        elif tag == "tr":
+            self.row_cells, self.row_anchors = [], []
+        elif tag == "td" and self.row_cells is not None:
+            self.cell_parts = []
+        elif tag == "a":
+            self.link_count += 1
+            anchor = attributes.get("id", "")
+            if self.row_cells is not None and anchor.startswith("param-"):
+                self.row_anchors.append(anchor.removeprefix("param-"))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self.hidden:
+            self.hidden -= 1
+            return
+        if self.hidden:
+            return
+        if tag == "span" and self.meta_span is not None:
+            self.meta_spans.append(_normalized_text(self.meta_span))
+            self.meta_span = None
+        elif tag == "div" and self.in_meta:
+            self.in_meta = False
+        elif tag == "td" and self.cell_parts is not None and self.row_cells is not None:
+            self.row_cells.append(_normalized_text(self.cell_parts))
+            self.cell_parts = None
+        elif tag == "tr" and self.row_cells is not None:
+            if self.row_anchors:
+                self.rows.append((list(self.row_anchors), list(self.row_cells)))
+            self.row_cells = None
+            self.cell_parts = None
+            self.row_anchors = []
+
+    def handle_data(self, data: str) -> None:
+        if self.hidden:
+            return
+        self.parts.append(data)
+        if self.meta_span is not None:
+            self.meta_span.append(data)
+        if self.cell_parts is not None:
+            self.cell_parts.append(data)
+
+
+def _normalized_text(parts: Iterable[str]) -> str:
+    return re.sub(r"\s+", " ", " ".join(parts)).strip()
+
+
+def _metadata_value(spans: Iterable[str], label: str) -> str:
+    matches = []
+    for item in spans:
+        match = re.fullmatch(re.escape(label) + r"\s*(.+)", item)
+        if match:
+            matches.append(match.group(1).strip())
+    if len(matches) != 1:
+        raise ValueError("yellow paper metadata is missing or ambiguous")
+    return matches[0]
+
+
+def extract_yellow_paper_snapshot(raw: bytes) -> Dict[str, Any]:
+    parser = _YellowPaperHTML()
+    try:
+        parser.feed(raw.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError("yellow paper document is malformed") from error
+    metadata = {
+        "version": _metadata_value(parser.meta_spans, "Version"),
+        "status": _metadata_value(parser.meta_spans, "Status"),
+        "updated": _metadata_value(parser.meta_spans, "Updated"),
+    }
+    parameters: Dict[str, int] = {}
+    units: Dict[str, str] = {}
+    for name, (unit, _reviewed_value) in YELLOW_PAPER_PARAMETERS.items():
+        matches = [(anchors, cells) for anchors, cells in parser.rows if name in anchors]
+        if len(matches) != 1:
+            raise ValueError("yellow paper parameter is missing or duplicated")
+        anchors, cells = matches[0]
+        if anchors != [name] or len(cells) != 2 or cells[0] != name:
+            raise ValueError("yellow paper parameter row is ambiguous")
+        value_match = re.fullmatch(r"([0-9]+(?:_[0-9]{3})*) " + re.escape(unit), cells[1])
+        if not value_match:
+            raise ValueError("yellow paper parameter value is malformed")
+        parameters[name] = int(value_match.group(1).replace("_", ""))
+        units[name] = unit
+    normalized = _normalized_text(parser.parts).lower().encode("utf-8")
+    if "e.38" not in normalized.decode("utf-8") or "e.40" not in normalized.decode("utf-8"):
+        raise ValueError("yellow paper unresolved-item markers are missing")
+    semantics = {
+        "metadata": metadata,
+        "parameters": parameters,
+        "units": units,
+        "unresolved": list(YELLOW_PAPER_UNRESOLVED),
+    }
+    commitment = hashlib.sha256(json.dumps(
+        semantics, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("ascii")).hexdigest()
+    return {
+        "source": YELLOW_PAPER_URL,
+        "source_tier": "TIER_1_OFFICIAL_PARAMETER_AUTHORITY",
+        "content_label": "UNTRUSTED_OFFICIAL_CONTENT",
+        "raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "normalized_text_sha256": hashlib.sha256(normalized).hexdigest(),
+        "semantic_commitment_sha256": commitment,
+        **semantics,
+        "discovered_links": {"count": parser.link_count, "navigation": "INERT"},
+        "authority": "PARAMETER_VALUES_ONLY",
+        "ready_to_act": False,
+        "authorized_to_act": False,
+        "live_action_enabled": False,
+    }
+
+
+def evaluate_yellow_paper(raw: bytes, baseline: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        current = extract_yellow_paper_snapshot(raw)
+    except ValueError:
+        return _result("REVIEW_REQUIRED", "YELLOW_PAPER_PARSE_FAILED", classification="CRITICAL")
+    if current["metadata"]["version"] != "0.5.0 (draft)":
+        return _result("REVIEW_REQUIRED", "YELLOW_PAPER_VERSION_UNREVIEWED", **current)
+    semantic_diff = []
+    for name, value in current["parameters"].items():
+        old = baseline.get("parameters", {}).get(name)
+        if old != value:
+            semantic_diff.append({"field": name, "old": old, "new": value})
+    for name, value in current["metadata"].items():
+        old = baseline.get("metadata", {}).get(name)
+        if old != value:
+            semantic_diff.append({"field": name, "old": old, "new": value})
+    semantic_same = current["semantic_commitment_sha256"] == baseline.get("semantic_commitment_sha256")
+    # The official page uses dynamic transport bytes. Raw SHA is retained as
+    # observation evidence; normalized visible text is the document boundary.
+    raw_transport_same = current["raw_sha256"] == baseline.get("raw_sha256")
+    document_same = current["normalized_text_sha256"] == baseline.get("normalized_text_sha256")
+    if semantic_same and document_same:
+        return _result(
+            "READY", "UNCHANGED", document_changed=False,
+            raw_transport_changed=not raw_transport_same, semantic_diff=[], **current)
+    return _result(
+        "REVIEW_REQUIRED",
+        "YELLOW_PAPER_SEMANTIC_CHANGED" if not semantic_same else "YELLOW_PAPER_DOCUMENT_CHANGED",
+        classification="CRITICAL" if not semantic_same else "REVIEW_REQUIRED",
+        document_changed=not document_same,
+        raw_transport_changed=not raw_transport_same,
+        semantic_diff=semantic_diff,
+        **current,
+    )
+
+
 def normalize_official_signal(raw: bytes) -> bytes:
     parser = _VisibleText()
     parser.feed(raw.decode("utf-8", errors="replace"))
@@ -148,10 +349,12 @@ def extract_teaser_snapshot(raw: bytes) -> Dict[str, Any]:
         "testnet": testnet_match.group(1).strip() if testnet_match else ("MENTIONED" if "testnet" in lower else "NOT_ANNOUNCED"),
         "mainnet": mainnet_match.group(1).strip() if mainnet_match else ("MENTIONED" if "mainnet" in lower else "NOT_ANNOUNCED"),
         "genesis_airdrop": "DRAFT" if "genesis airdrop" in lower else "NOT_ANNOUNCED",
-        "agent_allocation": "up to 1,200,000,000 (7.0%)" if "up to 1,200,000,000 (7.0%)" in lower else "MENTIONED" if "agents" in lower else "NOT_ANNOUNCED",
-        "miner_allocation": "up to 1,200,000,000 (7.0%)" if "up to 1,200,000,000 (7.0%)" in lower else "MENTIONED" if "miners" in lower else "NOT_ANNOUNCED",
-        "validator_allocation": "305,505,000 (1.8%)" if "305,505,000 (1.8%)" in lower else "MENTIONED" if "validators" in lower else "NOT_ANNOUNCED",
-        "reserve_incentives": "794,495,000 (4.6%)" if "794,495,000 (4.6%)" in lower else "MENTIONED" if "reserve" in lower else "NOT_ANNOUNCED",
+        # Teaser amounts remain provisional context. Parameter values are
+        # extracted independently from Yellow Paper Appendix A.
+        "agent_allocation": "PROVISIONAL_MENTION" if "agents" in lower else "NOT_ANNOUNCED",
+        "miner_allocation": "PROVISIONAL_MENTION" if "miners" in lower else "NOT_ANNOUNCED",
+        "validator_allocation": "PROVISIONAL_MENTION" if "validators" in lower else "NOT_ANNOUNCED",
+        "reserve_incentives": "PROVISIONAL_MENTION" if "reserve" in lower else "NOT_ANNOUNCED",
         "faucet": "CONFIRMED_ENDPOINT" if faucet_links else "OFFICIAL_DRAFT_MENTION" if "faucet" in lower else "NOT_ANNOUNCED",
         "inference": "CONFIRMED_ENDPOINT" if inference_links else "OFFICIAL_DRAFT_MENTION" if "inference" in lower else "NOT_ANNOUNCED",
         "did_tasks": "MENTIONED" if "did-gated" in lower or "did task" in lower else "NONE",
@@ -341,7 +544,10 @@ def _safe_fetch(
         body = fetcher(endpoints[name])
         return body, _result("READY", "Endpoint reachable", bytes=len(body))
     except Exception as error:
-        return None, _result("UNKNOWN", "Endpoint temporarily unavailable", error=type(error).__name__)
+        extra = {"error": type(error).__name__}
+        if isinstance(error, SafeRemoteError):
+            extra["http_status"] = error.status
+        return None, _result("UNKNOWN", "Endpoint temporarily unavailable", **extra)
 
 
 def _local_evidence(root: Path) -> Dict[str, Any]:
@@ -378,6 +584,8 @@ def _public_evidence(root: Path, bodies: Dict[str, bytes]) -> Dict[str, Any]:
         details["original_commit"] = public.get("original_public_commit") == "e388c6fd549de2931c40f1647dc1540a78b5c920"
         details["receipt_fingerprint"] = public.get("receipt_sha256") == "854b3442645b0dcaeae9d87646e0144fd48f659ef0a72208135eddaa37b279b2"
         details["historical_status"] = public.get("historical_evidence_status") == "VERIFIED_OFFCHAIN"
+        details["did"] = public.get("did") == DID
+        details["did_note_hash"] = public.get("did_note_sha256") == DID_NOTE_HASH
         details["commit_reachable"] = "original_commit" in bodies
         from .identity import verify_message
         records = [json.loads(line) for line in (root / "data/activity.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -419,7 +627,8 @@ def _run_monitor(
         except json.JSONDecodeError:
             checks["repo"] = _result("ERROR", "Repository metadata is invalid")
     if "dashboard" in bodies and b"FLOP Agent Readiness Dashboard" not in bodies["dashboard"]:
-        checks["dashboard"] = _result("REVIEW_REQUIRED", "Dashboard content marker missing")
+        if b"Technocore Ecosystem Observatory" not in bodies["dashboard"]:
+            checks["dashboard"] = _result("REVIEW_REQUIRED", "Dashboard content marker missing")
     if "flop_site" in bodies and b"https://x.com/flop_labs" not in bodies["flop_site"]:
         checks["flop_site"] = _result("REVIEW_REQUIRED", "Official @flop_labs link missing")
     if "capacity_manifest" in bodies and "rooms_summary" in bodies:
@@ -450,6 +659,12 @@ def _run_monitor(
         raise ValueError("evidence_mode must be local or public")
     evidence = _public_evidence(root, bodies) if evidence_mode == "public" else _local_evidence(root)
     checks["receipts"] = evidence
+    if ("did_note" not in bodies and checks["did_note"].get("http_status") == 404
+            and evidence["status"] == "READY"):
+        checks["did_note"] = _result(
+            "READY", "EVICTED_EXPECTED; public historical DID evidence remains verified",
+            live_note_status="ABSENT", historical_evidence_status="VERIFIED_OFFCHAIN",
+        )
     historical_status = "VERIFIED_OFFCHAIN" if evidence["status"] == "READY" else "INVALID"
     if live_record["status"] == "LIVE" and evidence["status"] == "READY":
         checks["contribution"] = _result("READY", "Historical contribution verified live", live_record_status="LIVE", historical_evidence_status="VERIFIED_LIVE", first_seq=live_record.get("first_seq"))
@@ -463,6 +678,11 @@ def _run_monitor(
         checks["teaser"] = evaluate_teaser(bodies["teaser"], baselines["teaser"])
     else:
         checks["teaser"] = classify_source_failure(1)
+    if "yellow_paper" in bodies:
+        checks["yellow_paper"] = evaluate_yellow_paper(
+            bodies["yellow_paper"], baselines.get("yellow_paper", {}))
+    else:
+        checks["yellow_paper"] = classify_source_failure(1)
     spec_results = {}
     for name, url in official_specs.items():
         try:
@@ -502,6 +722,8 @@ def _run_monitor(
         for name in ("did_note", "mailbox", "repo", "dashboard", "contribution", "receipts", "capacity_contract")
     )
     if signals["status"] == "REVIEW_REQUIRED" or checks["teaser"]["status"] == "REVIEW_REQUIRED":
+        meaningful = True
+    if checks["yellow_paper"]["status"] == "REVIEW_REQUIRED":
         meaningful = True
     return {
         "schema": VERSION, "checked_at": checked_at, "monitor_version": "1",

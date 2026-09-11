@@ -15,10 +15,18 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--fetched-at", required=True)
     parser.add_argument("--spec-version")
+    parser.add_argument("--reviewed-at", required=True)
+    parser.add_argument("--compatibility-input", type=Path, required=True,
+                        help="Reviewed release/main/live metadata; never remote content")
     args = parser.parse_args()
     raw = json.loads(args.rooms_input.read_text(encoding="utf-8"))
     lobby = json.loads(args.lobby_input.read_text(encoding="utf-8")) if args.lobby_input else None
-    snapshots = build_snapshot(raw, fetched_at=args.fetched_at, lobby_metadata=lobby, spec_version=args.spec_version)
+    compatibility = json.loads(args.compatibility_input.read_text(encoding="utf-8"))
+    snapshots = build_snapshot(
+        raw, fetched_at=args.fetched_at, lobby_metadata=lobby,
+        spec_version=args.spec_version, reviewed_at=args.reviewed_at,
+        compatibility=compatibility, snapshot_classification="HISTORICAL_SNAPSHOT",
+    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for name, payload in snapshots.items():
         (args.output_dir / f"{name}.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

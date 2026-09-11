@@ -43,6 +43,11 @@ assert.strictEqual(reviewed.children[0].href, "https://flop.finance/");
 assert.strictEqual(reviewed.children[0].onclick, undefined);
 assert.deepStrictEqual(reviewed.children[0].listeners, {});
 
+const yellow = new Element("div");
+api.appendSafeNavigation(yellow, "https://flop.finance/intro/yellowpaper/", "yellow", "FLOP_YELLOW_PAPER");
+assert.strictEqual(yellow.children[0].tagName, "A");
+assert.strictEqual(yellow.children[0].href, "https://flop.finance/intro/yellowpaper/");
+
 const hostileHtml = '<img src=x onerror="navigate()"><a href="javascript:navigate()">x</a><script>navigate()</script>';
 const htmlParent = new Element("div");
 api.appendSafeNavigation(htmlParent, "https://attacker.invalid/", hostileHtml, undefined);

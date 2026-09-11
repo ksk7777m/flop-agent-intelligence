@@ -1,0 +1,54 @@
+{
+  "schema": "flop-yellow-paper-baseline-v1",
+  "artifact_generated_at": "2026-09-11T03:29:35Z",
+  "reviewed_at": "2026-09-11T03:29:35Z",
+  "source": {
+    "source_id": "FLOP_YELLOW_PAPER",
+    "url": "https://flop.finance/intro/yellowpaper/",
+    "authority": "OFFICIAL_PARAMETER_VALUES",
+    "version": "0.5.0 (draft)",
+    "document_status": "Implementation spec — iterating",
+    "updated": "2026-09-05",
+    "raw_sha256_at_review": "9dc8119501809ada89af093386a1432bd3e06472a68e992c5afc0fd778ce42ed",
+    "normalized_text_sha256": "679331d4c9984b21aeb8e30a2e6599251d2ced54d5f8cc28557901a402010738",
+    "semantic_commitment_sha256": "d6bfe08d6578f48347734fb247cc82c97a999c92fe7f2e636518deefaeae6151",
+    "discovered_url_navigation": "INERT"
+  },
+  "status": "OFFICIAL_DRAFT_REVIEWED",
+  "parameters": {
+    "genesis_supply": 4400000000,
+    "genesis_miner_airdrop": 1200000000,
+    "genesis_validator_airdrop": 1200000000,
+    "genesis_agent_airdrop": 1200000000,
+    "genesis_reserve": 800000000,
+    "initial_block_reward": 96,
+    "miner_share_ppt": 750,
+    "validator_share_ppt": 100,
+    "agent_share_ppt": 100,
+    "staker_share_ppt": 50,
+    "max_halvings": 5,
+    "floor_reward": 3,
+    "subsidy_per_block_per_recipient": 8
+  },
+  "semantic_diff_review": {
+    "previous_reported_genesis_pool": 2483460000,
+    "previous_validator_airdrop": 305505000,
+    "classification": "SUPERSEDED_REPORTED_VALUES_NOT_CURRENT_AUTHORITY"
+  },
+  "unresolved": [
+    "TESTNET_ENDPOINT", "FAUCET_ENDPOINT", "CLAIM_ENDPOINT",
+    "REGISTRATION_OR_PROVISIONING_ENDPOINT", "TOKEN_OR_CONTRACT_ENDPOINT",
+    "AGENT_SCORING_FORMULA", "TESTNET_TO_MAINNET_CONVERSION",
+    "MINIMUM_ACTIVITY", "SNAPSHOT_DATE", "CLAIM_WINDOW",
+    "AIRDROP_CAP_FORMULA", "SPEND_TO_UNLOCK_FINAL_RULE",
+    "VESTING_RELEASE_RECONCILIATION", "UNALLOCATED_REMAINDER_DISPOSITION",
+    "AGENT_STAKER_REWARD_DISTRIBUTION"
+  ],
+  "safety": {
+    "ready_to_act": false,
+    "authorized_to_act": false,
+    "live_action_enabled": false,
+    "production_authorities": 0,
+    "external_writes": 0
+  }
+}

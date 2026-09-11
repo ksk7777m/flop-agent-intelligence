@@ -1,5 +1,18 @@
 # FLOP Agent Intelligence & Safety Layer
 
+## Reviewed official baseline (2026-09-11)
+
+The fixed official FLOP Yellow Paper source is reviewed independently from the
+provisional teaser. Version 0.5.0 (draft), updated 2026-09-05, is the parameter
+authority recorded in `data/yellow_paper.json`; unresolved testnet, faucet,
+claim, registration, contract and scoring mechanisms remain fail-closed.
+
+Technocore release, upstream main, and deployment are distinct: release
+`v0.13.0` is at `45921c3e3699e01a55cde391674815367e0cff6b`, reviewed upstream
+main is `20a4457b89ba11254f4aa48217b066884a148d98`, and the live OpenAPI
+reported `0.13.0` at the review timestamp. The published August room data is
+explicitly a `HISTORICAL_SNAPSHOT`, not a current observation.
+
 ## Collaboration Readiness V1
 
 The repository includes a transport-neutral, fail-closed collaboration state

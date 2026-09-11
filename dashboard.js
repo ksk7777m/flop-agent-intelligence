@@ -1,10 +1,11 @@
-const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance", "teaser", "testnet_adapter"];
+const DATA = ["monitor", "readiness", "signals", "health", "evidence", "maintenance", "teaser", "yellow_paper", "testnet_adapter"];
 const OBSERVATORY_DATA = ["status", "rooms", "engagement"];
 const KV_DATA = ["status", "namespaces", "changes", "presence"];
 const safeStatus = value => String(value || "UNKNOWN").toUpperCase();
 const REVIEWED_OFFICIAL_LINKS = Object.freeze({
   FLOP_FINANCE: "https://flop.finance/",
   FLOP_FINANCE_TEASER: "https://flop.finance/teaser/",
+  FLOP_YELLOW_PAPER: "https://flop.finance/intro/yellowpaper/",
   TECHNOCORE_PATTERNS: "https://github.com/flop-labs/technocore-chat/blob/main/src/patterns.md",
   PUBLIC_REPOSITORY: "https://github.com/ksk7777m/flop-agent-intelligence",
   CONTRIBUTION_RECORD: "https://technocore.chat/#r/lobby/929750",
@@ -142,7 +143,8 @@ function renderObservatory(status, roomsData, engagementData) {
     ["Total rooms", formatNumber(status.total_rooms)], ["Active ≤1h", formatNumber(status.active_rooms)],
     ["Recent ≤24h", formatNumber(status.recently_active_rooms)], ["Engagement", status.engagement_health],
     ["Lobby first_seq", formatNumber(status.current_first_seq)],
-    ["Eviction pressure", formatRatio(status.eviction_pressure)], ["Spec", status.spec_version || "UNKNOWN"],
+    ["Eviction pressure", formatRatio(status.eviction_pressure)], ["Snapshot", status.snapshot_classification || "UNKNOWN"],
+    ["Snapshot spec", status.spec_version || "UNKNOWN"], ["Reviewed live OpenAPI", status.compatibility?.live_openapi_version || "UNKNOWN"],
     ["External writes", String(status.external_writes)]
   ];
   const root = document.querySelector("#observatory-overview");
@@ -152,7 +154,7 @@ function renderObservatory(status, roomsData, engagementData) {
     root.append(item);
   }
   document.querySelector("#observatory-detail").textContent =
-    `Snapshot ${status.generated_at} · ${status.source.source_url} · ${status.returned_rooms} returned of ${status.total_rooms ?? "unknown"} total · ${status.source.caveat}`;
+    `${status.snapshot_classification || "UNCLASSIFIED SNAPSHOT"} generated ${status.generated_at} · compatibility reviewed ${status.reviewed_at || "UNKNOWN"} · ${status.returned_rooms} returned of ${status.total_rooms ?? "unknown"} total · ${status.source.caveat}`;
   const provenance = document.querySelector("#observatory-provenance");
   const provenanceRows = [
     ["Snapshot source", status.source.source_url, "OFFICIAL"],
@@ -380,6 +382,31 @@ function renderTeaser(data) {
     `Source: ${data.source} · Checked: ${data.checked_at} · Normalized SHA-256: ${data.normalized_text_sha256} · ${data.caveat}`;
 }
 
+function renderYellowPaper(data) {
+  const root = document.querySelector("#yellow-paper");
+  const source = data.source;
+  const parameters = data.parameters;
+  const values = [
+    ["Status", data.status], ["Version", source.version], ["Updated", source.updated],
+    ["Genesis supply", `${parameters.genesis_supply.toLocaleString()} FLOP`],
+    ["Miner airdrop", `${parameters.genesis_miner_airdrop.toLocaleString()} FLOP`],
+    ["Validator airdrop", `${parameters.genesis_validator_airdrop.toLocaleString()} FLOP`],
+    ["Agent airdrop", `${parameters.genesis_agent_airdrop.toLocaleString()} FLOP`],
+    ["Reserve", `${parameters.genesis_reserve.toLocaleString()} FLOP`],
+    ["Block reward", `${parameters.initial_block_reward} FLOP/block`],
+    ["Reward split", `${parameters.miner_share_ppt / 10}/${parameters.validator_share_ppt / 10}/${parameters.agent_share_ppt / 10}/${parameters.staker_share_ppt / 10}%`],
+    ["External writes", String(data.safety.external_writes)]
+  ];
+  for (const [label, value] of values) {
+    const item = text("div", "", "monitor-item");
+    item.append(text("small", label), text("strong", String(value), statusClass(value)));
+    root.append(item);
+  }
+  const detail = document.querySelector("#yellow-paper-detail");
+  detail.append(text("span", `Reviewed ${data.reviewed_at} · ${source.document_status} · unresolved mechanisms: ${data.unresolved.length} · `));
+  appendSafeNavigation(detail, source.url, "official parameter source", source.source_id);
+}
+
 function renderTestnetAdapter(data) {
   const root = document.querySelector("#testnet-adapter");
   const values = [
@@ -476,6 +503,7 @@ loadData().then(data => {
   renderReadiness(data.readiness);
   renderSignals(data.signals);
   renderTeaser(data.teaser);
+  renderYellowPaper(data.yellow_paper);
   renderTestnetAdapter(data.testnet_adapter);
   renderHealth(data.health);
   renderEvidence(data.evidence);

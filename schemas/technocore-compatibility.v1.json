@@ -5,7 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema", "status", "reviewed_at", "reviewed_technocore_agent_version",
+    "schema", "status", "reviewed_at", "reviewed_technocore_agent_version", "release_tracking",
     "source_evidence", "semantic_invariants", "capability_evidence",
     "deployment_observations", "observation_policy_binding", "freshness", "nonce_compatibility",
     "flop_specification_authority", "tclk_accept_conformance",
@@ -17,6 +17,20 @@
     "status": {"const": "COMPATIBILITY_REVIEW_REQUIRED"},
     "reviewed_at": {"type": "string", "format": "date-time"},
     "reviewed_technocore_agent_version": {"type": "string", "minLength": 1},
+    "release_tracking": {
+      "type": "object", "additionalProperties": false,
+      "required": ["latest_released_tag", "tag_commit", "upstream_main_head", "live_openapi_version", "live_observed_at", "unreleased_main_delta", "currentness", "action"],
+      "properties": {
+        "latest_released_tag": {"const": "v0.13.0"},
+        "tag_commit": {"const": "45921c3e3699e01a55cde391674815367e0cff6b"},
+        "upstream_main_head": {"const": "20a4457b89ba11254f4aa48217b066884a148d98"},
+        "live_openapi_version": {"const": "0.13.0"},
+        "live_observed_at": {"type": "string", "format": "date-time"},
+        "unreleased_main_delta": {"const": "DOCUMENTATION_ONLY_OPERATOR_MEASUREMENT_PROBE"},
+        "currentness": {"const": "REVIEWED_AT_TIMESTAMP"},
+        "action": {"const": "NO_LIVE_ACTION"}
+      }
+    },
     "source_evidence": {
       "type": "object", "additionalProperties": false,
       "required": ["identifier", "local_artifact", "classification", "source_revision"],
@@ -119,13 +133,13 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "artifact", "status", "yellow_paper_source_type", "yellow_paper_identity", "yellow_paper_content", "ratification", "scoring", "action"],
       "properties": {
-        "schema": {"const": "flop-spec-authority-v1"},
-        "artifact": {"const": "data/spec_authority.json"},
-        "status": {"const": "SOURCE_EVIDENCE_REQUIRED"},
+        "schema": {"const": "flop-yellow-paper-baseline-v1"},
+        "artifact": {"const": "data/yellow_paper.json"},
+        "status": {"const": "OFFICIAL_DRAFT_REVIEWED"},
         "yellow_paper_source_type": {"const": "REGISTERED"},
-        "yellow_paper_identity": {"const": "UNVERIFIED"},
-        "yellow_paper_content": {"const": "NOT_ATTESTED"},
-        "ratification": {"const": "RATIFICATION_UNRESOLVED"},
+        "yellow_paper_identity": {"const": "OFFICIAL_FIXED_SOURCE_VERIFIED"},
+        "yellow_paper_content": {"const": "SEMANTIC_COMMITMENT_REVIEWED"},
+        "ratification": {"const": "PARAMETERS_REVIEWED_MECHANISMS_UNRESOLVED"},
         "scoring": {"const": "UNRESOLVED"},
         "action": {"const": "NO_LIVE_ACTION"}
       }

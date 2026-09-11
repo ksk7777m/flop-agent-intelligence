@@ -1,8 +1,8 @@
 {
   "schema": "flop-public-monitor-status-v1",
   "monitor_version": "1",
-  "last_checked": "2026-08-27T12:34:04Z",
-  "last_successful_check": "2026-08-27T12:34:04Z",
+  "last_checked": "2026-09-11T03:29:35Z",
+  "last_successful_check": "2026-09-11T03:29:35Z",
   "freshness": "FRESH",
   "overall_status": "READY",
   "official_spec_drift": "UNCHANGED",
@@ -16,7 +16,7 @@
   "faucet": "DRAFT MENTION — NO ENDPOINT",
   "inference": "DRAFT MENTION — NO ENDPOINT",
   "did_tasks": "NONE",
-  "yellow_paper": "DRAFT REFERENCE — NO LINK",
+  "yellow_paper": "V0.5.0 OFFICIAL DRAFT — REVIEWED PARAMETER AUTHORITY",
   "public_evidence_health": "READY",
   "public_evidence_detail": "Live record: EVICTED_EXPECTED. Historical evidence: VERIFIED_OFFCHAIN. Technocore rooms are intentionally ephemeral; exact Git receipts and DID signature evidence remain verified.",
   "writes_performed": 0

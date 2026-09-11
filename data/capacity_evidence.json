@@ -1,6 +1,9 @@
 {
   "schema": "technocore-capacity-evidence-v1",
   "observed_at": "2026-08-27T21:34:04+09:00",
+  "snapshot_classification": "HISTORICAL_SNAPSHOT",
+  "compatibility_reviewed_at": "2026-09-11T03:29:35Z",
+  "current_live_openapi_version": "0.13.0",
   "documented_default_cap": 5120,
   "official_manifest_cap": 20480,
   "runtime_summary_cap": 20480,

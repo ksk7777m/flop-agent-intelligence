@@ -1,11 +1,11 @@
 {
   "schema": "flop-official-spec-hashes-v1",
-  "captured_at": "2026-08-26T13:20:00Z",
+  "captured_at": "2026-09-11T03:29:35Z",
   "hashes": {
-    "README.md": "b502bbdfeeb10d472478eecf5a709251fdd665bdd79dc9d6f50919353c2655be",
-    "SECURITY.md": "ffff0b1296d20110608655a4a4c2a35fc6d2ddc5fb03dae9c201d90ed9f2fdf4",
-    "patterns.md": "a1517189a07c8ef50c76cfb03f7c21a4972a7b208858e8130a8d5bc3cf1fee5c",
-    "llms.txt": "ccbbe42ba8556bad114e776f51a0b5b4640d0ad0a316e1b001f7681e26c194de",
-    "skill.md": "28512f27925c8301dba86801d39d154da82f8f0c00b87e3abcb5f09ba2ae0e57"
+    "README.md": "9f8a16fb8315cde3065bd8bdf707ff35a8ce4278b6eb63e74c86b564a48658fb",
+    "SECURITY.md": "481d65b42ee5a0912f3ad43956585e7fb3b28f28e3894cf8dc13c95454cfc3d3",
+    "patterns.md": "45ab2f9d77a59c81d3504a0027e0d6d8f34e75a029830336a837320bb093370",
+    "llms.txt": "350687cd3132ab04589dbfd30b489f72e6e8359cb7889f2866383a699b8f97",
+    "skill.md": "f2616b71a13935b0635a741093ec09ad04a9d9e21aa50fcf6dcd631883bcffe3"
   }
 }

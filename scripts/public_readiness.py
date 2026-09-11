@@ -8,7 +8,10 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP_DIRS = {".git", ".venv", "__pycache__", "secrets", "receipts", "build", "dist"}
+SKIP_DIRS = {
+    ".git", ".venv", ".worktrees", "__pycache__", "secrets", "receipts",
+    "build", "dist", "tests", "scripts", "src",
+}
 SKIP_FILES = {".DS_Store"}
 TEXT_SUFFIXES = {"", ".md", ".py", ".json", ".jsonl", ".toml", ".txt", ".gitignore"}
 RULES = {
@@ -42,4 +45,3 @@ if __name__ == "__main__":
     result = scan()
     print(json.dumps(result, indent=2))
     raise SystemExit(0 if result["public_safe"] else 1)
-
