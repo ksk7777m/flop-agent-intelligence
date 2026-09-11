@@ -114,6 +114,8 @@ def main() -> None:
             print(f"{'Inference':<22} {teaser_signals.get('inference', 'UNKNOWN')}")
             print(f"{'DID Tasks':<22} {teaser_signals.get('did_tasks', 'UNKNOWN')}")
             print(f"{'Mailbox Migration':<22} {checks['mailbox_migration']['detail']}")
+            nonready = sorted(key for key, value in checks.items() if value["status"] != "READY")
+            print(f"{'Non-ready checks':<22} {','.join(nonready) if nonready else 'NONE'}")
             print(f"\nWrites performed ...... {record['external_writes_performed']}")
         raise SystemExit(exit_code(record))
     elif args.command == "testnet-readiness":
