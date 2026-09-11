@@ -288,8 +288,21 @@ def extract_yellow_paper_snapshot(raw: bytes) -> Dict[str, Any]:
 def evaluate_yellow_paper(raw: bytes, baseline: Dict[str, Any]) -> Dict[str, Any]:
     try:
         current = extract_yellow_paper_snapshot(raw)
-    except ValueError:
-        return _result("REVIEW_REQUIRED", "YELLOW_PAPER_PARSE_FAILED", classification="CRITICAL")
+    except ValueError as error:
+        allowed_stages = {
+            "yellow paper document is malformed",
+            "yellow paper metadata is missing or ambiguous",
+            "yellow paper parameter is missing or duplicated",
+            "yellow paper parameter row is ambiguous",
+            "yellow paper parameter value is malformed",
+            "yellow paper unresolved-item markers are missing",
+        }
+        stage = str(error) if str(error) in allowed_stages else "yellow paper parser rejected input"
+        return _result(
+            "REVIEW_REQUIRED", "YELLOW_PAPER_PARSE_FAILED",
+            classification="CRITICAL", parse_stage=stage,
+            content_length=len(raw), content_sha256=hashlib.sha256(raw).hexdigest(),
+        )
     if current["metadata"]["version"] != "0.5.0 (draft)":
         return _result("REVIEW_REQUIRED", "YELLOW_PAPER_VERSION_UNREVIEWED", **current)
     semantic_diff = []

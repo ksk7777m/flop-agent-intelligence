@@ -106,7 +106,8 @@ def main() -> None:
             print(f"{'Official signals':<22} {record['official_signals']['detail']}")
             print(f"{'FLOP Teaser':<22} {checks['teaser']['detail']}")
             print(f"{'Yellow Paper':<22} {checks['yellow_paper']['detail']} "
-                  f"{checks['yellow_paper'].get('normalized_text_sha256', 'NO_COMMITMENT')}")
+                  f"{checks['yellow_paper'].get('parse_stage', '')} "
+                  f"{checks['yellow_paper'].get('normalized_text_sha256', checks['yellow_paper'].get('content_sha256', 'NO_COMMITMENT'))}")
             teaser_signals = checks["teaser"].get("signals", {})
             print(f"{'Testnet':<22} {teaser_signals.get('testnet', 'UNKNOWN')}")
             print(f"{'Faucet':<22} {teaser_signals.get('faucet', 'UNKNOWN')}")
