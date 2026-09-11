@@ -47,8 +47,6 @@ ENDPOINTS = {
     "flop_site": ReviewedSourceId.FLOP_FINANCE,
     "teaser": ReviewedSourceId.FLOP_FINANCE_TEASER,
     "yellow_paper": ReviewedSourceId.FLOP_YELLOW_PAPER,
-    "x_official": ReviewedSourceId.FLOP_LABS_X,
-    "x_evidence": ReviewedSourceId.CONTRIBUTION_X,
     "capacity_manifest": ReviewedSourceId.TECHNOCORE_AGENT_MANIFEST,
     "rooms_summary": ReviewedSourceId.TECHNOCORE_ROOMS_SUMMARY,
 }

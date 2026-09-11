@@ -96,8 +96,6 @@ class MonitorTests(unittest.TestCase):
             ENDPOINTS["flop_site"]: self.flop,
             ENDPOINTS["teaser"]: self.teaser,
             ENDPOINTS["yellow_paper"]: self.yellow_paper,
-            ENDPOINTS["x_official"]: b"X",
-            ENDPOINTS["x_evidence"]: b"X",
             ENDPOINTS["capacity_manifest"]: json.dumps({"limits": {"rooms": 10240}}).encode(),
             ENDPOINTS["rooms_summary"]: json.dumps({
                 "capacity": 10240, "total": 9000,
@@ -118,6 +116,8 @@ class MonitorTests(unittest.TestCase):
             return run_monitor()
 
     def test_normal_ready_and_zero_writes(self):
+        self.assertNotIn("x_official", ENDPOINTS)
+        self.assertNotIn("x_evidence", ENDPOINTS)
         result = self.run_fixture()
         self.assertEqual(result["overall_status"], "READY")
         self.assertEqual(result["external_writes_performed"], 0)
