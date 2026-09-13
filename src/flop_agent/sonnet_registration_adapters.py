@@ -327,31 +327,28 @@ class RegistrationObservation:
     did_exact_match_count: int
     x_exact_match_count: int
     x_casefold_match_count: int
+    request_id_exact_match_count: int
     conflict_classification: str
 
 
-def classify_registration_export(
+def _classify_registration_export_core(
     raw: bytes, *, fetched_at: datetime,
     receipt_classifier: Callable[[Mapping[str, Any]], Mapping[str, Any]],
-    _room: str = registration.ROOM,
-    _participant_did: str = registration.PARTICIPANT_DID,
-    _x_url: str = registration.X_ACCOUNT_URL,
-    _role: str = registration.ROLE,
-    _protocol: str = registration.PROTOCOL_TYPE,
-    _origin: str = OFFICIAL_ORIGIN,
-    _safe_integer_max: int = SAFE_INTEGER_MAX,
-    _decode: Callable[[bytes], dict[str, Any]] = _decode_object,
-    _sha256: Callable[[bytes], Any] = hashlib.sha256,
+    room: str, participant_did: str, x_url: str, role: str,
+    request_id: str, packet_text: str, protocol: str, origin: str,
+    safe_integer_max: int, decode: Callable[[bytes], dict[str, Any]],
+    sha256: Callable[[bytes], Any], json_loads: Callable[..., Any],
+    json_error: type[json.JSONDecodeError],
 ) -> RegistrationObservation:
     if (fetched_at.tzinfo is None
             or fetched_at.utcoffset() != timezone.utc.utcoffset(fetched_at)):
         raise AdapterError("OBSERVATION_METADATA_INVALID")
-    decoded = _decode(raw)
+    decoded = decode(raw)
     if (set(decoded) != {"room", "count", "first_seq", "last_seq",
                          "generation", "messages"}
-            or decoded.get("room") != _room
+            or decoded.get("room") != room
             or type(decoded.get("generation")) is not int
-            or not 1 <= decoded["generation"] <= _safe_integer_max
+            or not 1 <= decoded["generation"] <= safe_integer_max
             or type(decoded.get("count")) is not int
             or not 0 <= decoded["count"] <= 10_000
             or type(decoded.get("messages")) is not list
@@ -359,48 +356,60 @@ def classify_registration_export(
         raise AdapterError("REGISTRATION_EXPORT_INVALID")
     records = decoded["messages"]
     seqs: list[int] = []
-    did_count = x_count = x_fold_count = 0
+    did_count = x_count = x_fold_count = request_id_count = 0
     own_request_observed = False
     accepted_identical = False
     conflict = False
+    fixed_packet = json_loads(packet_text, object_pairs_hook=_no_duplicates)
     for record in records:
         if (type(record) is not dict or type(record.get("seq")) is not int
-                or not 0 <= record["seq"] <= _safe_integer_max):
+                or not 0 <= record["seq"] <= safe_integer_max):
             raise AdapterError("REGISTRATION_EXPORT_INVALID")
         seqs.append(record["seq"])
         text = record.get("text")
         if type(text) is not str or len(text.encode("utf-8")) > 4096:
             continue
         try:
-            packet = json.loads(text, object_pairs_hook=_no_duplicates)
-        except (json.JSONDecodeError, AdapterError):
+            packet = json_loads(text, object_pairs_hook=_no_duplicates)
+        except (json_error, AdapterError):
             continue
         if type(packet) is not dict:
             continue
-        did_match = record.get("from") == _participant_did
+        did_match = record.get("from") == participant_did
         x_value = packet.get("x_account_url")
-        exact_x = x_value == _x_url
+        exact_x = x_value == x_url
         folded_x = (type(x_value) is str
-                    and x_value.casefold() == _x_url.casefold())
+                    and x_value.casefold() == x_url.casefold())
+        packet_request_id = packet.get("request_id")
+        request_id_exact = (
+            type(packet_request_id) is str and packet_request_id == request_id)
         did_count += int(did_match)
         x_count += int(exact_x)
         x_fold_count += int(folded_x)
-        if packet.get("type") == _protocol:
-            if (did_match and packet.get("role") == _role
-                    and exact_x and type(packet.get("request_id")) is str
-                    and bool(packet["request_id"])):
+        request_id_count += int(request_id_exact)
+        if packet.get("type") == protocol:
+            if did_match and packet == fixed_packet:
                 own_request_observed = True
-            if ((did_match and (packet.get("role") != _role
-                                or not exact_x))
-                    or (folded_x and not did_match)):
+            elif did_match or folded_x or request_id_exact:
                 conflict = True
         if packet.get("type") == "sonnet.receipt.v1":
             try:
                 status = receipt_classifier(record).get("status")
+            except AdapterError as error:
+                related = (packet.get("participant_did") == participant_did
+                           or folded_x or request_id_exact)
+                if (related and error.code in {
+                        "RECEIPT_REQUEST_ID_MISMATCH",
+                        "RECEIPT_BINDING_MISMATCH",
+                        "RECEIPT_OUTER_METADATA_MISMATCH"}):
+                    conflict = True
+                continue
             except Exception:
                 continue
             if status == "ACCEPTED_VERIFIED":
                 accepted_identical = True
+            elif status == "REJECTED_VERIFIED":
+                conflict = True
     if records:
         if (type(decoded.get("first_seq")) is not int
                 or type(decoded.get("last_seq")) is not int
@@ -409,21 +418,57 @@ def classify_registration_export(
             raise AdapterError("REGISTRATION_EXPORT_INVALID")
     elif decoded.get("first_seq") is not None or decoded.get("last_seq") is not None:
         raise AdapterError("REGISTRATION_EXPORT_INVALID")
-    if accepted_identical:
-        classification = ALREADY_REGISTERED_IDENTICALLY
-    elif conflict:
+    if conflict:
         classification = REGISTRATION_CONFLICT
+    elif accepted_identical:
+        classification = ALREADY_REGISTERED_IDENTICALLY
     elif own_request_observed:
         classification = REQUEST_OBSERVED_RECEIPT_UNCONFIRMED
     else:
         classification = NO_CONFLICT_IN_OBSERVED_WINDOW
     return RegistrationObservation(
-        _origin, _room, decoded["generation"],
+        origin, room, decoded["generation"],
         "OBSERVED_DEPLOYMENT_FIELD",
         min(seqs) if seqs else None, max(seqs) if seqs else None, len(records),
         fetched_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-        _sha256(raw).hexdigest(), len(raw), did_count, x_count, x_fold_count,
-        classification)
+        sha256(raw).hexdigest(), len(raw), did_count, x_count, x_fold_count,
+        request_id_count, classification)
+
+
+def _seal_registration_export_classifier() -> Callable[..., RegistrationObservation]:
+    """Capture fixed bindings without leaving a binding-bearing factory API."""
+    core = _classify_registration_export_core
+    room = registration.ROOM
+    participant_did = registration.PARTICIPANT_DID
+    x_url = registration.X_ACCOUNT_URL
+    role = registration.ROLE
+    request_id = registration.REQUEST_ID
+    packet_text = registration.PACKET_TEXT
+    protocol = registration.PROTOCOL_TYPE
+    origin = OFFICIAL_ORIGIN
+    safe_integer_max = SAFE_INTEGER_MAX
+    decode = _decode_object
+    sha256 = hashlib.sha256
+    json_loads = json.loads
+    json_error = json.JSONDecodeError
+
+    def classify(
+        raw: bytes, *, fetched_at: datetime,
+        receipt_classifier: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    ) -> RegistrationObservation:
+        return core(
+            raw, fetched_at=fetched_at, receipt_classifier=receipt_classifier,
+            room=room, participant_did=participant_did, x_url=x_url, role=role,
+            request_id=request_id, packet_text=packet_text, protocol=protocol,
+            origin=origin, safe_integer_max=safe_integer_max, decode=decode,
+            sha256=sha256, json_loads=json_loads, json_error=json_error)
+
+    return classify
+
+
+classify_registration_export = _seal_registration_export_classifier()
+del _seal_registration_export_classifier
+del _classify_registration_export_core
 
 
 def _build_readonly_registration_adapter(
@@ -497,25 +542,21 @@ def verify_local_prestart_evidence(
     })
 
 
-def _classify_observed_receipt(
+def _classify_observed_receipt_core(
     record: Mapping[str, Any], *,
-    signature_verifier: Callable[[str, str, str, str, str], None] = verify_message,
-    _referee_did: str = registration.REFEREE_DID,
-    _room: str = registration.ROOM,
-    _contest_id: str = registration.CONTEST_ID,
-    _participant_did: str = registration.PARTICIPANT_DID,
-    _role: str = registration.ROLE,
-    _x_url: str = registration.X_ACCOUNT_URL,
+    signature_verifier: Callable[[str, str, str, str, str], None],
+    referee_did: str, room: str, contest_id: str, participant_did: str,
+    role: str, x_url: str, request_id: str,
 ) -> Mapping[str, str]:
     if (type(record) is not dict
             or any(type(record.get(key)) is not str or not record.get(key)
                    for key in ("from", "sig", "nonce", "text"))
-            or record.get("from") != _referee_did
+            or record.get("from") != referee_did
             or not record["nonce"].isdigit() or len(record["nonce"]) > 19
             or len(record["text"].encode("utf-8")) > 4096):
         raise AdapterError("RECEIPT_CANDIDATE_INVALID")
     try:
-        signature_verifier(record["from"], record["sig"], _room,
+        signature_verifier(record["from"], record["sig"], room,
                            record["nonce"], record["text"])
     except Exception:
         raise AdapterError("RECEIPT_SIGNATURE_INVALID") from None
@@ -525,18 +566,56 @@ def _classify_observed_receipt(
     if (not required_fields <= set(receipt)
             or not set(receipt) <= required_fields | {"reason"}
             or receipt.get("type") != "sonnet.receipt.v1"
-            or receipt.get("contest_id") != _contest_id
-            or receipt.get("participant_did") != _participant_did
-            or receipt.get("role") != _role
-            or receipt.get("x_account_url") != _x_url
-            or type(receipt.get("request_id")) is not str
-            or not receipt["request_id"]
+            or receipt.get("contest_id") != contest_id
+            or receipt.get("participant_did") != participant_did
+            or receipt.get("role") != role
+            or receipt.get("x_account_url") != x_url
             or ("reason" in receipt and type(receipt["reason"]) is not str)
             or receipt.get("status") not in {"accepted", "rejected"}):
         raise AdapterError("RECEIPT_BINDING_MISMATCH")
+    if (type(receipt.get("request_id")) is not str
+            or receipt["request_id"] != request_id):
+        raise AdapterError("RECEIPT_REQUEST_ID_MISMATCH")
+    if ("request_id" in record
+            and (type(record["request_id"]) is not str
+                 or record["request_id"] != receipt["request_id"])):
+        raise AdapterError("RECEIPT_OUTER_METADATA_MISMATCH")
     return MappingProxyType({
         "status": ("ACCEPTED_VERIFIED" if receipt["status"] == "accepted"
                    else "REJECTED_VERIFIED")})
+
+
+def _seal_receipt_classifier_factory() -> Callable[..., Any]:
+    """Expose only verifier substitution; all registration bindings stay sealed."""
+    core = _classify_observed_receipt_core
+    referee_did = registration.REFEREE_DID
+    room = registration.ROOM
+    contest_id = registration.CONTEST_ID
+    participant_did = registration.PARTICIPANT_DID
+    role = registration.ROLE
+    x_url = registration.X_ACCOUNT_URL
+    request_id = registration.REQUEST_ID
+
+    def build(
+        signature_verifier: Callable[[str, str, str, str, str], None],
+    ) -> Callable[[Mapping[str, Any]], Mapping[str, str]]:
+        def classify(record: Mapping[str, Any]) -> Mapping[str, str]:
+            return core(
+                record, signature_verifier=signature_verifier,
+                referee_did=referee_did, room=room, contest_id=contest_id,
+                participant_did=participant_did, role=role, x_url=x_url,
+                request_id=request_id)
+
+        return classify
+
+    return build
+
+
+_build_fixed_receipt_classifier_for_test = _seal_receipt_classifier_factory()
+del _seal_receipt_classifier_factory
+del _classify_observed_receipt_core
+_classify_observed_receipt = _build_fixed_receipt_classifier_for_test(
+    verify_message)
 
 
 def evaluate_freshness(
@@ -591,7 +670,8 @@ def evaluate_freshness(
             or any(type(count) is not int or not 0 <= count <= observation.record_count
                    for count in (observation.did_exact_match_count,
                                  observation.x_exact_match_count,
-                                 observation.x_casefold_match_count))
+                                 observation.x_casefold_match_count,
+                                 observation.request_id_exact_match_count))
             or ((observation.record_count == 0)
                 != (observation.first_observed_seq is None
                     and observation.last_observed_seq is None))

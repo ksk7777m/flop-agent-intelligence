@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import inspect
 import json
 import os
 import tempfile
@@ -68,6 +69,12 @@ def receipt_classifier(record):
     raise registration.RegistrationBoundaryError("RECEIPT_INVALID")
 
 
+def fixed_receipt_classifier(record):
+    classifier = adapters._build_fixed_receipt_classifier_for_test(
+        lambda *_args: None)
+    return classifier(record)
+
+
 def export(*records, generation=1, room=registration.ROOM):
     seqs = [record["seq"] for record in records]
     return json.dumps({
@@ -106,6 +113,11 @@ class EligibilityAndObservationTests(unittest.TestCase):
         return adapters.classify_registration_export(
             raw, fetched_at=NOW,
             receipt_classifier=receipt_classifier)
+
+    def observe_with_fixed_receipts(self, raw):
+        return adapters.classify_registration_export(
+            raw, fetched_at=NOW,
+            receipt_classifier=fixed_receipt_classifier)
 
     def test_incomplete_ring_only_reports_observed_window(self):
         value = self.observe(export(message(929750, {"note": "untrusted"}, "other")))
@@ -147,11 +159,183 @@ class EligibilityAndObservationTests(unittest.TestCase):
         self.assertEqual(value.did_exact_match_count, 1)
         self.assertEqual(value.x_exact_match_count, 1)
         self.assertEqual(value.x_casefold_match_count, 1)
+        self.assertEqual(value.request_id_exact_match_count, 1)
         self.assertEqual(value.official_origin, adapters.OFFICIAL_ORIGIN)
         with self.assertRaises(adapters.AdapterError):
             self.observe(b'{"room":"x","count":0,"first_seq":null,'
                          b'"last_seq":null,"generation":1,"messages":[],'
                          b'"messages":[]}')
+
+    def test_request_id_exact_match_count_is_deterministic(self):
+        exact = message(1, json.loads(registration.PACKET_TEXT))
+        unrelated = message(2, {
+            "type": registration.PROTOCOL_TYPE,
+            "contest_id": registration.CONTEST_ID, "role": "writer",
+            "x_account_url": "https://x.com/unrelated", "request_id": "other",
+        }, "did:key:unrelated")
+        duplicate = message(3, json.loads(registration.PACKET_TEXT))
+        self.assertEqual(self.observe(export()).request_id_exact_match_count, 0)
+        self.assertEqual(
+            self.observe(export(exact)).request_id_exact_match_count, 1)
+        observed = self.observe(export(exact, unrelated, duplicate))
+        self.assertEqual(observed.request_id_exact_match_count, 2)
+        self.assertEqual(observed.record_count, 3)
+        self.assertEqual(observed.did_exact_match_count, 2)
+        self.assertEqual(observed.x_exact_match_count, 2)
+
+    def test_request_id_near_matches_are_not_current_request(self):
+        variants = (
+            "other", "", registration.REQUEST_ID.upper(),
+            f" {registration.REQUEST_ID}", f"{registration.REQUEST_ID} ",
+            registration.REQUEST_ID[:-1], f"{registration.REQUEST_ID}x",
+            registration.REQUEST_ID.replace("b", "ь", 1), None, 7,
+        )
+        for index, request_id in enumerate(variants, 1):
+            packet = json.loads(registration.PACKET_TEXT)
+            packet["request_id"] = request_id
+            with self.subTest(request_id=request_id):
+                observed = self.observe(export(message(index, packet)))
+                self.assertEqual(observed.request_id_exact_match_count, 0)
+                self.assertEqual(observed.conflict_classification,
+                                 adapters.REGISTRATION_CONFLICT)
+
+    def test_unrelated_request_id_does_not_invalidate_observed_window(self):
+        unrelated = message(1, {
+            "type": registration.PROTOCOL_TYPE,
+            "contest_id": registration.CONTEST_ID, "role": "voter",
+            "x_account_url": "https://x.com/unrelated", "request_id": "other",
+        }, "did:key:unrelated")
+        observed = self.observe(export(unrelated))
+        self.assertEqual(observed.request_id_exact_match_count, 0)
+        self.assertEqual(observed.conflict_classification,
+                         adapters.NO_CONFLICT_IN_OBSERVED_WINDOW)
+
+    def test_related_other_request_and_mutated_fixed_request_are_conflicts(self):
+        related = json.loads(registration.PACKET_TEXT)
+        related["request_id"] = "other"
+        mutations = (
+            ({"contest_id": "other-contest"}, registration.PARTICIPANT_DID),
+            ({"role": "voter"}, registration.PARTICIPANT_DID),
+            ({"x_account_url": "https://x.com/other"},
+             registration.PARTICIPANT_DID),
+            ({}, "did:key:other"),
+        )
+        observed = self.observe(export(message(1, related)))
+        self.assertEqual(observed.conflict_classification,
+                         adapters.REGISTRATION_CONFLICT)
+        self.assertEqual(observed.request_id_exact_match_count, 0)
+        for index, (changes, sender) in enumerate(mutations, 2):
+            packet = json.loads(registration.PACKET_TEXT)
+            packet.update(changes)
+            with self.subTest(changes=changes, sender=sender):
+                observed = self.observe(export(message(index, packet, sender)))
+                self.assertEqual(observed.conflict_classification,
+                                 adapters.REGISTRATION_CONFLICT)
+                self.assertEqual(observed.request_id_exact_match_count, 1)
+
+    def test_other_request_receipt_cannot_establish_acceptance(self):
+        packet = {
+            "type": "sonnet.receipt.v1", "contest_id": registration.CONTEST_ID,
+            "request_id": "other", "participant_did": registration.PARTICIPANT_DID,
+            "role": registration.ROLE, "x_account_url": registration.X_ACCOUNT_URL,
+            "status": "accepted",
+        }
+        observed = self.observe_with_fixed_receipts(export(message(
+            1, packet, registration.REFEREE_DID)))
+        self.assertEqual(observed.request_id_exact_match_count, 0)
+        self.assertEqual(observed.conflict_classification,
+                         adapters.REGISTRATION_CONFLICT)
+
+    def test_conflicting_fixed_request_record_overrides_identical_acceptance(self):
+        receipt_packet = {
+            "type": "sonnet.receipt.v1", "contest_id": registration.CONTEST_ID,
+            "request_id": registration.REQUEST_ID,
+            "participant_did": registration.PARTICIPANT_DID,
+            "role": registration.ROLE, "x_account_url": registration.X_ACCOUNT_URL,
+            "status": "accepted",
+        }
+        mutated = json.loads(registration.PACKET_TEXT)
+        mutated["role"] = "voter"
+        observed = self.observe_with_fixed_receipts(export(
+            message(1, receipt_packet, registration.REFEREE_DID),
+            message(2, mutated)))
+        self.assertEqual(observed.request_id_exact_match_count, 2)
+        self.assertEqual(observed.conflict_classification,
+                         adapters.REGISTRATION_CONFLICT)
+
+    def test_observer_captures_request_id_before_global_rebinding(self):
+        raw = export(message(1, json.loads(registration.PACKET_TEXT)))
+        original = registration.REQUEST_ID
+        try:
+            registration.REQUEST_ID = "attacker-request"
+            observed = self.observe(raw)
+        finally:
+            registration.REQUEST_ID = original
+        self.assertEqual(observed.request_id_exact_match_count, 1)
+        self.assertEqual(observed.conflict_classification,
+                         adapters.REQUEST_OBSERVED_RECEIPT_UNCONFIRMED)
+
+    def test_production_classifiers_do_not_accept_binding_overrides(self):
+        self.assertFalse(hasattr(adapters, "_classify_registration_export_core"))
+        self.assertFalse(hasattr(adapters, "_classify_observed_receipt_core"))
+        observation_signature = inspect.signature(
+            adapters.classify_registration_export)
+        self.assertEqual(
+            tuple(observation_signature.parameters),
+            ("raw", "fetched_at", "receipt_classifier"))
+        raw = export(message(1, json.loads(registration.PACKET_TEXT)))
+        for keyword in ("request_id", "_request_id"):
+            with self.subTest(observation_keyword=keyword), self.assertRaises(
+                    TypeError):
+                adapters.classify_registration_export(
+                    raw, fetched_at=NOW, receipt_classifier=receipt_classifier,
+                    **{keyword: "other"})
+        with self.assertRaises(TypeError):
+            adapters.classify_registration_export(
+                raw, NOW, receipt_classifier, "other")
+
+        receipt_signature = inspect.signature(
+            adapters._classify_observed_receipt)
+        self.assertEqual(tuple(receipt_signature.parameters), ("record",))
+        receipt = message(2, {
+            "type": "sonnet.receipt.v1", "contest_id": registration.CONTEST_ID,
+            "request_id": registration.REQUEST_ID,
+            "participant_did": registration.PARTICIPANT_DID,
+            "role": registration.ROLE, "x_account_url": registration.X_ACCOUNT_URL,
+            "status": "accepted",
+        }, registration.REFEREE_DID)
+        for keyword in ("request_id", "_request_id"):
+            with self.subTest(receipt_keyword=keyword), self.assertRaises(TypeError):
+                adapters._classify_observed_receipt(
+                    receipt, **{keyword: "other"})
+        with self.assertRaises(TypeError):
+            adapters._classify_observed_receipt(receipt, "other")
+        self.assertEqual(
+            tuple(inspect.signature(
+                adapters._build_fixed_receipt_classifier_for_test).parameters),
+            ("signature_verifier",))
+        with self.assertRaises(TypeError):
+            adapters._build_fixed_receipt_classifier_for_test(
+                lambda *_args: None, request_id="other")
+
+    def test_production_closures_share_immutable_request_id_binding(self):
+        observed_binding = inspect.getclosurevars(
+            adapters.classify_registration_export).nonlocals["request_id"]
+        receipt_binding = inspect.getclosurevars(
+            adapters._classify_observed_receipt).nonlocals["request_id"]
+        self.assertEqual(observed_binding, registration.REQUEST_ID)
+        self.assertEqual(receipt_binding, registration.REQUEST_ID)
+        original = registration.REQUEST_ID
+        try:
+            registration.REQUEST_ID = "attacker-request"
+            self.assertEqual(inspect.getclosurevars(
+                adapters.classify_registration_export).nonlocals["request_id"],
+                original)
+            self.assertEqual(inspect.getclosurevars(
+                adapters._classify_observed_receipt).nonlocals["request_id"],
+                original)
+        finally:
+            registration.REQUEST_ID = original
 
     def test_generation_and_room_are_body_bound_and_fail_closed(self):
         for generation in (None, "1", 1.0, True, 0, -1,
@@ -178,6 +362,107 @@ class EligibilityAndObservationTests(unittest.TestCase):
         self.assertEqual(observed.generation_trust,
                          "OBSERVED_DEPLOYMENT_FIELD")
         self.assertEqual(observed.response_byte_length, len(raw))
+
+
+class ReceiptRequestIdBindingTests(unittest.TestCase):
+    def receipt(self, payload_request_id=registration.REQUEST_ID, **outer):
+        packet = {
+            "type": "sonnet.receipt.v1", "contest_id": registration.CONTEST_ID,
+            "request_id": payload_request_id,
+            "participant_did": registration.PARTICIPANT_DID,
+            "role": registration.ROLE, "x_account_url": registration.X_ACCOUNT_URL,
+            "status": "accepted",
+        }
+        return {
+            "from": registration.REFEREE_DID, "sig": "fixture", "nonce": "1",
+            "text": json.dumps(packet, separators=(",", ":")), **outer,
+        }
+
+    def classify(self, record):
+        classifier = adapters._build_fixed_receipt_classifier_for_test(
+            lambda *_args: None)
+        return classifier(record)
+
+    def test_exact_request_id_accepts_terminal_receipt_statuses(self):
+        accepted = self.receipt()
+        self.assertEqual(self.classify(accepted)["status"], "ACCEPTED_VERIFIED")
+        rejected = self.receipt()
+        packet = json.loads(rejected["text"])
+        packet["status"] = "rejected"
+        rejected["text"] = json.dumps(packet, separators=(",", ":"))
+        self.assertEqual(self.classify(rejected)["status"], "REJECTED_VERIFIED")
+
+    def test_nonexact_request_ids_are_rejected_after_signature_verification(self):
+        variants = (
+            "other", "", registration.REQUEST_ID[:-1],
+            f"{registration.REQUEST_ID}x", registration.REQUEST_ID.upper(),
+            f" {registration.REQUEST_ID}", f"{registration.REQUEST_ID} ",
+            registration.REQUEST_ID.replace("b", "ь", 1), None, 7,
+        )
+        for request_id in variants:
+            with self.subTest(request_id=request_id), self.assertRaisesRegex(
+                    adapters.AdapterError, "RECEIPT_REQUEST_ID_MISMATCH"):
+                self.classify(self.receipt(request_id))
+        missing = self.receipt()
+        packet = json.loads(missing["text"])
+        del packet["request_id"]
+        missing["text"] = json.dumps(packet, separators=(",", ":"))
+        with self.assertRaisesRegex(adapters.AdapterError,
+                                    "RECEIPT_BINDING_MISMATCH"):
+            self.classify(missing)
+
+    def test_outer_request_id_is_never_used_as_authenticated_binding(self):
+        wrong_payload = self.receipt("other", request_id=registration.REQUEST_ID)
+        with self.assertRaisesRegex(adapters.AdapterError,
+                                    "RECEIPT_REQUEST_ID_MISMATCH"):
+            self.classify(wrong_payload)
+        mismatched_outer = self.receipt(request_id="other")
+        with self.assertRaisesRegex(adapters.AdapterError,
+                                    "RECEIPT_OUTER_METADATA_MISMATCH"):
+            self.classify(mismatched_outer)
+        self.assertEqual(
+            self.classify(self.receipt(request_id=registration.REQUEST_ID))["status"],
+            "ACCEPTED_VERIFIED")
+
+    def test_duplicate_request_id_and_single_character_change_are_rejected(self):
+        record = self.receipt()
+        record["text"] = record["text"].replace(
+            f'"request_id":"{registration.REQUEST_ID}"',
+            f'"request_id":"{registration.REQUEST_ID}","request_id":"other"')
+        with self.assertRaisesRegex(adapters.AdapterError, "DUPLICATE_JSON_KEY"):
+            self.classify(record)
+        changed = self.receipt(registration.REQUEST_ID[:-1] + "b")
+        with self.assertRaisesRegex(adapters.AdapterError,
+                                    "RECEIPT_REQUEST_ID_MISMATCH"):
+            self.classify(changed)
+
+    def test_request_id_mismatch_has_no_effect_capability_calls(self):
+        calls = {"identity": 0, "signer": 0, "transport": 0}
+        packet = json.loads(self.receipt("other")["text"])
+        observed = adapters.classify_registration_export(
+            export(message(1, packet, registration.REFEREE_DID)),
+            fetched_at=NOW, receipt_classifier=fixed_receipt_classifier)
+
+        def identity_signer(_target):
+            calls["identity"] += 1
+            calls["signer"] += 1
+            return registration.PARTICIPANT_DID, "A" * 86
+
+        def transport(*_args, **_kwargs):
+            calls["transport"] += 1
+            return None
+
+        with tempfile.TemporaryDirectory() as temp:
+            service = handoff._build_handoff_for_test(
+                root=Path(temp) / "journal", approvals={},
+                trusted_reviewers=frozenset(), clock=lambda: NOW,
+                registration_checker=lambda: observed.conflict_classification,
+                identity_signer=identity_signer, transport=transport,
+                receipt_classifier=fixed_receipt_classifier)
+            with self.assertRaisesRegex(handoff.HandoffError,
+                                        "REGISTRATION_STATE_UNRESOLVED"):
+                service.execute(registration.fixed_candidate(), "not-issued")
+        self.assertEqual(calls, {"identity": 0, "signer": 0, "transport": 0})
 
 
 class IdentitySignerTests(unittest.TestCase):
@@ -350,7 +635,7 @@ class ReadOnlyAndFreshnessTests(unittest.TestCase):
         return adapters.RegistrationObservation(
             adapters.OFFICIAL_ORIGIN, registration.ROOM, 1,
             "OBSERVED_DEPLOYMENT_FIELD", 1, 2, 2,
-            "2026-09-13T08:00:00Z", "0" * 64, 100, 0, 0, 0,
+            "2026-09-13T08:00:00Z", "0" * 64, 100, 0, 0, 0, 0,
             classification)
 
     def test_read_adapter_is_unsigned_fixed_get_and_bounded(self):
@@ -368,6 +653,19 @@ class ReadOnlyAndFreshnessTests(unittest.TestCase):
                          adapters.NO_CONFLICT_IN_OBSERVED_WINDOW)
         self.assertEqual(result.room_generation, 1)
         self.assertEqual(result.generation_trust, "OBSERVED_DEPLOYMENT_FIELD")
+
+    def test_built_read_adapter_ignores_classifier_global_rebinding(self):
+        response = FakeResponse(export(), url=adapters.REGISTRATION_GET_URL)
+        opener = FakeOpener(response)
+        read = adapters._build_readonly_registration_adapter(
+            opener_factory=lambda: opener, clock=lambda: NOW,
+            receipt_classifier=receipt_classifier)
+        with mock.patch.object(
+                adapters, "classify_registration_export",
+                side_effect=AssertionError("late classifier replacement")):
+            result = read()
+        self.assertEqual(result.conflict_classification,
+                         adapters.NO_CONFLICT_IN_OBSERVED_WINDOW)
 
     def test_reconciliation_is_bounded_and_never_posts(self):
         calls = []
@@ -414,6 +712,16 @@ class ReadOnlyAndFreshnessTests(unittest.TestCase):
                 prestart=prestart, nonce_unused=True,
                 journal_state="NOT_STARTED", approval_status="VALID",
                 expected_generation=2)
+
+        invalid_count = self.observation()
+        object.__setattr__(invalid_count, "request_id_exact_match_count", True)
+        with self.assertRaisesRegex(adapters.AdapterError,
+                                    "OBSERVATION_BINDING_MISMATCH"):
+            adapters.evaluate_freshness(
+                now=NOW, launch=launch, observation=invalid_count,
+                prestart=prestart, nonce_unused=True,
+                journal_state="NOT_STARTED", approval_status="ABSENT",
+                expected_generation=1)
 
     def test_production_authority_empty_and_no_live_adapter_invocation(self):
         with mock.patch.object(adapters, "_production_opener",

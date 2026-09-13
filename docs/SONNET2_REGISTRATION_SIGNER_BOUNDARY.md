@@ -77,8 +77,14 @@ receipt enters read-only reconciliation.
 
 The observation binds official origin and room, generation, first and last
 sequence, record count, local UTC retrieval time, response byte length and
-SHA-256, exact DID and X counts, case-insensitive X count, and conflict
-classification. Generation is read from the live JSON body's top-level positive
+SHA-256, exact DID and X counts, case-insensitive X count, exact fixed-request-ID
+count, and conflict classification. The request ID count includes only decoded
+message payloads with a case-sensitive exact match: no trimming, case folding,
+Unicode normalization, prefix matching, or substring matching is performed. An
+unrelated participant's different request remains ordinary room data. A
+different request related to the fixed DID or X account, or the fixed request ID
+attached to different registration bindings, is a conservative conflict.
+Generation is read from the live JSON body's top-level positive
 safe integer and labelled `OBSERVED_DEPLOYMENT_FIELD`: it is not currently in
 the reviewed OpenAPI response schema and is not referee-signed. Missing, null,
 boolean, string, float, negative, oversized, duplicate, or unexpected-generation
@@ -93,6 +99,16 @@ fixed referee DID and whose Ed25519 signature verifies over the exact UTF-8
 `room|nonce|text` bytes for the fixed registration room. The signed JSON must
 exactly identify `sonnet.receipt.v1`, `sonnet-2`, the fixed request ID,
 participant DID, writer role, X account URL, and `accepted` status.
+The request ID comparison is case-sensitive and exact. Unsigned outer metadata
+cannot supply or override the signed payload's request ID, and conflicting outer
+metadata is rejected.
+
+The production observation and receipt callables do not expose expected DID,
+room, contest, role, X URL, packet, or request ID parameters. Those bindings are
+captured once in private closures. Positional or keyword attempts to inject an
+alternate request ID are rejected by the callable signatures. The fixture seam
+permits substitution of a signature verifier only; it shares the same captured
+registration bindings and cannot select another request ID.
 
 Unsigned transport metadata such as room generation, sequence, and receipt
 timestamp is not projected as authenticated content. POST responses, unsigned

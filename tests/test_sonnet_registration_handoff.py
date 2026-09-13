@@ -11,6 +11,7 @@ from pathlib import Path
 import jsonschema
 
 from flop_agent import sonnet_registration as registration
+from flop_agent import sonnet_registration_adapters as adapters
 from flop_agent import sonnet_registration_handoff as handoff
 from flop_agent import wire_evidence
 
@@ -365,6 +366,31 @@ class ReconciliationTests(unittest.TestCase):
                 self.assertEqual(fixture.service.inspect()["state"],
                                  "AWAITING_REFEREE_RECEIPT")
 
+    def test_other_request_accepted_receipt_does_not_transition(self):
+        def strict_classifier(record):
+            classifier = adapters._build_fixed_receipt_classifier_for_test(
+                lambda *_args: None)
+            return classifier(record)
+
+        packet = {
+            "type": "sonnet.receipt.v1", "contest_id": registration.CONTEST_ID,
+            "request_id": "other", "participant_did": registration.PARTICIPANT_DID,
+            "role": registration.ROLE, "x_account_url": registration.X_ACCOUNT_URL,
+            "status": "accepted",
+        }
+        receipt = {
+            "from": registration.REFEREE_DID, "sig": "fixture", "nonce": "1",
+            "text": json.dumps(packet, separators=(",", ":")),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = Fixture(temp, classifier=strict_classifier)
+            fixture.service.execute(registration.fixed_candidate(), APPROVAL_ID)
+            with self.assertRaisesRegex(adapters.AdapterError,
+                                        "RECEIPT_REQUEST_ID_MISMATCH"):
+                fixture.service.reconcile(receipt)
+            self.assertEqual(fixture.service.inspect()["state"],
+                             "AWAITING_REFEREE_RECEIPT")
+
     def test_unknown_outcome_allows_only_read_only_reconciliation(self):
         with tempfile.TemporaryDirectory() as temp:
             fixture = Fixture(temp, transport=lambda *_args, **_kwargs:
@@ -416,6 +442,44 @@ class RegressionTests(unittest.TestCase):
         service = handoff.production_handoff_service
         for function in (service._execute, service._reconcile):
             self.assertEqual(inspect.getclosurevars(function).globals, {})
+
+    def test_production_receipt_call_graph_seals_request_id(self):
+        stage_one = registration.production_registration_service
+        handoff_classifier = inspect.getclosurevars(
+            handoff.production_handoff_service._reconcile
+        ).nonlocals["receipt_classifier"]
+        self.assertIs(handoff_classifier.__self__, stage_one)
+        self.assertEqual(
+            inspect.getclosurevars(stage_one._classify_receipt).nonlocals["request_id"],
+            registration.REQUEST_ID)
+        self.assertEqual(
+            tuple(inspect.signature(stage_one.classify_receipt).parameters),
+            ("record",))
+        self.assertEqual(
+            tuple(inspect.signature(
+                handoff.production_handoff_service.reconcile).parameters),
+            ("receipt",))
+        with self.assertRaises(TypeError):
+            stage_one.classify_receipt({}, request_id="other")
+        with self.assertRaises(TypeError):
+            stage_one.classify_receipt({}, "other")
+        with self.assertRaises(TypeError):
+            handoff.production_handoff_service.reconcile({}, request_id="other")
+
+        original_request_id = registration.REQUEST_ID
+        original_service = registration.production_registration_service
+        try:
+            registration.REQUEST_ID = "attacker-request"
+            registration.production_registration_service = object()
+            self.assertEqual(inspect.getclosurevars(
+                stage_one._classify_receipt).nonlocals["request_id"],
+                original_request_id)
+            self.assertIs(inspect.getclosurevars(
+                handoff.production_handoff_service._reconcile
+            ).nonlocals["receipt_classifier"].__self__, stage_one)
+        finally:
+            registration.REQUEST_ID = original_request_id
+            registration.production_registration_service = original_service
 
     def test_generic_mb_guard_remains_closed(self):
         for room in (registration.ROOM, "mb-sonnet-2-votes", "mb-arbitrary"):
