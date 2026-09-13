@@ -46,6 +46,7 @@ Machine-readable URLs:
 Repository CLI:
 - The local Python CLI provides readiness, monitoring, fixtures, receipts, identity and separately gated publishing workflows; it is not an Observatory API client.
 - The public Observatory HTML, JSON and OpenAPI surfaces are read-only and GET-only. The CLI as a whole is not read-only: some commands write local files, and publishing is a separate human-confirmed workflow. Agents must never invoke `publish --confirm`.
+- The Sonnet-2 writer-registration boundary is fixed-packet and one-shot by design, but its production permit authority and adapters are absent; it remains REGISTRATION_WRITE_APPROVAL_REQUIRED and does not relax the generic mb- signer guard.
 - Read-only examples and the complete scope are documented at https://ksk7777m.github.io/flop-agent-intelligence/README.md.
 
 Claim labels (canonical definitions: https://ksk7777m.github.io/flop-agent-intelligence/AI_ONBOARDING.md#trust-labels):

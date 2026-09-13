@@ -13,6 +13,12 @@ main is `20a4457b89ba11254f4aa48217b066884a148d98`, and the live OpenAPI
 reported `0.13.0` at the review timestamp. The published August room data is
 explicitly a `HISTORICAL_SNAPSHOT`, not a current observation.
 
+The dedicated [Sonnet-2 writer registration signer boundary](docs/SONNET2_REGISTRATION_SIGNER_BOUNDARY.md)
+binds one fixed registration packet, identity, X account, nonce, trust anchor,
+and signing target without relaxing the generic `mb-` signer guard. Its
+production permit authority and adapters remain disabled, so the current status
+is `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing or external writes.
+
 ## Collaboration Readiness V1
 
 The repository includes a transport-neutral, fail-closed collaboration state
