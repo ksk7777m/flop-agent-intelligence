@@ -16,8 +16,11 @@ explicitly a `HISTORICAL_SNAPSHOT`, not a current observation.
 The dedicated [Sonnet-2 writer registration signer boundary](docs/SONNET2_REGISTRATION_SIGNER_BOUNDARY.md)
 binds one fixed registration packet, identity, X account, nonce, trust anchor,
 and signing target without relaxing the generic `mb-` signer guard. Its
-production permit authority and adapters remain disabled, so the current status
-is `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing or external writes.
+durable second-stage handoff records intent before key loading and a POST attempt
+before the sole transport invocation, then blocks re-signing and re-sending
+across restart. Production approval and adapters remain disabled, so the current
+status is `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing or external
+writes.
 
 ## Collaboration Readiness V1
 

@@ -400,6 +400,21 @@ class ReceiptVerificationTests(unittest.TestCase):
             with self.assertRaises(registration.RegistrationBoundaryError):
                 fixture.service.verify_receipt(record)
 
+    def test_signed_rejection_is_classified_without_becoming_acceptance(self):
+        fixture = FixtureBoundary()
+        rejected = self.receipt(status="rejected")
+        result = fixture.service.classify_receipt(rejected)
+        self.assertEqual(result["status"], "REJECTED_VERIFIED")
+        with self.assertRaises(registration.RegistrationBoundaryError):
+            fixture.service.verify_receipt(rejected)
+
+    def test_signed_receipt_duplicate_json_keys_are_rejected(self):
+        record = self.receipt()
+        record["text"] = record["text"][:-1] + ',"status":"accepted"}'
+        fixture = FixtureBoundary()
+        with self.assertRaises(registration.RegistrationBoundaryError):
+            fixture.service.classify_receipt(record)
+
     def test_receipt_text_signature_and_nonce_are_bounded(self):
         cases = []
         signature = self.receipt(); signature["sig"] = "a" * 129; cases.append(signature)

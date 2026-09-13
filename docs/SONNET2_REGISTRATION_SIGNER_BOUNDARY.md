@@ -44,11 +44,29 @@ The permit is consumed before signing. Redirect, final-origin mismatch, HTTP
 `WRITE_OUTCOME_UNKNOWN`; only read-only reconciliation is then allowed. HTTP
 success remains `POST_OBSERVED_RECEIPT_REQUIRED`, not registration acceptance.
 
-The process-local approval/permit registry prevents duplicate execution inside
-one assembled authority. A future live assembly must additionally use the
-repository's durable replay/attempt journal before enabling production, so a
-crash or process restart cannot issue a second POST. That durable production
-assembly is deliberately not part of this package.
+The second-stage handoff now supplies a fixed hash-chain journal with atomic
+replacement, file and directory fsync, a nonblocking process lock, and strict
+`0700`/`0600` local permissions. Intent is durable before key loading, and a
+POST-attempt record is durable before the sole transport invocation. Every
+non-`NOT_STARTED` state permanently blocks another signature or POST after a
+crash or process restart. Production approvals, identity adapters, and
+transport adapters remain deliberately absent.
+
+The journal distinguishes `NOT_STARTED`, `INTENT_RECORDED`,
+`LOCAL_SIGNATURE_CREATED`, `POST_ATTEMPT_RECORDED`,
+`POST_RESPONSE_OBSERVED`, `AWAITING_REFEREE_RECEIPT`,
+`RECEIPT_ACCEPTED`, `RECEIPT_REJECTED`, and `WRITE_OUTCOME_UNKNOWN`.
+It stores hashes and minimized state only; it never stores a signature, key,
+secret, packet body, response body, or receipt body.
+
+The closed approval schema is published at
+[`schemas/sonnet2-registration-approval.v1.json`](../schemas/sonnet2-registration-approval.v1.json).
+Production has no approved artifact or permit issuer. Fixture-only assembly
+tests the exact validation and execution ordering without accessing the real
+identity. The future read-only registration checker must return the single
+closed state `ELIGIBLE_UNREGISTERED_CONFIRMED`; registration absence without
+eligibility confirmation, incomplete coverage, conflict, or an existing role
+all fail before approval, journal creation, or key loading.
 
 ## Receipt boundary
 
@@ -68,8 +86,45 @@ is treated only as bounded untrusted data and is never executed.
 
 - a new human approval bound to the exact packet and signing-target hashes;
 - reviewed production key, signer, and no-redirect POST adapters;
-- durable one-shot attempt/reconciliation integration across crashes;
 - a final pre-send deadline, nonce, DID, manifest, and registration-state check.
 
 Until every gate is reviewed and implemented, the production service remains
 unable to issue a permit or reach the key loader.
+
+## Stage-one negative-test mapping
+
+The original 28 requested cases are covered by 10 test methods. Several methods
+are parameterized, which is why the method count is smaller than the case
+count. All cases are independently exercised with `subTest` or explicit
+variants.
+
+| # | Required case | Test method | Form |
+|---:|---|---|---|
+| 1 | another `mb-` room | `test_other_mb_rooms_and_sonnet1_fail_before_key_load` | parameterized |
+| 2 | discovery room | same as #1 | parameterized |
+| 3 | votes room | same as #1 | parameterized |
+| 4 | submissions room | same as #1 | parameterized |
+| 5 | sonnet-1 | same as #1 | parameterized |
+| 6 | voter role | `test_role_did_x_request_nonce_and_contest_mutations_precede_key` | parameterized |
+| 7 | organizer role | same as #6 | parameterized |
+| 8 | X URL change | same as #6 | parameterized |
+| 9 | DID change | same as #6 | parameterized |
+| 10 | request ID change | same as #6 | parameterized |
+| 11 | nonce change | same as #6 | parameterized |
+| 12 | room change | same as #1 | parameterized |
+| 13 | packet key added | `test_packet_key_add_delete_whitespace_order_and_character_mutation` | parameterized |
+| 14 | packet key deleted | same as #13 | parameterized |
+| 15 | whitespace/order/one-character change | same as #13 | parameterized |
+| 16 | packet hash mismatch | `test_missing_extra_candidate_and_hash_mutations_precede_key` | parameterized |
+| 17 | signing-target hash mismatch | same as #16 | parameterized |
+| 18 | missing approval | `test_approval_missing_precedes_key_load` | standalone |
+| 19 | approval hash mismatch | `test_approval_hash_and_every_binding_are_exact` | parameterized |
+| 20 | approval reuse | `test_one_approval_cannot_issue_two_permits` and `test_permit_reuse_and_nonce_resigning_are_rejected_before_key` | standalone |
+| 21 | redirect | `test_redirect_is_unknown_and_never_retried` | standalone |
+| 22 | timeout | `test_timeout_and_disconnect_are_unknown_without_retry` | parameterized |
+| 23 | no retry after unknown response | same as #21/#22 | explicit second invocation |
+| 24 | forged referee receipt | `test_forged_wrong_referee_and_unsigned_accepted_fail` | parameterized |
+| 25 | wrong referee receipt | same as #24 | parameterized |
+| 26 | unsigned body containing accepted | same as #24 | parameterized |
+| 27 | receipt missing role/X URL | `test_receipt_binding_status_role_x_and_required_fields_are_exact` | parameterized |
+| 28 | generic signer rejects arbitrary `mb-` | `test_generic_signer_still_rejects_every_mb_room` | parameterized |

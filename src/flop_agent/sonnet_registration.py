@@ -206,15 +206,17 @@ def _verify_ed25519(did: str, signature: str, canonical: bytes) -> None:
 
 
 class _RegistrationService:
-    __slots__ = ("_preflight", "_execute", "_verify_receipt")
+    __slots__ = ("_preflight", "_execute", "_verify_receipt", "_classify_receipt")
 
     def __init__(self, token: object, preflight: Callable[..., Any],
-                 execute: Callable[..., Any], verify_receipt: Callable[..., Any]):
+                 execute: Callable[..., Any], verify_receipt: Callable[..., Any],
+                 classify_receipt: Callable[..., Any]):
         if token is not _SERVICE_TOKEN:
             raise TypeError("registration service is sealed")
         object.__setattr__(self, "_preflight", preflight)
         object.__setattr__(self, "_execute", execute)
         object.__setattr__(self, "_verify_receipt", verify_receipt)
+        object.__setattr__(self, "_classify_receipt", classify_receipt)
 
     def __setattr__(self, _name: str, _value: Any) -> None:
         raise AttributeError("registration service is immutable")
@@ -227,6 +229,10 @@ class _RegistrationService:
 
     def verify_receipt(self, record: Mapping[str, Any]) -> Mapping[str, Any]:
         return self._verify_receipt(record)
+
+    def classify_receipt(self, record: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Verify a terminal accepted/rejected receipt without granting write authority."""
+        return self._classify_receipt(record)
 
 
 _SERVICE_TOKEN = object()
@@ -411,7 +417,7 @@ def _build_registration_service(
             "receipt_required": True,
         })
 
-    def verify_receipt(record: Mapping[str, Any]) -> Mapping[str, Any]:
+    def classify_receipt(record: Mapping[str, Any]) -> Mapping[str, Any]:
         if not isinstance(record, mapping_type):
             raise boundary_error("RECEIPT_INVALID")
         for key in ("from", "sig", "nonce", "text"):
@@ -427,8 +433,18 @@ def _build_registration_service(
             raise boundary_error("RECEIPT_NONCE_INVALID")
         canonical = f"{room}|{record['nonce']}|{record['text']}".encode("utf-8")
         signature_verifier(referee_did, record["sig"], canonical)
+
+        def reject_duplicate_pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in items:
+                if key in result:
+                    raise boundary_error("RECEIPT_JSON_INVALID")
+                result[key] = value
+            return result
+
         try:
-            receipt = json_loads(record["text"])
+            receipt = json_loads(
+                record["text"], object_pairs_hook=reject_duplicate_pairs)
         except (TypeError, json_decode_error):
             raise boundary_error("RECEIPT_JSON_INVALID") from None
         if not isinstance(receipt, dict):
@@ -436,12 +452,14 @@ def _build_registration_service(
         required = {
             "type": "sonnet.receipt.v1", "contest_id": contest_id,
             "request_id": request_id, "participant_did": participant_did,
-            "role": role, "x_account_url": x_account_url, "status": "accepted",
+            "role": role, "x_account_url": x_account_url,
         }
-        if any(receipt.get(key) != value for key, value in required.items()):
+        if (any(receipt.get(key) != value for key, value in required.items())
+                or receipt.get("status") not in {"accepted", "rejected"}):
             raise boundary_error("RECEIPT_BINDING_MISMATCH")
+        accepted = receipt["status"] == "accepted"
         return mapping_proxy({
-            "status": "ACCEPTED_VERIFIED",
+            "status": "ACCEPTED_VERIFIED" if accepted else "REJECTED_VERIFIED",
             "referee_signature": "VALID",
             "contest_id": contest_id,
             "request_id": request_id,
@@ -451,7 +469,14 @@ def _build_registration_service(
             "transport_metadata": "UNSIGNED_NOT_PROJECTED",
         })
 
-    return service_type(service_token, preflight, execute, verify_receipt), issue
+    def verify_receipt(record: Mapping[str, Any]) -> Mapping[str, Any]:
+        result = classify_receipt(record)
+        if result["status"] != "ACCEPTED_VERIFIED":
+            raise boundary_error("RECEIPT_BINDING_MISMATCH")
+        return result
+
+    return service_type(
+        service_token, preflight, execute, verify_receipt, classify_receipt), issue
 
 
 def _disabled_key_loader() -> tuple[Any, str]:
