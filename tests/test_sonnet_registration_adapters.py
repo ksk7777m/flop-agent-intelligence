@@ -33,7 +33,6 @@ class FakeResponse:
             self.headers["Content-Length"] = str(len(body))
         if encoding:
             self.headers["Content-Encoding"] = encoding
-        self.headers["X-Room-Generation"] = "1"
 
     def read(self, size):
         size = min(size, self.chunk)
@@ -69,8 +68,14 @@ def receipt_classifier(record):
     raise registration.RegistrationBoundaryError("RECEIPT_INVALID")
 
 
-def export(*records):
-    return json.dumps({"messages": list(records)}, separators=(",", ":")).encode()
+def export(*records, generation=1, room=registration.ROOM):
+    seqs = [record["seq"] for record in records]
+    return json.dumps({
+        "room": room, "count": len(records),
+        "first_seq": min(seqs) if seqs else None,
+        "last_seq": max(seqs) if seqs else None,
+        "generation": generation, "messages": list(records),
+    }, separators=(",", ":")).encode()
 
 
 def message(seq, packet, sender=registration.PARTICIPANT_DID):
@@ -99,7 +104,7 @@ class EligibilityAndObservationTests(unittest.TestCase):
 
     def observe(self, raw):
         return adapters.classify_registration_export(
-            raw, generation="generation-fixture", fetched_at=NOW,
+            raw, fetched_at=NOW,
             receipt_classifier=receipt_classifier)
 
     def test_incomplete_ring_only_reports_observed_window(self):
@@ -144,7 +149,35 @@ class EligibilityAndObservationTests(unittest.TestCase):
         self.assertEqual(value.x_casefold_match_count, 1)
         self.assertEqual(value.official_origin, adapters.OFFICIAL_ORIGIN)
         with self.assertRaises(adapters.AdapterError):
-            self.observe(b'{"messages":[],"messages":[]}')
+            self.observe(b'{"room":"x","count":0,"first_seq":null,'
+                         b'"last_seq":null,"generation":1,"messages":[],'
+                         b'"messages":[]}')
+
+    def test_generation_and_room_are_body_bound_and_fail_closed(self):
+        for generation in (None, "1", 1.0, True, 0, -1,
+                           adapters.SAFE_INTEGER_MAX + 1):
+            with self.subTest(generation=generation), self.assertRaises(
+                    adapters.AdapterError):
+                self.observe(export(generation=generation))
+        with self.assertRaises(adapters.AdapterError):
+            self.observe(export(room="mb-other"))
+        missing = json.loads(export())
+        del missing["generation"]
+        with self.assertRaises(adapters.AdapterError):
+            self.observe(json.dumps(missing, separators=(",", ":")).encode())
+        with self.assertRaises(adapters.AdapterError):
+            self.observe(
+                b'{"room":"mb-sonnet-2-registration","count":0,'
+                b'"first_seq":null,"last_seq":null,"generation":1,'
+                b'"generation":2,"messages":[]}')
+
+    def test_live_shape_without_generation_header_is_accepted(self):
+        raw = export(message(95927, {"note": "untrusted"}, "other"))
+        observed = self.observe(raw)
+        self.assertEqual(observed.room_generation, 1)
+        self.assertEqual(observed.generation_trust,
+                         "OBSERVED_DEPLOYMENT_FIELD")
+        self.assertEqual(observed.response_byte_length, len(raw))
 
 
 class IdentitySignerTests(unittest.TestCase):
@@ -205,6 +238,19 @@ class IdentitySignerTests(unittest.TestCase):
             with self.assertRaises(adapters.AdapterError):
                 signer(registration.SIGNING_TARGET_BYTES)
 
+    def test_fd_must_still_match_fixed_path_after_open(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path, did = self.make_identity(temp)
+            other = Path(temp) / "other.json"
+            other.write_bytes(b"other")
+            os.chmod(other, 0o600)
+            signer = adapters._secure_identity_signer(
+                path, expected_did=did,
+                path_stat=lambda *_args, **_kwargs: other.stat())
+            with self.assertRaisesRegex(adapters.AdapterError,
+                                        "IDENTITY_PATH_CHANGED"):
+                signer(registration.SIGNING_TARGET_BYTES)
+
 
 class TransportTests(unittest.TestCase):
     def body(self):
@@ -240,7 +286,7 @@ class TransportTests(unittest.TestCase):
 
     def test_proxy_disabled_in_production_opener(self):
         with mock.patch("urllib.request.build_opener") as build:
-            adapters._production_opener()
+            adapters._production_opener(_build_opener=build)
         handlers = build.call_args.args
         proxies = [item for item in handlers
                    if isinstance(item, __import__("urllib.request").request.ProxyHandler)]
@@ -275,12 +321,37 @@ class TransportTests(unittest.TestCase):
                 credential_forwarding=False)
         self.assertEqual(opener.calls, [])
 
+    def test_built_transport_ignores_late_registration_global_rebinding(self):
+        body = self.body()
+        transport, opener = self.factory(FakeResponse())
+        originals = (registration.POST_URL, registration.PARTICIPANT_DID,
+                     registration.NONCE, registration.PACKET_TEXT,
+                     registration.ROOM)
+        try:
+            registration.POST_URL = "https://attacker.invalid/"
+            registration.PARTICIPANT_DID = "did:key:attacker"
+            registration.NONCE = "1"
+            registration.PACKET_TEXT = "{}"
+            registration.ROOM = "mb-attacker"
+            result = transport(
+                originals[0], body, method="POST", timeout_seconds=20,
+                allow_redirects=False, allow_proxy=False,
+                credential_forwarding=False)
+            self.assertEqual(result.final_url, originals[0])
+            self.assertEqual(len(opener.calls), 1)
+        finally:
+            (registration.POST_URL, registration.PARTICIPANT_DID,
+             registration.NONCE, registration.PACKET_TEXT,
+             registration.ROOM) = originals
+
 
 class ReadOnlyAndFreshnessTests(unittest.TestCase):
     def observation(self, classification=adapters.NO_CONFLICT_IN_OBSERVED_WINDOW):
         return adapters.RegistrationObservation(
-            adapters.OFFICIAL_ORIGIN, registration.ROOM, "generation", 1, 2, 2,
-            "2026-09-13T08:00:00Z", "0" * 64, 0, 0, 0, classification)
+            adapters.OFFICIAL_ORIGIN, registration.ROOM, 1,
+            "OBSERVED_DEPLOYMENT_FIELD", 1, 2, 2,
+            "2026-09-13T08:00:00Z", "0" * 64, 100, 0, 0, 0,
+            classification)
 
     def test_read_adapter_is_unsigned_fixed_get_and_bounded(self):
         response = FakeResponse(export(), url=adapters.REGISTRATION_GET_URL)
@@ -295,7 +366,8 @@ class ReadOnlyAndFreshnessTests(unittest.TestCase):
         self.assertIsNone(request.get_header("Authorization"))
         self.assertEqual(result.conflict_classification,
                          adapters.NO_CONFLICT_IN_OBSERVED_WINDOW)
-        self.assertEqual(result.room_generation, "1")
+        self.assertEqual(result.room_generation, 1)
+        self.assertEqual(result.generation_trust, "OBSERVED_DEPLOYMENT_FIELD")
 
     def test_reconciliation_is_bounded_and_never_posts(self):
         calls = []
@@ -321,20 +393,27 @@ class ReadOnlyAndFreshnessTests(unittest.TestCase):
         value = adapters.evaluate_freshness(
             now=NOW, launch=launch, observation=self.observation(),
             prestart=prestart, nonce_unused=True, journal_state="NOT_STARTED",
-            approval_status="ABSENT", expected_generation="generation")
+            approval_status="ABSENT", expected_generation=1)
         self.assertEqual(value, "REGISTRATION_WRITE_APPROVAL_REQUIRED")
         self.assertEqual(adapters.evaluate_freshness(
             now=NOW, launch=launch,
             observation=self.observation(adapters.ALREADY_REGISTERED_IDENTICALLY),
             prestart=prestart, nonce_unused=True, journal_state="NOT_STARTED",
-            approval_status="ABSENT", expected_generation="generation"),
+            approval_status="ABSENT", expected_generation=1),
             adapters.ALREADY_REGISTERED_IDENTICALLY)
         with self.assertRaises(adapters.AdapterError):
             adapters.evaluate_freshness(
                 now=NOW, launch=launch,
                 observation=self.observation(adapters.REGISTRATION_CONFLICT),
                 prestart=prestart, nonce_unused=True, journal_state="NOT_STARTED",
-                approval_status="VALID", expected_generation="generation")
+                approval_status="VALID", expected_generation=1)
+        with self.assertRaisesRegex(adapters.AdapterError,
+                                    "OBSERVATION_BINDING_MISMATCH"):
+            adapters.evaluate_freshness(
+                now=NOW, launch=launch, observation=self.observation(),
+                prestart=prestart, nonce_unused=True,
+                journal_state="NOT_STARTED", approval_status="VALID",
+                expected_generation=2)
 
     def test_production_authority_empty_and_no_live_adapter_invocation(self):
         with mock.patch.object(adapters, "_production_opener",

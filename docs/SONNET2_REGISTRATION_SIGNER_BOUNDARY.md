@@ -76,9 +76,15 @@ collision stops with `REGISTRATION_CONFLICT`; an observed request without its
 receipt enters read-only reconciliation.
 
 The observation binds official origin and room, generation, first and last
-sequence, record count, local UTC retrieval time, response SHA-256, exact DID
-and X counts, case-insensitive X count, and conflict classification. Unsigned
-generation and sequence metadata remain distinct from signed receipt content.
+sequence, record count, local UTC retrieval time, response byte length and
+SHA-256, exact DID and X counts, case-insensitive X count, and conflict
+classification. Generation is read from the live JSON body's top-level positive
+safe integer and labelled `OBSERVED_DEPLOYMENT_FIELD`: it is not currently in
+the reviewed OpenAPI response schema and is not referee-signed. Missing, null,
+boolean, string, float, negative, oversized, duplicate, or unexpected-generation
+values fail closed. HTTP headers are not treated as a generation source.
+Unsigned room, count, sequence, and generation metadata remain distinct from
+signed receipt content.
 
 ## Receipt boundary
 

@@ -22,7 +22,9 @@ across restart. Fixed identity, signer, bounded POST, and unsigned GET adapters
 are implemented but unreachable because production approval and registration
 activation remain disabled. Local prestart evidence is kept separate from
 unconfirmed official archive eligibility, and registration absence is only an
-observed-window statement. The current status is
+observed-window statement. The live deployment's JSON-body generation is kept
+as unsigned `OBSERVED_DEPLOYMENT_FIELD`, not an OpenAPI or signed-referee claim.
+The current status is
 `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing or external writes.
 
 ## Collaboration Readiness V1
