@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Iterator, Mapping
 
 from . import sonnet_registration as registration
+from . import sonnet_registration_adapters as _production_adapters
 
 
 SCHEMA_VERSION = "sonnet2-registration-journal-v1"
@@ -506,8 +507,8 @@ _SERVICE_TOKEN = object()
 def _build_handoff(
     *, root: Path, approvals: Mapping[str, Mapping[str, Any]],
     trusted_reviewers: frozenset[str], clock: Callable[[], datetime],
-    registration_checker: Callable[[], str], key_loader: Callable[[], tuple[Any, str]],
-    signer: Callable[[Any, bytes], str],
+    registration_checker: Callable[[], str],
+    identity_signer: Callable[[bytes], tuple[str, str]],
     transport: Callable[..., HandoffTransportObservation],
     receipt_classifier: Callable[[Mapping[str, Any]], Mapping[str, Any]],
     fault: Callable[[str], None] | None = None,
@@ -542,7 +543,7 @@ def _build_handoff(
 
     def execute(candidate: Mapping[str, Any], approval_id: str) -> Mapping[str, Any]:
         checked = validate_candidate(candidate)
-        if registration_checker() != "ELIGIBLE_UNREGISTERED_CONFIRMED":
+        if registration_checker() != "NO_CONFLICT_IN_OBSERVED_WINDOW":
             raise boundary_error("REGISTRATION_STATE_UNRESOLVED")
         artifact = configured_approvals.get(approval_id)
         if artifact is None:
@@ -560,10 +561,9 @@ def _build_handoff(
             journal_append(event="INTENT", approval_id=approval_id)
             used_approvals.add(approval_id)
             trip("AFTER_INTENT")
-            key, did = key_loader()
+            did, signature = identity_signer(signing_target)
             if did != participant_did:
                 raise boundary_error("IDENTITY_DID_MISMATCH")
-            signature = signer(key, signing_target)
             if (type(signature) is not str or len(signature) != 86
                     or any(character not in
                            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -665,10 +665,16 @@ def _build_handoff_for_test(**kwargs: Any) -> _HandoffService:
     return _build_handoff(**kwargs)
 
 
+_production_post_transport = _production_adapters._build_post_transport(
+    opener_factory=_production_adapters._production_opener,
+    observation_factory=HandoffTransportObservation,
+)
+
 production_handoff_service = _build_handoff(
     root=PRODUCTION_ROOT, approvals=MappingProxyType({}),
     trusted_reviewers=frozenset(), clock=lambda: datetime.now(timezone.utc),
-    registration_checker=_disabled, key_loader=_disabled, signer=_disabled,
-    transport=_disabled,
+    registration_checker=_disabled,
+    identity_signer=_production_adapters.production_identity_signer,
+    transport=_production_post_transport,
     receipt_classifier=registration.production_registration_service.classify_receipt,
 )

@@ -62,16 +62,13 @@ class Fixture:
 
         def registration_checker():
             self.effects.append("registration-check")
-            return "ELIGIBLE_UNREGISTERED_CONFIRMED" if checker is None else checker()
+            return "NO_CONFLICT_IN_OBSERVED_WINDOW" if checker is None else checker()
 
-        def key_loader():
+        def identity_signer(target):
             self.effects.append("key")
-            return object(), registration.PARTICIPANT_DID
-
-        def signer(_key, target):
             self.effects.append("sign")
             self.target = target
-            return "A" * 86
+            return registration.PARTICIPANT_DID, "A" * 86
 
         def normal_transport(url, payload, **options):
             self.effects.append("transport")
@@ -84,7 +81,7 @@ class Fixture:
             approvals={APPROVAL_ID: approval()} if approvals is None else approvals,
             trusted_reviewers=frozenset({"fixture-human-reviewer"}),
             clock=lambda: NOW, registration_checker=registration_checker,
-            key_loader=key_loader, signer=signer,
+            identity_signer=identity_signer,
             transport=transport or normal_transport,
             receipt_classifier=classifier, fault=fault,
         )

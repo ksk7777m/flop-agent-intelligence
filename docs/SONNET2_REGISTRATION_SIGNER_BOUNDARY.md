@@ -31,8 +31,11 @@ role, DID, X URL, request ID, nonce, hash, manifest, referee, missing approval,
 wrong approval hash, reused approval, reused permit, and cross-authority permit
 all fail before the key loader.
 
-Production adapters are disabled in this package. Tests inject a fixture key
-loader, fake signer, and fake transport; they never load the real identity.
+The production assembly captures a fixed-path identity adapter, exact-target
+signer, fixed-origin streaming POST adapter, and unsigned fixed-room GET
+adapter. Its approval store and registration checker remain disabled, so those
+adapters are unreachable in production. Tests use only fixture identities and
+fake openers; they never open the real identity or contact Technocore.
 
 ## One POST and uncertain outcome
 
@@ -49,8 +52,8 @@ replacement, file and directory fsync, a nonblocking process lock, and strict
 `0700`/`0600` local permissions. Intent is durable before key loading, and a
 POST-attempt record is durable before the sole transport invocation. Every
 non-`NOT_STARTED` state permanently blocks another signature or POST after a
-crash or process restart. Production approvals, identity adapters, and
-transport adapters remain deliberately absent.
+crash or process restart. Production approval authority remains deliberately
+absent.
 
 The journal distinguishes `NOT_STARTED`, `INTENT_RECORDED`,
 `LOCAL_SIGNATURE_CREATED`, `POST_ATTEMPT_RECORDED`,
@@ -63,10 +66,19 @@ The closed approval schema is published at
 [`schemas/sonnet2-registration-approval.v1.json`](../schemas/sonnet2-registration-approval.v1.json).
 Production has no approved artifact or permit issuer. Fixture-only assembly
 tests the exact validation and execution ordering without accessing the real
-identity. The future read-only registration checker must return the single
-closed state `ELIGIBLE_UNREGISTERED_CONFIRMED`; registration absence without
-eligibility confirmation, incomplete coverage, conflict, or an existing role
-all fail before approval, journal creation, or key loading.
+identity. Local cryptographic verification of a pre-cutoff record is represented
+as `PRESTART_EVIDENCE_LOCALLY_VERIFIED`, while official archive eligibility
+remains independently `OFFICIAL_ARCHIVE_ELIGIBILITY_UNCONFIRMED`. A bounded
+registration export can establish only `NO_CONFLICT_IN_OBSERVED_WINDOW`, never
+absolute non-registration or complete ring history. An identical verified
+accepted receipt stops with `ALREADY_REGISTERED_IDENTICALLY`; a role or X
+collision stops with `REGISTRATION_CONFLICT`; an observed request without its
+receipt enters read-only reconciliation.
+
+The observation binds official origin and room, generation, first and last
+sequence, record count, local UTC retrieval time, response SHA-256, exact DID
+and X counts, case-insensitive X count, and conflict classification. Unsigned
+generation and sequence metadata remain distinct from signed receipt content.
 
 ## Receipt boundary
 
@@ -85,11 +97,21 @@ is treated only as bounded untrusted data and is never executed.
 ## Remaining activation gates
 
 - a new human approval bound to the exact packet and signing-target hashes;
-- reviewed production key, signer, and no-redirect POST adapters;
-- a final pre-send deadline, nonce, DID, manifest, and registration-state check.
+- a final fresh read-only observation and human review of its finite window;
+- confirmation that the fixed nonce is locally unused and the journal is
+  `NOT_STARTED`.
 
-Until every gate is reviewed and implemented, the production service remains
-unable to issue a permit or reach the key loader.
+The freshness gate uses the local UTC clock and fixed deadline, launch status,
+contest, rules version, referee, and manifest bindings. It does not require
+official eligibility before POST: the POST is the referee's eligibility
+evaluation request.
+
+If a process stops after `INTENT_RECORDED`, execution cannot resume, re-sign, or
+generate a replacement packet. The state is permanently reconciliation-only
+and requires separate human review; it is not automatically reset.
+
+Until a reviewed approval is separately installed, the production service
+cannot reach the identity file, signer, or socket.
 
 ## Stage-one negative-test mapping
 
