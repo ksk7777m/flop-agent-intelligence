@@ -624,6 +624,10 @@ def _open_receipt_child_core(
             raise ReceiptObserverError("PRIVATE_ROOT_SYMLINK")
         if not filesystem_validator(lexical_root):
             raise ReceiptObserverError("PRIVATE_ROOT_UNSAFE_FILESYSTEM")
+        post_validation_info = os.stat(lexical_root, follow_symlinks=False)
+        if ((root_info.st_dev, root_info.st_ino)
+                != (post_validation_info.st_dev, post_validation_info.st_ino)):
+            raise ReceiptObserverError("PRIVATE_ROOT_SYMLINK")
         try:
             child_fd = os.open(_child_basename, flags, dir_fd=root_fd)
         except FileNotFoundError:
@@ -661,6 +665,7 @@ class PrivateReceiptStore:
         if isinstance(root, _PrivateDirectoryCapability):
             self._fd, self._identity = root.take()
             return
+        descriptor: int | None = None
         try:
             candidate = Path(root)
             if not candidate.is_absolute() or candidate.resolve(strict=True) != candidate:
@@ -672,9 +677,10 @@ class PrivateReceiptStore:
             if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
                     or info.st_uid != os.getuid()
                     or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
-                os.close(descriptor)
                 raise OSError
         except (OSError, RuntimeError, ValueError):
+            if descriptor is not None:
+                os.close(descriptor)
             raise ReceiptObserverError("EVIDENCE_ROOT_UNSAFE") from None
         self._fd = descriptor
         self._identity = (info.st_dev, info.st_ino)
@@ -1264,13 +1270,17 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
             filesystem_validator=filesystem_validator)
         try:
             store = store_type(capability)
-        except Exception:
+        except BaseException:
             capability.close()
             raise
-        core = observer_type(
-            config, transport_type(), store, None,
-            lambda: datetime.now(timezone.utc), trusted_classifier)
-        return production_type(core)
+        try:
+            core = observer_type(
+                config, transport_type(), store, None,
+                lambda: datetime.now(timezone.utc), trusted_classifier)
+            return production_type(core)
+        except BaseException:
+            store.close()
+            raise
 
     return build
 

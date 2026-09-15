@@ -686,6 +686,24 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
             "PRIVATE_ROOT_UNSAFE_FILESYSTEM", root,
             filesystem=lambda _path: False)
 
+    def test_root_identity_is_rechecked_after_filesystem_validation(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name).resolve()
+        root = base / "root"
+        root.mkdir(mode=0o700)
+        (root / observer.RECEIPT_CHILD_BASENAME).mkdir(mode=0o700)
+        moved = base / "moved-root"
+
+        def replace_path(_path):
+            root.rename(moved)
+            root.mkdir(mode=0o700)
+            (root / observer.RECEIPT_CHILD_BASENAME).mkdir(mode=0o700)
+            return True
+
+        self.assert_error(
+            "PRIVATE_ROOT_SYMLINK", root, filesystem=replace_path)
+
     def test_child_is_fixed_direct_existing_and_never_auto_created(self):
         root = self.temporary_root(child=False)
         nested = root / "execution-journal"
@@ -745,6 +763,33 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
             capability.take()
         store.close()
 
+    def test_store_closes_descriptor_when_path_revalidation_fails(self):
+        root = self.temporary_root()
+        original_open = observer.os.open
+        original_close = observer.os.close
+        opened = []
+        closed = []
+
+        def record_open(*args, **kwargs):
+            descriptor = original_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+
+        def fail_revalidation(*_args, **_kwargs):
+            raise OSError
+
+        def record_close(descriptor):
+            closed.append(descriptor)
+            return original_close(descriptor)
+
+        with mock.patch.object(observer.os, "open", side_effect=record_open), \
+                mock.patch.object(observer.os, "stat", side_effect=fail_revalidation), \
+                mock.patch.object(observer.os, "close", side_effect=record_close):
+            with self.assertRaisesRegex(
+                    observer.ReceiptObserverError, "EVIDENCE_ROOT_UNSAFE"):
+                observer.PrivateReceiptStore(root)
+        self.assertEqual(closed, opened)
+
     def test_production_factory_has_no_legacy_fallback_or_filesystem_mutation(self):
         signature = inspect.signature(observer.build_production_receipt_observer)
         parameter = signature.parameters["private_runtime_root"]
@@ -780,6 +825,25 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
             self.assertFalse(service._started)
             self.assertEqual(repr(service), "<fixed Sonnet receipt observer>")
             service._observer._store.close()
+
+    def test_factory_closes_store_if_config_validation_fails(self):
+        root = self.temporary_root()
+        original_close = observer.PrivateReceiptStore.close
+        closed = []
+
+        def record_close(store):
+            closed.append(store._fd)
+            return original_close(store)
+
+        with mock.patch.object(
+                observer.PrivateReceiptStore, "close", autospec=True,
+                side_effect=record_close):
+            with self.assertRaisesRegex(
+                    observer.ReceiptObserverError, "GENERATION_INVALID"):
+                observer.build_production_receipt_observer(
+                    private_runtime_root=root, expected_generation=0,
+                    initial_since=10, observation_started_at=NOW)
+        self.assertEqual(len(closed), 1)
 
     def test_production_path_policy_is_sealed_against_module_rebinding(self):
         root = self.temporary_root()
