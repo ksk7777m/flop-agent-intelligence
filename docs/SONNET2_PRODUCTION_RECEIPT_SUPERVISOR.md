@@ -41,9 +41,11 @@ Only after that sequence does the foreground launcher emit
 lineage, and transport continue polling after readiness; readiness never ends
 the process or grants write authority.
 
-The production bounds are fixed:
+The production bounds are fixed. A separate same-process wall guard starts
+before the bootstrap GET, so local setup and bootstrap time are included in the
+overall 1,800-second ceiling:
 
-- maximum monotonic wall time: 1,800 seconds;
+- maximum monotonic wall time for the complete supervisor: 1,800 seconds;
 - minimum interval between request starts: 2 seconds;
 - hard read budget: 902 reads, including page reads and any bounded export
   fallback;

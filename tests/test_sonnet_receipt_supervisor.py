@@ -63,6 +63,22 @@ class FakeSession:
         self.running = False
         return self.terminal
 
+    def wait_for_result(self, _timeout=None):
+        if self.terminal is None:
+            return None
+        self.running = False
+        mapping = {
+            "OBSERVER_ACCEPTED": ("ACCEPTED", None),
+            "OBSERVER_REJECTED": ("REJECTED", None),
+            "OBSERVER_STOPPED": ("UNCONFIRMED", "SUPERVISOR_STOPPED"),
+            "OBSERVER_TIMEOUT": ("UNCONFIRMED", "SUPERVISOR_TIMEOUT"),
+        }
+        status, error = mapping.get(
+            self.terminal, ("UNCONFIRMED", "FIXTURE_UNCONFIRMED"))
+        return observer.ObserverResult(
+            status, False, False, 1, 1, False, False,
+            error_category=error)
+
     def stop(self):
         self.stop_calls += 1
         self.terminal = "OBSERVER_STOPPED"
@@ -85,6 +101,40 @@ class FakeService:
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_outer_monotonic_guard_includes_bootstrap_and_maps_timeout(self):
+        class TimeoutSession:
+            def __init__(self):
+                self.stopped = threading.Event()
+
+            def wait_for_result(self, _timeout=None):
+                if not self.stopped.is_set():
+                    return None
+                return observer.ObserverResult(
+                    "UNCONFIRMED", False, False, 1, 1, False, False,
+                    error_category="SUPERVISOR_STOPPED")
+
+            def stop(self):
+                self.stopped.set()
+
+            def wait_until_ready(self, _timeout=None):
+                return False
+
+            def is_running(self):
+                return not self.stopped.is_set()
+
+        clock = FakeMonotonic()
+        session = TimeoutSession()
+        handle = supervisor.SupervisorHandle(
+            session, monotonic=clock,
+            started_at=-observer.SUPERVISOR_MAX_WALL_SECONDS)
+        for _ in range(100):
+            if session.stopped.is_set():
+                break
+            time.sleep(0.001)
+        self.assertTrue(session.stopped.is_set())
+        self.assertEqual(handle.wait_for_terminal(1), supervisor.TIMEOUT)
+        self.assertEqual(handle.remaining_seconds(), 0)
+
     def test_live_shaped_highwater_uses_unsigned_body_generation_and_cursor(self):
         self.assertEqual(supervisor._parse_highwater(highwater()), (1, 95927))
 
