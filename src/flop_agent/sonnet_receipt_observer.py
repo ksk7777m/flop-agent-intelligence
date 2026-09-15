@@ -1,0 +1,823 @@
+"""Read-only, durable receipt reconciliation for the fixed Sonnet registration.
+
+The production constructor seals every protocol binding to
+``sonnet_registration``.  This module owns no POST, signer, identity-loader,
+nonce, request-id generator, or retrying HTTP client.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import json
+import os
+import stat
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Callable, Mapping
+
+from . import sonnet_registration as registration
+from . import sonnet_registration_handoff as handoff
+from .identity import verify_message
+
+
+OFFICIAL_ORIGIN = "https://technocore.chat"
+ROOM = "mb-sonnet-2-registration"
+CONTEST_ID = "sonnet-2"
+ROLE = "writer"
+REFEREE_DID = "did:key:z6MkowHQwsx9xr84WbWN3YCnKutyBnBXkT1ChKY4uEAAMzte"
+MANIFEST_COMMIT = "e1999094c359ef7390bdf07fe2a151393a5c2f51"
+MANIFEST_SHA256 = "0c87c41b8b33bdd8641f77c9e481a12f2758a0e27d47b90452b1c0a2020a9547"
+DEADLINE = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
+MAX_PAGE_BYTES = 262_144
+MAX_EXPORT_BYTES = 12 * 1024 * 1024
+MAX_PAGE_RECORDS = 200
+MAX_EXPORT_RECORDS = 50_000
+MAX_READS = 3
+LONG_POLL_SECONDS = 10
+HTTP_TIMEOUT_SECONDS = 20
+SAFE_INTEGER_MAX = 9_007_199_254_740_991
+
+_RECEIPT_FIELDS = frozenset({
+    "type", "contest_id", "request_id", "participant_did", "role",
+    "x_account_url", "status",
+})
+_OPTIONAL_RECEIPT_FIELDS = frozenset({"reason"})
+_RECORD_FIELDS = frozenset({"seq", "ts", "from", "text", "nonce", "sig"})
+_METADATA_FIELDS = frozenset({
+    "schema", "receipt_sha256", "request_reference_sha256", "contest_id",
+    "room", "generation", "seq", "disposition", "verification",
+    "observed_at",
+})
+
+
+class ReceiptObserverError(RuntimeError):
+    """A fixed error category that never reflects remote or private values."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True)
+class HttpRead:
+    status_code: int
+    final_url: str
+    content_type: str
+    body: bytes
+    headers: Mapping[str, str]
+    redirected: bool = False
+
+
+@dataclass(frozen=True)
+class ObserverResult:
+    status: str
+    observer_ready: bool
+    review_required: bool
+    read_count: int
+    cursor: int
+    gap_detected: bool
+    export_fallback_used: bool
+    receipt_sha256: str | None = None
+    error_category: str | None = None
+
+    def journal_projection(self) -> Mapping[str, Any]:
+        """Return only values safe for an ordinary/public journal."""
+        return MappingProxyType({
+            "contest_id": CONTEST_ID,
+            "status": self.status,
+            "observer_ready": self.observer_ready,
+            "verification": "VALID" if self.receipt_sha256 else "UNCONFIRMED",
+            "receipt_sha256": self.receipt_sha256,
+            "error_category": self.error_category,
+            "read_count": self.read_count,
+            "gap_detected": self.gap_detected,
+            "export_fallback_used": self.export_fallback_used,
+        })
+
+
+@dataclass(frozen=True)
+class _Config:
+    origin: str
+    room: str
+    contest_id: str
+    request_id: str
+    participant_did: str
+    role: str
+    x_account_url: str
+    referee_did: str
+    manifest_commit: str
+    manifest_sha256: str
+    expected_generation: int
+    initial_since: int
+    observation_started_at: datetime
+    deadline: datetime
+    max_reads: int = MAX_READS
+    wait_seconds: int = LONG_POLL_SECONDS
+
+
+def _utc(value: datetime) -> datetime:
+    if (type(value) is not datetime or value.tzinfo is None
+            or value.utcoffset() != timezone.utc.utcoffset(value)):
+        raise ReceiptObserverError("TIME_INVALID")
+    return value.astimezone(timezone.utc)
+
+
+def _validate_config(config: _Config) -> None:
+    if (config.origin != OFFICIAL_ORIGIN or config.room != ROOM
+            or config.contest_id != CONTEST_ID or config.role != ROLE
+            or config.referee_did != REFEREE_DID
+            or config.manifest_commit != MANIFEST_COMMIT
+            or config.manifest_sha256 != MANIFEST_SHA256):
+        raise ReceiptObserverError("TRUST_ANCHOR_MISMATCH")
+    for value in (config.request_id, config.participant_did, config.x_account_url):
+        if type(value) is not str or not value:
+            raise ReceiptObserverError("PRIVATE_CONFIG_INVALID")
+    for value in (config.expected_generation, config.initial_since):
+        if type(value) is not int or not 0 <= value <= SAFE_INTEGER_MAX:
+            raise ReceiptObserverError("CURSOR_CONFIG_INVALID")
+    if config.expected_generation < 1:
+        raise ReceiptObserverError("GENERATION_INVALID")
+    if (type(config.max_reads) is not int or not 1 <= config.max_reads <= MAX_READS
+            or type(config.wait_seconds) is not int
+            or not 0 <= config.wait_seconds <= LONG_POLL_SECONDS):
+        raise ReceiptObserverError("READ_BOUND_INVALID")
+    if _utc(config.observation_started_at) >= _utc(config.deadline):
+        raise ReceiptObserverError("OBSERVATION_WINDOW_INVALID")
+
+
+def _json_object(raw: bytes, *, code: str) -> dict[str, Any]:
+    def no_duplicates(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in items:
+            if key in result:
+                raise ReceiptObserverError(code)
+            result[key] = value
+        return result
+    try:
+        value = json.loads(raw, object_pairs_hook=no_duplicates)
+    except (ValueError, UnicodeError):
+        raise ReceiptObserverError(code) from None
+    if type(value) is not dict:
+        raise ReceiptObserverError(code)
+    return value
+
+
+def _normalize_record(value: Any) -> dict[str, Any]:
+    if (type(value) is not dict or not {"seq", "ts", "from", "text"} <= set(value)
+            or not set(value) <= _RECORD_FIELDS
+            or type(value.get("seq")) is not int
+            or not 0 <= value["seq"] <= SAFE_INTEGER_MAX
+            or any(type(value.get(key)) is not str for key in ("ts", "from", "text"))
+            or len(value["text"].encode("utf-8")) > 4096):
+        raise ReceiptObserverError("RECORD_INVALID")
+    signed = "nonce" in value or "sig" in value
+    if signed:
+        if (set(value) != _RECORD_FIELDS or type(value.get("sig")) is not str
+                or len(value["sig"]) != 86 or type(value.get("nonce")) is not int
+                or not 1 <= value["nonce"] <= 9_999_999_999_999_999_999):
+            raise ReceiptObserverError("SIGNED_RECORD_INVALID")
+    return dict(value)
+
+
+def _canonical_record(record: Mapping[str, Any]) -> bytes:
+    return json.dumps(
+        dict(record), sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+
+
+def _classify_receipt(
+    record: Mapping[str, Any], *, config: _Config,
+    signature_verifier: Callable[[str, str, str, str, str], None],
+) -> tuple[str, bytes]:
+    normalized = _normalize_record(record)
+    if normalized.get("from") != config.referee_did:
+        raise ReceiptObserverError("RECEIPT_REFEREE_MISMATCH")
+    nonce = str(normalized["nonce"])
+    try:
+        signature_verifier(
+            normalized["from"], normalized["sig"], config.room, nonce,
+            normalized["text"])
+    except Exception:
+        raise ReceiptObserverError("RECEIPT_SIGNATURE_INVALID") from None
+    receipt = _json_object(
+        normalized["text"].encode("utf-8"), code="RECEIPT_SCHEMA_INVALID")
+    if (not _RECEIPT_FIELDS <= set(receipt)
+            or not set(receipt) <= _RECEIPT_FIELDS | _OPTIONAL_RECEIPT_FIELDS
+            or receipt.get("type") != "sonnet.receipt.v1"
+            or receipt.get("contest_id") != config.contest_id
+            or receipt.get("request_id") != config.request_id
+            or receipt.get("participant_did") != config.participant_did
+            or receipt.get("role") != config.role
+            or receipt.get("x_account_url") != config.x_account_url
+            or receipt.get("status") not in {"accepted", "rejected"}
+            or ("reason" in receipt and type(receipt["reason"]) is not str)):
+        raise ReceiptObserverError("RECEIPT_BINDING_MISMATCH")
+    return ("ACCEPTED" if receipt["status"] == "accepted" else "REJECTED",
+            _canonical_record(normalized))
+
+
+def _parse_page(read: HttpRead, *, expected_url: str, since: int) -> tuple[int, int, list[dict[str, Any]], bool]:
+    if (type(read.status_code) is not int or read.status_code != 200
+            or read.redirected or read.final_url != expected_url
+            or read.content_type.split(";", 1)[0].strip().lower() != "application/json"
+            or len(read.body) > MAX_PAGE_BYTES):
+        raise ReceiptObserverError("PAGE_TRANSPORT_INVALID")
+    value = _json_object(read.body, code="PAGE_JSON_INVALID")
+    allowed = {"room", "count", "first_seq", "last_seq", "generation", "messages", "wait_held"}
+    required = allowed - {"wait_held"}
+    if (not required <= set(value) or not set(value) <= allowed
+            or value.get("room") != ROOM
+            or type(value.get("count")) is not int
+            or not 0 <= value["count"] <= MAX_PAGE_RECORDS
+            or type(value.get("generation")) is not int
+            or not 1 <= value["generation"] <= SAFE_INTEGER_MAX
+            or type(value.get("last_seq")) is not int
+            or not 0 <= value["last_seq"] <= SAFE_INTEGER_MAX
+            or type(value.get("messages")) is not list
+            or value["count"] != len(value["messages"])
+            or ("wait_held" in value and type(value["wait_held"]) is not bool)):
+        raise ReceiptObserverError("PAGE_SCHEMA_INVALID")
+    records = [_normalize_record(record) for record in value["messages"]]
+    seqs = [record["seq"] for record in records]
+    if records:
+        if (type(value.get("first_seq")) is not int
+                or value["first_seq"] != seqs[0] or value["last_seq"] != seqs[-1]
+                or seqs != list(range(seqs[0], seqs[0] + len(seqs)))
+                or seqs[0] <= since):
+            raise ReceiptObserverError("PAGE_SEQUENCE_INVALID")
+    elif value.get("first_seq") is not None or value["last_seq"] < since:
+        raise ReceiptObserverError("PAGE_SEQUENCE_INVALID")
+    return value["generation"], value["last_seq"], records, bool(records and seqs[0] > since + 1)
+
+
+def _parse_export(read: HttpRead, *, expected_url: str, expected_generation: int) -> list[dict[str, Any]]:
+    generation_header = read.headers.get("X-Room-Generation")
+    if (type(read.status_code) is not int or read.status_code != 200
+            or read.redirected or read.final_url != expected_url
+            or read.content_type.split(";", 1)[0].strip().lower() != "application/x-ndjson"
+            or len(read.body) > MAX_EXPORT_BYTES
+            or type(generation_header) is not str or not generation_header.isdigit()
+            or int(generation_header) != expected_generation):
+        raise ReceiptObserverError("EXPORT_TRANSPORT_INVALID")
+    if not read.body:
+        return []
+    lines = read.body.splitlines()
+    if len(lines) > MAX_EXPORT_RECORDS or any(not line for line in lines):
+        raise ReceiptObserverError("EXPORT_BOUND_INVALID")
+    records = [_normalize_record(_json_object(line, code="EXPORT_RECORD_INVALID")) for line in lines]
+    seqs = [record["seq"] for record in records]
+    if seqs != list(range(seqs[0], seqs[0] + len(seqs))):
+        raise ReceiptObserverError("EXPORT_SEQUENCE_INVALID")
+    return records
+
+
+class _RejectRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+class FixedReadonlyTransport:
+    """GET-only transport with fixed origin/room and no proxy or retry."""
+
+    __slots__ = ("_opener",)
+
+    def __init__(self) -> None:
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _RejectRedirect())
+
+    @staticmethod
+    def page_url(since: int, wait_seconds: int) -> str:
+        query = urllib.parse.urlencode({
+            "since": str(since), "limit": "200",
+            "wait": str(wait_seconds), "format": "json",
+        })
+        return f"https://technocore.chat/r/mb-sonnet-2-registration?{query}"
+
+    @staticmethod
+    def export_url() -> str:
+        return "https://technocore.chat/r/mb-sonnet-2-registration/export"
+
+    def _get(self, url: str, maximum: int) -> HttpRead:
+        request = urllib.request.Request(url, method="GET", headers={
+            "Accept": "application/json, application/x-ndjson",
+            "Accept-Encoding": "identity",
+        })
+        try:
+            with self._opener.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+                chunks: list[bytes] = []
+                total = 0
+                while True:
+                    chunk = response.read(min(65_536, maximum + 1 - total))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total > maximum:
+                        raise ReceiptObserverError("RESPONSE_TOO_LARGE")
+                return HttpRead(
+                    int(response.status), response.geturl(),
+                    response.headers.get("Content-Type", ""), b"".join(chunks),
+                    MappingProxyType({
+                        "X-Room-Generation": response.headers.get(
+                            "X-Room-Generation", "")}),
+                    redirected=response.geturl() != url)
+        except urllib.error.HTTPError as error:
+            return HttpRead(int(error.code), url, "", b"", MappingProxyType({}))
+        except ReceiptObserverError:
+            raise
+        except (OSError, TimeoutError, urllib.error.URLError):
+            raise ReceiptObserverError("NETWORK_FAILURE") from None
+
+    def read_page(self, since: int, wait_seconds: int) -> HttpRead:
+        return self._get(self.page_url(since, wait_seconds), MAX_PAGE_BYTES)
+
+    def read_export(self) -> HttpRead:
+        return self._get(self.export_url(), MAX_EXPORT_BYTES)
+
+
+class PrivateReceiptStore:
+    """Descriptor-anchored private evidence store; callers supply an existing root."""
+
+    __slots__ = ("_fd", "_identity")
+
+    def __init__(self, root: Path):
+        try:
+            candidate = Path(root)
+            if not candidate.is_absolute() or candidate.resolve(strict=True) != candidate:
+                raise OSError
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(candidate, flags)
+            info = os.fstat(descriptor)
+            current = os.stat(candidate, follow_symlinks=False)
+            if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
+                    or info.st_uid != os.getuid()
+                    or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
+                os.close(descriptor)
+                raise OSError
+        except (OSError, RuntimeError, ValueError):
+            raise ReceiptObserverError("EVIDENCE_ROOT_UNSAFE") from None
+        self._fd = descriptor
+        self._identity = (info.st_dev, info.st_ino)
+
+    def close(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+    def _check_root(self) -> int:
+        if self._fd is None:
+            raise ReceiptObserverError("EVIDENCE_STORE_CLOSED")
+        info = os.fstat(self._fd)
+        if ((info.st_dev, info.st_ino) != self._identity
+                or stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.getuid()):
+            raise ReceiptObserverError("EVIDENCE_ROOT_UNSAFE")
+        return self._fd
+
+    def _read(self, name: str, maximum: int) -> bytes:
+        if "/" in name or name in {".", ".."}:
+            raise ReceiptObserverError("EVIDENCE_NAME_INVALID")
+        fd: int | None = None
+        try:
+            fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=self._check_root())
+            info = os.fstat(fd)
+            current = os.stat(
+                name, dir_fd=self._check_root(), follow_symlinks=False)
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(fd, min(65_536, maximum + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > maximum:
+                    break
+        except OSError:
+            raise ReceiptObserverError("EVIDENCE_READ_FAILED") from None
+        finally:
+            if fd is not None:
+                os.close(fd)
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.getuid() or info.st_nlink != 1
+                or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)
+                or total > maximum):
+            raise ReceiptObserverError("EVIDENCE_FILE_UNSAFE")
+        return b"".join(chunks)
+
+    def _atomic_write(self, name: str, raw: bytes) -> str:
+        root_fd = self._check_root()
+        try:
+            lock_fd = os.open(
+                ".receipt-store.lock",
+                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                0o600, dir_fd=root_fd)
+            lock_info = os.fstat(lock_fd)
+            if (not stat.S_ISREG(lock_info.st_mode)
+                    or stat.S_IMODE(lock_info.st_mode) != 0o600
+                    or lock_info.st_uid != os.getuid() or lock_info.st_nlink != 1):
+                os.close(lock_fd)
+                raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE")
+        except OSError:
+            raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE") from None
+        temporary = f".tmp-{uuid.uuid4().hex}"
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                existing_info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                existing_info = None
+            except OSError:
+                raise ReceiptObserverError("EVIDENCE_EXISTING_UNSAFE") from None
+            if existing_info is not None and not stat.S_ISREG(existing_info.st_mode):
+                raise ReceiptObserverError("EVIDENCE_EXISTING_UNSAFE")
+            if existing_info is not None:
+                existing = self._read(name, len(raw))
+                if existing != raw:
+                    raise ReceiptObserverError("EVIDENCE_CONFLICT")
+                return "DEDUPLICATED"
+            fd = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600, dir_fd=root_fd)
+            try:
+                view = memoryview(raw)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise ReceiptObserverError("EVIDENCE_WRITE_FAILED")
+                    view = view[written:]
+                os.fsync(fd)
+                if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600:
+                    raise ReceiptObserverError("EVIDENCE_FILE_UNSAFE")
+            finally:
+                os.close(fd)
+            os.rename(temporary, name, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+            os.fsync(root_fd)
+            return "ARCHIVED"
+        except OSError:
+            raise ReceiptObserverError("EVIDENCE_WRITE_FAILED") from None
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+
+    def archive(
+        self, raw_record: bytes, *, disposition: str, generation: int, seq: int,
+        observed_at: datetime, request_reference_sha256: str,
+    ) -> Mapping[str, str]:
+        digest = hashlib.sha256(raw_record).hexdigest()
+        metadata = {
+            "schema": "sonnet-registration-receipt-evidence.v1",
+            "receipt_sha256": digest,
+            "request_reference_sha256": request_reference_sha256,
+            "contest_id": CONTEST_ID,
+            "room": ROOM,
+            "generation": generation,
+            "seq": seq,
+            "disposition": disposition,
+            "verification": "PINNED_REFEREE_SIGNATURE_VALID",
+            "observed_at": _utc(observed_at).isoformat().replace("+00:00", "Z"),
+        }
+        metadata_raw = json.dumps(
+            metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("utf-8")
+        blob_status = self._atomic_write(f"{digest}.receipt", raw_record)
+        metadata_status = self._atomic_write(f"{digest}.json", metadata_raw)
+        if hashlib.sha256(self._read(f"{digest}.receipt", len(raw_record))).hexdigest() != digest:
+            raise ReceiptObserverError("EVIDENCE_DIGEST_MISMATCH")
+        return MappingProxyType({
+            "status": "DEDUPLICATED" if metadata_status == "DEDUPLICATED" else "ARCHIVED",
+            "blob_status": blob_status,
+            "receipt_sha256": digest,
+        })
+
+    def mark_conflict(
+        self, evidence: Mapping[str, str], *, request_reference_sha256: str,
+    ) -> None:
+        """Durably block reconciliation before writing either conflicting blob."""
+        marker = {
+            "schema": "sonnet-registration-receipt-conflict.v1",
+            "request_reference_sha256": request_reference_sha256,
+            "evidence": dict(sorted(evidence.items())),
+        }
+        raw = json.dumps(
+            marker, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("utf-8")
+        marker_digest = hashlib.sha256(raw).hexdigest()
+        self._atomic_write(f"{marker_digest}.conflict", raw)
+
+    def load(self) -> list[tuple[dict[str, Any], dict[str, Any], bytes]]:
+        root_fd = self._check_root()
+        try:
+            names = os.listdir(root_fd)
+        except OSError:
+            raise ReceiptObserverError("EVIDENCE_READ_FAILED") from None
+        if any(name.endswith(".conflict") for name in names):
+            raise ReceiptObserverError("CONFLICTING_VALID_RECEIPTS")
+        results: list[tuple[dict[str, Any], dict[str, Any], bytes]] = []
+        for name in sorted(item for item in names if item.endswith(".json")):
+            digest = name[:-5]
+            if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+                raise ReceiptObserverError("EVIDENCE_NAME_INVALID")
+            metadata_raw = self._read(name, MAX_PAGE_BYTES)
+            metadata = _json_object(metadata_raw, code="EVIDENCE_METADATA_INVALID")
+            if (set(metadata) != _METADATA_FIELDS or metadata.get("receipt_sha256") != digest
+                    or metadata.get("schema") != "sonnet-registration-receipt-evidence.v1"
+                    or metadata.get("contest_id") != CONTEST_ID or metadata.get("room") != ROOM
+                    or metadata.get("verification") != "PINNED_REFEREE_SIGNATURE_VALID"
+                    or metadata.get("disposition") not in {"ACCEPTED", "REJECTED"}
+                    or type(metadata.get("generation")) is not int
+                    or not 1 <= metadata["generation"] <= SAFE_INTEGER_MAX
+                    or type(metadata.get("seq")) is not int
+                    or not 0 <= metadata["seq"] <= SAFE_INTEGER_MAX
+                    or type(metadata.get("request_reference_sha256")) is not str
+                    or len(metadata["request_reference_sha256"]) != 64
+                    or type(metadata.get("observed_at")) is not str):
+                raise ReceiptObserverError("EVIDENCE_METADATA_INVALID")
+            try:
+                observed_at = datetime.fromisoformat(
+                    metadata["observed_at"].replace("Z", "+00:00"))
+            except ValueError:
+                raise ReceiptObserverError("EVIDENCE_METADATA_INVALID") from None
+            _utc(observed_at)
+            raw = self._read(f"{digest}.receipt", MAX_PAGE_BYTES)
+            if hashlib.sha256(raw).hexdigest() != digest:
+                raise ReceiptObserverError("EVIDENCE_DIGEST_MISMATCH")
+            record = _json_object(raw, code="EVIDENCE_RECORD_INVALID")
+            results.append((record, metadata, raw))
+        return results
+
+
+def _provision_fixed_evidence_root(root: Path) -> None:
+    """Create only the sealed child below the existing private registration root."""
+    parent = root.parent
+    try:
+        if (not parent.is_absolute() or parent.resolve(strict=True) != parent
+                or root.name != "receipt-evidence"):
+            raise OSError
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        parent_fd = os.open(parent, flags)
+        parent_info = os.fstat(parent_fd)
+        if (not stat.S_ISDIR(parent_info.st_mode)
+                or stat.S_IMODE(parent_info.st_mode) != 0o700
+                or parent_info.st_uid != os.getuid()):
+            raise OSError
+        try:
+            os.mkdir(root.name, 0o700, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except FileExistsError:
+            pass
+        child_info = os.stat(root.name, dir_fd=parent_fd, follow_symlinks=False)
+        if (not stat.S_ISDIR(child_info.st_mode)
+                or stat.S_IMODE(child_info.st_mode) != 0o700
+                or child_info.st_uid != os.getuid()):
+            raise OSError
+        os.close(parent_fd)
+    except OSError:
+        if "parent_fd" in locals():
+            os.close(parent_fd)
+        raise ReceiptObserverError("EVIDENCE_ROOT_UNSAFE") from None
+
+
+class ReceiptObserver:
+    """Bounded state machine for one fixed request; all network use is read-only."""
+
+    __slots__ = ("_config", "_transport", "_store", "_verify", "_clock", "_cursor", "_ready", "_reads")
+
+    def __init__(
+        self, config: _Config, transport: Any, store: PrivateReceiptStore,
+        signature_verifier: Callable[[str, str, str, str, str], None],
+        clock: Callable[[], datetime],
+    ):
+        _validate_config(config)
+        self._config = config
+        self._transport = transport
+        self._store = store
+        self._verify = signature_verifier
+        self._clock = clock
+        self._cursor = config.initial_since
+        self._ready = False
+        self._reads = 0
+
+    @property
+    def ready(self) -> bool:
+        return self._ready
+
+    @property
+    def cursor(self) -> int:
+        return self._cursor
+
+    def _safe(self, *, error: str, gap: bool = False, exported: bool = False,
+              review: bool = False) -> ObserverResult:
+        self._ready = False
+        return ObserverResult(
+            "UNCONFIRMED", False, review, self._reads, self._cursor, gap,
+            exported, error_category=error)
+
+    def _receipts(
+        self, records: list[dict[str, Any]], generation: int, *, persist: bool = True,
+    ) -> ObserverResult | None:
+        verified: dict[str, tuple[str, bytes, int]] = {}
+        for record in records:
+            if record.get("from") != self._config.referee_did:
+                continue
+            try:
+                text = _json_object(record["text"].encode("utf-8"), code="UNTRUSTED_RECORD")
+            except ReceiptObserverError:
+                continue
+            if text.get("type") != "sonnet.receipt.v1" or text.get("request_id") != self._config.request_id:
+                continue
+            try:
+                disposition, raw = _classify_receipt(
+                    record, config=self._config, signature_verifier=self._verify)
+            except ReceiptObserverError:
+                continue
+            signed_record = _canonical_record({
+                key: record[key] for key in ("from", "sig", "nonce", "text")})
+            signed_record_digest = hashlib.sha256(signed_record).hexdigest()
+            verified[signed_record_digest] = (disposition, raw, record["seq"])
+        if not verified:
+            return None
+        dispositions = {item[0] for item in verified.values()}
+        if len(dispositions) != 1:
+            if persist:
+                request_reference = hashlib.sha256(
+                    self._config.request_id.encode("utf-8")).hexdigest()
+                self._store.mark_conflict(
+                    {hashlib.sha256(raw).hexdigest(): disposition
+                     for disposition, raw, _seq in verified.values()},
+                    request_reference_sha256=request_reference)
+                for disposition, raw, seq in verified.values():
+                    self._store.archive(
+                        raw, disposition=disposition, generation=generation, seq=seq,
+                        observed_at=_utc(self._clock()),
+                        request_reference_sha256=request_reference)
+            return self._safe(error="CONFLICTING_VALID_RECEIPTS", review=True)
+        disposition = next(iter(dispositions))
+        digest: str | None = None
+        for disposition, raw, seq in verified.values():
+            if persist:
+                archived = self._store.archive(
+                    raw, disposition=disposition, generation=generation, seq=seq,
+                    observed_at=_utc(self._clock()),
+                    request_reference_sha256=hashlib.sha256(
+                        self._config.request_id.encode("utf-8")).hexdigest())
+                digest = archived["receipt_sha256"]
+            else:
+                digest = hashlib.sha256(raw).hexdigest()
+        self._ready = True
+        return ObserverResult(
+            disposition, True, False, self._reads, self._cursor, False, False,
+            receipt_sha256=digest)
+
+    def reconcile_saved(self) -> ObserverResult:
+        try:
+            saved = self._store.load()
+            if any(
+                metadata["generation"] != self._config.expected_generation
+                or metadata["seq"] != record.get("seq")
+                or metadata["request_reference_sha256"] != hashlib.sha256(
+                    self._config.request_id.encode("utf-8")).hexdigest()
+                for record, metadata, _raw in saved
+            ):
+                return self._safe(error="SAVED_EVIDENCE_BINDING_MISMATCH", review=True)
+            records = [record for record, _metadata, _raw in saved]
+            if not records:
+                return self._safe(error="NO_SAVED_RECEIPT")
+            result = self._receipts(
+                records, self._config.expected_generation, persist=False)
+            if result is None or len(records) != len({hashlib.sha256(raw).hexdigest() for _, _, raw in saved}):
+                return self._safe(error="SAVED_EVIDENCE_INVALID", review=True)
+            if any(metadata["disposition"] != result.status
+                   for _record, metadata, _raw in saved):
+                return self._safe(error="SAVED_EVIDENCE_BINDING_MISMATCH", review=True)
+            return result
+        except ReceiptObserverError as error:
+            return self._safe(error=error.code, review=True)
+
+    def _read(self, wait_seconds: int) -> ObserverResult | None:
+        expected_url = FixedReadonlyTransport.page_url(self._cursor, wait_seconds)
+        read = self._transport.read_page(self._cursor, wait_seconds)
+        self._reads += 1
+        if read.status_code == 408:
+            return self._safe(error="HTTP_408")
+        generation, last_seq, records, gap = _parse_page(
+            read, expected_url=expected_url, since=self._cursor)
+        if generation != self._config.expected_generation:
+            return self._safe(error="GENERATION_CHANGED", review=True)
+        self._cursor = last_seq
+        if gap:
+            export = self._transport.read_export()
+            self._reads += 1
+            exported = _parse_export(
+                export, expected_url=FixedReadonlyTransport.export_url(),
+                expected_generation=self._config.expected_generation)
+            found = self._receipts(exported, generation)
+            if found is not None:
+                return ObserverResult(
+                    found.status, found.observer_ready, found.review_required,
+                    self._reads, self._cursor, True, True,
+                    found.receipt_sha256, found.error_category)
+            return self._safe(error="CURSOR_GAP_UNRESOLVED", gap=True, exported=True)
+        return self._receipts(records, generation)
+
+    def prepare(self) -> ObserverResult:
+        if self._reads:
+            return self._safe(error="PREPARE_ALREADY_CALLED")
+        try:
+            saved = self._store.load()
+            if saved:
+                return self.reconcile_saved()
+            result = self._read(0)
+            if result is not None:
+                return result
+            self._ready = True
+            return ObserverResult(
+                "UNCONFIRMED", True, False, self._reads, self._cursor,
+                False, False, error_category="AWAITING_RECEIPT")
+        except ReceiptObserverError as error:
+            return self._safe(
+                error=error.code,
+                review=error.code.startswith("EVIDENCE_") or error.code.startswith("SAVED_"))
+
+    def observe(self) -> ObserverResult:
+        if not self._ready:
+            return self._safe(error="OBSERVER_NOT_READY")
+        while self._reads < self._config.max_reads:
+            if _utc(self._clock()) >= self._config.deadline:
+                return self._safe(error="DEADLINE_REACHED")
+            try:
+                result = self._read(self._config.wait_seconds)
+            except ReceiptObserverError as error:
+                return self._safe(error=error.code)
+            if result is not None:
+                return result
+        return self._safe(error="BOUNDED_OBSERVATION_COMPLETE")
+
+
+def _seal_production_factory() -> tuple[Callable[..., _Config], Callable[..., ReceiptObserver]]:
+    config_type = _Config
+    observer_type = ReceiptObserver
+    transport_type = FixedReadonlyTransport
+    store_type = PrivateReceiptStore
+    provision_root = _provision_fixed_evidence_root
+    verifier = verify_message
+    origin = OFFICIAL_ORIGIN
+    room = ROOM
+    contest_id = CONTEST_ID
+    request_id = registration.REQUEST_ID
+    participant_did = registration.PARTICIPANT_DID
+    role = ROLE
+    x_account_url = registration.X_ACCOUNT_URL
+    referee_did = REFEREE_DID
+    manifest_commit = MANIFEST_COMMIT
+    manifest_sha256 = MANIFEST_SHA256
+    deadline = DEADLINE
+    evidence_root = handoff.PRODUCTION_ROOT / "receipt-evidence"
+
+    def production_config(
+        *, expected_generation: int, initial_since: int,
+        observation_started_at: datetime,
+    ) -> _Config:
+        return config_type(
+            origin, room, contest_id, request_id, participant_did, role,
+            x_account_url, referee_did, manifest_commit, manifest_sha256,
+            expected_generation, initial_since, observation_started_at, deadline)
+
+    def build(
+        *, expected_generation: int, initial_since: int,
+        observation_started_at: datetime,
+    ) -> ReceiptObserver:
+        """Build the fixed GET-only observer; private values are never projected."""
+        provision_root(evidence_root)
+        return observer_type(
+            production_config(
+                expected_generation=expected_generation, initial_since=initial_since,
+                observation_started_at=observation_started_at),
+            transport_type(), store_type(evidence_root), verifier,
+            lambda: datetime.now(timezone.utc))
+
+    return production_config, build
+
+
+_production_config, build_production_receipt_observer = _seal_production_factory()
+del _seal_production_factory
+del verify_message
+
+
+def _build_receipt_observer_for_test(
+    *, config: _Config, transport: Any, store: PrivateReceiptStore,
+    signature_verifier: Callable[[str, str, str, str, str], None],
+    clock: Callable[[], datetime],
+) -> ReceiptObserver:
+    """Fixture-only seam; production protocol bindings remain sealed."""
+    return ReceiptObserver(config, transport, store, signature_verifier, clock)

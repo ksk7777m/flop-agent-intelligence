@@ -24,6 +24,8 @@ activation remain disabled. Local prestart evidence is kept separate from
 unconfirmed official archive eligibility, and registration absence is only an
 observed-window statement. The live deployment's JSON-body generation is kept
 as unsigned `OBSERVED_DEPLOYMENT_FIELD`, not an OpenAPI or signed-referee claim.
+The [read-only durable receipt observer](docs/SONNET2_REGISTRATION_RECEIPT_CAPTURE.md)
+must be prepared before the human-controlled one-shot registration.
 The current status is
 `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing or external writes.
 
