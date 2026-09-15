@@ -44,6 +44,10 @@ request, participant DID, role, and writer X account match the sealed values.
 Unexpected fields and duplicate JSON keys are rejected. The signed outer record
 must be in the fixed room and verify over the exact
 `<room>|<nonce>|<text>` bytes using the pinned referee DID.
+The production path delegates this decision to the existing sealed registration
+receipt classifier, so observation and the registration handoff share the same
+fixed request binding and cryptographic verifier. Fixture-only tests use a
+separate verifier seam and cannot replace the production classifier.
 
 Only a formally signed `accepted` disposition yields `ACCEPTED`, and only a
 formally signed `rejected` disposition yields `REJECTED`. Every other outcome is

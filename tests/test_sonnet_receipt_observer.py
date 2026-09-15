@@ -462,6 +462,11 @@ class ReceiptObserverTests(unittest.TestCase):
         self.assertEqual(cfg.participant_did, observer.registration.PARTICIPANT_DID)
         self.assertEqual(cfg.origin, observer.OFFICIAL_ORIGIN)
         self.assertEqual(cfg.room, observer.ROOM)
+        closure = inspect.getclosurevars(
+            observer.build_production_receipt_observer).nonlocals
+        self.assertIs(
+            closure["trusted_classifier"],
+            observer.registration_adapters._classify_observed_receipt)
         with mock.patch.object(observer.registration, "REQUEST_ID", "changed"), \
                 mock.patch.object(observer.registration, "PARTICIPANT_DID", "changed"), \
                 mock.patch.object(observer, "OFFICIAL_ORIGIN", "https://invalid.example"), \

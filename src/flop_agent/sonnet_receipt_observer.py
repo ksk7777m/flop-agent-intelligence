@@ -23,8 +23,8 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from . import sonnet_registration as registration
+from . import sonnet_registration_adapters as registration_adapters
 from . import sonnet_registration_handoff as handoff
-from .identity import verify_message
 
 
 OFFICIAL_ORIGIN = "https://technocore.chat"
@@ -194,12 +194,26 @@ def _canonical_record(record: Mapping[str, Any]) -> bytes:
 
 def _classify_receipt(
     record: Mapping[str, Any], *, config: _Config,
-    signature_verifier: Callable[[str, str, str, str, str], None],
+    signature_verifier: Callable[[str, str, str, str, str], None] | None,
+    trusted_classifier: Callable[[Mapping[str, Any]], Mapping[str, str]] | None,
 ) -> tuple[str, bytes]:
     normalized = _normalize_record(record)
     if normalized.get("from") != config.referee_did:
         raise ReceiptObserverError("RECEIPT_REFEREE_MISMATCH")
     nonce = str(normalized["nonce"])
+    if trusted_classifier is not None:
+        candidate = dict(normalized)
+        candidate["nonce"] = nonce
+        try:
+            result = trusted_classifier(candidate)
+        except Exception:
+            raise ReceiptObserverError("RECEIPT_VERIFICATION_FAILED") from None
+        if result.get("status") not in {"ACCEPTED_VERIFIED", "REJECTED_VERIFIED"}:
+            raise ReceiptObserverError("RECEIPT_VERIFICATION_FAILED")
+        return ("ACCEPTED" if result["status"] == "ACCEPTED_VERIFIED" else "REJECTED",
+                _canonical_record(normalized))
+    if signature_verifier is None:
+        raise ReceiptObserverError("RECEIPT_VERIFIER_UNAVAILABLE")
     try:
         signature_verifier(
             normalized["from"], normalized["sig"], config.room, nonce,
@@ -591,18 +605,23 @@ def _provision_fixed_evidence_root(root: Path) -> None:
 class ReceiptObserver:
     """Bounded state machine for one fixed request; all network use is read-only."""
 
-    __slots__ = ("_config", "_transport", "_store", "_verify", "_clock", "_cursor", "_ready", "_reads")
+    __slots__ = ("_config", "_transport", "_store", "_verify",
+                 "_trusted_classifier", "_clock", "_cursor", "_ready", "_reads")
 
     def __init__(
         self, config: _Config, transport: Any, store: PrivateReceiptStore,
-        signature_verifier: Callable[[str, str, str, str, str], None],
+        signature_verifier: Callable[[str, str, str, str, str], None] | None,
         clock: Callable[[], datetime],
+        trusted_classifier: Callable[[Mapping[str, Any]], Mapping[str, str]] | None = None,
     ):
         _validate_config(config)
+        if (signature_verifier is None) == (trusted_classifier is None):
+            raise ReceiptObserverError("RECEIPT_VERIFIER_INVALID")
         self._config = config
         self._transport = transport
         self._store = store
         self._verify = signature_verifier
+        self._trusted_classifier = trusted_classifier
         self._clock = clock
         self._cursor = config.initial_since
         self._ready = False
@@ -638,7 +657,8 @@ class ReceiptObserver:
                 continue
             try:
                 disposition, raw = _classify_receipt(
-                    record, config=self._config, signature_verifier=self._verify)
+                    record, config=self._config, signature_verifier=self._verify,
+                    trusted_classifier=self._trusted_classifier)
             except ReceiptObserverError:
                 continue
             signed_record = _canonical_record({
@@ -770,7 +790,7 @@ def _seal_production_factory() -> tuple[Callable[..., _Config], Callable[..., Re
     transport_type = FixedReadonlyTransport
     store_type = PrivateReceiptStore
     provision_root = _provision_fixed_evidence_root
-    verifier = verify_message
+    trusted_classifier = registration_adapters._classify_observed_receipt
     origin = OFFICIAL_ORIGIN
     room = ROOM
     contest_id = CONTEST_ID
@@ -803,15 +823,14 @@ def _seal_production_factory() -> tuple[Callable[..., _Config], Callable[..., Re
             production_config(
                 expected_generation=expected_generation, initial_since=initial_since,
                 observation_started_at=observation_started_at),
-            transport_type(), store_type(evidence_root), verifier,
-            lambda: datetime.now(timezone.utc))
+            transport_type(), store_type(evidence_root), None,
+            lambda: datetime.now(timezone.utc), trusted_classifier)
 
     return production_config, build
 
 
 _production_config, build_production_receipt_observer = _seal_production_factory()
 del _seal_production_factory
-del verify_message
 
 
 def _build_receipt_observer_for_test(
