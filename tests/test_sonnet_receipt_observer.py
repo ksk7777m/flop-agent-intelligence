@@ -1,9 +1,11 @@
+import dataclasses
 import hashlib
 import inspect
 import json
 import os
 import stat
 import tempfile
+import threading
 import unittest
 from unittest import mock
 from datetime import datetime, timedelta, timezone
@@ -166,6 +168,34 @@ class ReceiptObserverTests(unittest.TestCase):
         self.assertTrue(result.receipt_sha256)
         self.assertEqual(fixture.transport.page_calls, [(10, 0), (10, 10)])
 
+    def test_continuous_session_keeps_polling_after_ready_signal(self):
+        entered_poll = threading.Event()
+        release_poll = threading.Event()
+
+        class BlockingTransport(FakeTransport):
+            def read_page(self, since, wait_seconds):
+                if self.page_calls:
+                    entered_poll.set()
+                    if not release_poll.wait(2):
+                        raise observer.ReceiptObserverError("FIXTURE_TIMEOUT")
+                return super().read_page(since, wait_seconds)
+
+        fixture = self.fixture([])
+        fixture.transport = BlockingTransport([page(10), page(10, receipt())])
+        core = observer._build_receipt_observer_for_test(
+            config=config(), transport=fixture.transport, store=fixture.store,
+            signature_verifier=lambda *_args: None, clock=lambda: NOW)
+        production = observer._ProductionReceiptObserver(core)
+        session = production.start()
+        self.assertTrue(session.wait_until_ready(2))
+        self.assertTrue(entered_poll.wait(2))
+        self.assertIsNone(session.wait_for_result(0))
+        release_poll.set()
+        result = session.wait_for_result(2)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, "ACCEPTED")
+        self.assertEqual(fixture.transport.page_calls, [(10, 0), (10, 10)])
+
     def test_external_runner_can_stop_before_ready(self):
         fixture = self.fixture([page(10, status=408)])
         self.assertFalse(fixture.service.ready)
@@ -188,6 +218,47 @@ class ReceiptObserverTests(unittest.TestCase):
         self.assertEqual(result.status, "UNCONFIRMED")
         self.assertEqual(fixture.transport.page_calls, [(10, 0), (11, 10), (12, 10)])
 
+    def test_same_sequence_is_rejected_without_becoming_a_gap(self):
+        fixture = self.fixture([page(10, message(10))])
+        result = fixture.service.prepare()
+        self.assertEqual(result.status, "UNCONFIRMED")
+        self.assertEqual(result.error_category, "PAGE_SEQUENCE_INVALID")
+        self.assertFalse(result.gap_detected)
+        self.assertEqual(fixture.transport.export_calls, 0)
+
+    def test_restart_uses_durable_cursor_checkpoint_without_guessing(self):
+        fixture = self.fixture([page(10, message(11))])
+        self.assertTrue(fixture.service.prepare().observer_ready)
+        checkpoint = fixture.store.load_checkpoint(
+            generation=1, initial_since=10, observation_started_at=NOW,
+            request_reference_sha256=hashlib.sha256(
+                REQUEST_ID.encode("utf-8")).hexdigest())
+        self.assertIsNotNone(checkpoint)
+        self.assertEqual(checkpoint["cursor"], 11)
+        checkpoint_path = next(fixture.root.glob("*.checkpoint"))
+        self.assertEqual(stat.S_IMODE(checkpoint_path.stat().st_mode), 0o600)
+        restarted_transport = FakeTransport([page(11, receipt(seq=12))])
+        restarted = observer._build_receipt_observer_for_test(
+            config=config(initial_since=10), transport=restarted_transport,
+            store=fixture.store, signature_verifier=lambda *_args: None,
+            clock=lambda: NOW)
+        self.assertEqual(restarted.prepare().status, "ACCEPTED")
+        self.assertEqual(restarted_transport.page_calls, [(11, 0)])
+
+    def test_checkpoint_binding_mismatch_fails_closed_without_network(self):
+        fixture = self.fixture([page(10, message(11))])
+        fixture.service.prepare()
+        restarted_transport = FakeTransport([])
+        restarted = observer._build_receipt_observer_for_test(
+            config=config(expected_generation=2), transport=restarted_transport,
+            store=fixture.store, signature_verifier=lambda *_args: None,
+            clock=lambda: NOW)
+        result = restarted.prepare()
+        self.assertTrue(result.review_required)
+        self.assertEqual(
+            result.error_category, "SAVED_CHECKPOINT_BINDING_MISMATCH")
+        self.assertEqual(restarted_transport.page_calls, [])
+
     def test_cursor_gap_uses_export_and_finds_receipt(self):
         fixture = self.fixture(
             [page(10, message(13))], [export(message(11), message(12), receipt(seq=13))])
@@ -202,6 +273,7 @@ class ReceiptObserverTests(unittest.TestCase):
         result = fixture.service.prepare()
         self.assertEqual(result.status, "UNCONFIRMED")
         self.assertEqual(result.error_category, "CURSOR_GAP_UNRESOLVED")
+        self.assertEqual(list(fixture.root.glob("*.checkpoint")), [])
 
     def test_generation_change_fails_closed_without_export(self):
         fixture = self.fixture([page(10, generation=2)])
@@ -386,21 +458,13 @@ class ReceiptObserverTests(unittest.TestCase):
         os.chmod(orphan, 0o600)
         self.assertEqual(fixture.store.load(), [])
 
-    def test_fixed_evidence_child_provisioning_is_private_and_symlink_safe(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory).resolve()
-            parent = base / "registration"
-            parent.mkdir(mode=0o700)
-            child = parent / "receipt-evidence"
-            observer._provision_fixed_evidence_root(child)
-            self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o700)
-            observer._provision_fixed_evidence_root(child)
-            child.rmdir()
-            target = base / "target"
-            target.mkdir(mode=0o700)
-            child.symlink_to(target, target_is_directory=True)
-            with self.assertRaisesRegex(observer.ReceiptObserverError, "EVIDENCE_ROOT_UNSAFE"):
-                observer._provision_fixed_evidence_root(child)
+    def test_production_factory_requires_preprovisioned_fixed_root(self):
+        source = inspect.getsource(observer.build_production_receipt_observer)
+        self.assertNotIn("mkdir", source)
+        self.assertNotIn("provision", source)
+        closure = inspect.getclosurevars(
+            observer.build_production_receipt_observer).nonlocals
+        self.assertEqual(closure["evidence_root"].name, "receipt-evidence")
 
     def test_tampered_saved_receipt_and_metadata_fail_closed(self):
         fixture = self.fixture([page(10), page(10, receipt())])
@@ -429,6 +493,25 @@ class ReceiptObserverTests(unittest.TestCase):
         self.assertNotIn("A" * 20, rendered)
         self.assertEqual(str(observer.ReceiptObserverError("FIXED_ERROR")), "FIXED_ERROR")
 
+    def test_raw_transport_and_private_config_are_not_repr_or_dataclass_serializable(self):
+        raw = observer.HttpRead(
+            200, "https://untrusted.example/private", "application/json",
+            b'raw-receipt-signature-value', {"Authorization": "secret-token"})
+        rendered = repr(raw)
+        self.assertNotIn("untrusted.example", rendered)
+        self.assertNotIn("raw-receipt", rendered)
+        self.assertNotIn("Authorization", rendered)
+        self.assertNotIn("secret-token", rendered)
+        cfg = config()
+        self.assertEqual(repr(cfg), "<sealed receipt observer config>")
+        self.assertNotIn(REQUEST_ID, repr(cfg))
+        self.assertFalse(dataclasses.is_dataclass(raw))
+        self.assertFalse(dataclasses.is_dataclass(cfg))
+        with self.assertRaises(TypeError):
+            dataclasses.asdict(raw)
+        with self.assertRaises(TypeError):
+            dataclasses.asdict(cfg)
+
     def test_restart_after_deadline_can_verify_saved_receipt(self):
         fixture = self.fixture([page(10), page(10, receipt())])
         fixture.service.prepare()
@@ -450,20 +533,31 @@ class ReceiptObserverTests(unittest.TestCase):
         self.assertNotIn("POST", inspect.getsource(observer.FixedReadonlyTransport))
         self.assertNotIn("identity", inspect.getsource(observer.ReceiptObserver).lower())
         self.assertNotIn("signer", inspect.getsource(observer.ReceiptObserver).lower())
+        production_public = {name for name, _ in inspect.getmembers(
+            observer._ProductionReceiptObserver, predicate=inspect.isfunction)
+            if not name.startswith("_")}
+        self.assertEqual(production_public, {"start", "reconcile_saved"})
+        session_public = {name for name, _ in inspect.getmembers(
+            observer.ReceiptObservationSession, predicate=inspect.isfunction)
+            if not name.startswith("_")}
+        self.assertEqual(
+            session_public, {"wait_until_ready", "wait_for_result"})
 
     def test_production_factory_seals_protocol_and_request_bindings(self):
         signature = inspect.signature(observer.build_production_receipt_observer)
         self.assertEqual(
             tuple(signature.parameters),
             ("expected_generation", "initial_since", "observation_started_at"))
-        cfg = observer._production_config(
+        self.assertFalse(hasattr(observer, "_production_config"))
+        closure = inspect.getclosurevars(
+            observer.build_production_receipt_observer).nonlocals
+        config_factory = closure["production_config"]
+        cfg = config_factory(
             expected_generation=1, initial_since=10, observation_started_at=NOW)
         self.assertEqual(cfg.request_id, observer.registration.REQUEST_ID)
         self.assertEqual(cfg.participant_did, observer.registration.PARTICIPANT_DID)
         self.assertEqual(cfg.origin, observer.OFFICIAL_ORIGIN)
         self.assertEqual(cfg.room, observer.ROOM)
-        closure = inspect.getclosurevars(
-            observer.build_production_receipt_observer).nonlocals
         self.assertIs(
             closure["trusted_classifier"],
             observer.registration_adapters._classify_observed_receipt)
@@ -471,7 +565,7 @@ class ReceiptObserverTests(unittest.TestCase):
                 mock.patch.object(observer.registration, "PARTICIPANT_DID", "changed"), \
                 mock.patch.object(observer, "OFFICIAL_ORIGIN", "https://invalid.example"), \
                 mock.patch.object(observer, "ROOM", "mb-other"):
-            rebound = observer._production_config(
+            rebound = config_factory(
                 expected_generation=1, initial_since=10,
                 observation_started_at=NOW)
             self.assertEqual(rebound.request_id, cfg.request_id)

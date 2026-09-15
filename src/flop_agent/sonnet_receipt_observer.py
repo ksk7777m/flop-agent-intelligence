@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import stat
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -55,6 +56,10 @@ _METADATA_FIELDS = frozenset({
     "room", "generation", "seq", "disposition", "verification",
     "observed_at",
 })
+_CHECKPOINT_FIELDS = frozenset({
+    "schema", "request_reference_sha256", "contest_id", "room",
+    "generation", "cursor", "observation_started_at",
+})
 
 
 class ReceiptObserverError(RuntimeError):
@@ -65,14 +70,35 @@ class ReceiptObserverError(RuntimeError):
         super().__init__(code)
 
 
-@dataclass(frozen=True)
 class HttpRead:
-    status_code: int
-    final_url: str
-    content_type: str
-    body: bytes
-    headers: Mapping[str, str]
-    redirected: bool = False
+    """Immutable transport result whose raw fields never enter repr/asdict."""
+
+    __slots__ = (
+        "status_code", "final_url", "content_type", "body", "headers",
+        "redirected", "_sealed",
+    )
+
+    def __init__(
+        self, status_code: int, final_url: str, content_type: str, body: bytes,
+        headers: Mapping[str, str], redirected: bool = False,
+    ) -> None:
+        object.__setattr__(self, "status_code", status_code)
+        object.__setattr__(self, "final_url", final_url)
+        object.__setattr__(self, "content_type", content_type)
+        object.__setattr__(self, "body", body)
+        object.__setattr__(self, "headers", MappingProxyType(dict(headers)))
+        object.__setattr__(self, "redirected", redirected)
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, _name: str, _value: Any) -> None:
+        raise AttributeError("HttpRead is immutable")
+
+    def __repr__(self) -> str:
+        return (
+            f"HttpRead(status_code={self.status_code!r}, content_type="
+            f"{self.content_type!r}, body=<redacted>, headers=<redacted>, "
+            f"redirected={self.redirected!r})"
+        )
 
 
 @dataclass(frozen=True)
@@ -102,24 +128,36 @@ class ObserverResult:
         })
 
 
-@dataclass(frozen=True)
 class _Config:
-    origin: str
-    room: str
-    contest_id: str
-    request_id: str
-    participant_did: str
-    role: str
-    x_account_url: str
-    referee_did: str
-    manifest_commit: str
-    manifest_sha256: str
-    expected_generation: int
-    initial_since: int
-    observation_started_at: datetime
-    deadline: datetime
-    max_reads: int = MAX_READS
-    wait_seconds: int = LONG_POLL_SECONDS
+    """Immutable private configuration that cannot be dataclass-serialized."""
+
+    __slots__ = (
+        "origin", "room", "contest_id", "request_id", "participant_did",
+        "role", "x_account_url", "referee_did", "manifest_commit",
+        "manifest_sha256", "expected_generation", "initial_since",
+        "observation_started_at", "deadline", "max_reads", "wait_seconds",
+        "_sealed",
+    )
+
+    def __init__(
+        self, origin: str, room: str, contest_id: str, request_id: str,
+        participant_did: str, role: str, x_account_url: str,
+        referee_did: str, manifest_commit: str, manifest_sha256: str,
+        expected_generation: int, initial_since: int,
+        observation_started_at: datetime, deadline: datetime,
+        max_reads: int = MAX_READS, wait_seconds: int = LONG_POLL_SECONDS,
+    ) -> None:
+        values = locals()
+        for name in self.__slots__:
+            if name != "_sealed":
+                object.__setattr__(self, name, values[name])
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, _name: str, _value: Any) -> None:
+        raise AttributeError("receipt observer config is immutable")
+
+    def __repr__(self) -> str:
+        return "<sealed receipt observer config>"
 
 
 def _utc(value: datetime) -> datetime:
@@ -529,6 +567,82 @@ class PrivateReceiptStore:
         marker_digest = hashlib.sha256(raw).hexdigest()
         self._atomic_write(f"{marker_digest}.conflict", raw)
 
+    def save_checkpoint(
+        self, *, generation: int, cursor: int, observation_started_at: datetime,
+        request_reference_sha256: str,
+    ) -> None:
+        """Append a private, non-secret cursor checkpoint before signaling ready."""
+        checkpoint = {
+            "schema": "sonnet-registration-receipt-checkpoint.v1",
+            "request_reference_sha256": request_reference_sha256,
+            "contest_id": CONTEST_ID,
+            "room": ROOM,
+            "generation": generation,
+            "cursor": cursor,
+            "observation_started_at": _utc(observation_started_at).isoformat().replace(
+                "+00:00", "Z"),
+        }
+        raw = json.dumps(
+            checkpoint, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        self._atomic_write(f"{digest}.checkpoint", raw)
+
+    def load_checkpoint(
+        self, *, generation: int, initial_since: int,
+        observation_started_at: datetime, request_reference_sha256: str,
+    ) -> dict[str, Any] | None:
+        """Return the highest durable cursor, rejecting conflicting snapshots."""
+        root_fd = self._check_root()
+        try:
+            names = sorted(name for name in os.listdir(root_fd)
+                           if name.endswith(".checkpoint"))
+        except OSError:
+            raise ReceiptObserverError("EVIDENCE_READ_FAILED") from None
+        by_cursor: dict[int, dict[str, Any]] = {}
+        for name in names:
+            digest = name.removesuffix(".checkpoint")
+            if (len(digest) != 64
+                    or any(character not in "0123456789abcdef" for character in digest)):
+                raise ReceiptObserverError("EVIDENCE_NAME_INVALID")
+            raw = self._read(name, MAX_PAGE_BYTES)
+            if hashlib.sha256(raw).hexdigest() != digest:
+                raise ReceiptObserverError("EVIDENCE_DIGEST_MISMATCH")
+            checkpoint = _json_object(raw, code="EVIDENCE_CHECKPOINT_INVALID")
+            if (set(checkpoint) != _CHECKPOINT_FIELDS
+                    or checkpoint.get("schema")
+                    != "sonnet-registration-receipt-checkpoint.v1"
+                    or checkpoint.get("contest_id") != CONTEST_ID
+                    or checkpoint.get("room") != ROOM
+                    or type(checkpoint.get("generation")) is not int
+                    or not 1 <= checkpoint["generation"] <= SAFE_INTEGER_MAX
+                    or type(checkpoint.get("cursor")) is not int
+                    or not 0 <= checkpoint["cursor"] <= SAFE_INTEGER_MAX
+                    or type(checkpoint.get("request_reference_sha256")) is not str
+                    or len(checkpoint["request_reference_sha256"]) != 64
+                    or type(checkpoint.get("observation_started_at")) is not str):
+                raise ReceiptObserverError("EVIDENCE_CHECKPOINT_INVALID")
+            try:
+                started = datetime.fromisoformat(
+                    checkpoint["observation_started_at"].replace("Z", "+00:00"))
+            except ValueError:
+                raise ReceiptObserverError("EVIDENCE_CHECKPOINT_INVALID") from None
+            _utc(started)
+            prior = by_cursor.get(checkpoint["cursor"])
+            if prior is not None and prior != checkpoint:
+                raise ReceiptObserverError("EVIDENCE_CHECKPOINT_CONFLICT")
+            expected_started = _utc(observation_started_at).isoformat().replace(
+                "+00:00", "Z")
+            if (checkpoint["request_reference_sha256"] != request_reference_sha256
+                    or checkpoint["generation"] != generation
+                    or checkpoint["observation_started_at"] != expected_started
+                    or checkpoint["cursor"] < initial_since):
+                raise ReceiptObserverError("SAVED_CHECKPOINT_BINDING_MISMATCH")
+            by_cursor[checkpoint["cursor"]] = checkpoint
+        if not by_cursor:
+            return None
+        return by_cursor[max(by_cursor)]
+
     def load(self) -> list[tuple[dict[str, Any], dict[str, Any], bytes]]:
         root_fd = self._check_root()
         try:
@@ -569,37 +683,6 @@ class PrivateReceiptStore:
             record = _json_object(raw, code="EVIDENCE_RECORD_INVALID")
             results.append((record, metadata, raw))
         return results
-
-
-def _provision_fixed_evidence_root(root: Path) -> None:
-    """Create only the sealed child below the existing private registration root."""
-    parent = root.parent
-    try:
-        if (not parent.is_absolute() or parent.resolve(strict=True) != parent
-                or root.name != "receipt-evidence"):
-            raise OSError
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-        parent_fd = os.open(parent, flags)
-        parent_info = os.fstat(parent_fd)
-        if (not stat.S_ISDIR(parent_info.st_mode)
-                or stat.S_IMODE(parent_info.st_mode) != 0o700
-                or parent_info.st_uid != os.getuid()):
-            raise OSError
-        try:
-            os.mkdir(root.name, 0o700, dir_fd=parent_fd)
-            os.fsync(parent_fd)
-        except FileExistsError:
-            pass
-        child_info = os.stat(root.name, dir_fd=parent_fd, follow_symlinks=False)
-        if (not stat.S_ISDIR(child_info.st_mode)
-                or stat.S_IMODE(child_info.st_mode) != 0o700
-                or child_info.st_uid != os.getuid()):
-            raise OSError
-        os.close(parent_fd)
-    except OSError:
-        if "parent_fd" in locals():
-            os.close(parent_fd)
-        raise ReceiptObserverError("EVIDENCE_ROOT_UNSAFE") from None
 
 
 class ReceiptObserver:
@@ -734,7 +817,6 @@ class ReceiptObserver:
             read, expected_url=expected_url, since=self._cursor)
         if generation != self._config.expected_generation:
             return self._safe(error="GENERATION_CHANGED", review=True)
-        self._cursor = last_seq
         if gap:
             export = self._transport.read_export()
             self._reads += 1
@@ -743,12 +825,25 @@ class ReceiptObserver:
                 expected_generation=self._config.expected_generation)
             found = self._receipts(exported, generation)
             if found is not None:
+                self._cursor = last_seq
+                self._store.save_checkpoint(
+                    generation=generation, cursor=self._cursor,
+                    observation_started_at=self._config.observation_started_at,
+                    request_reference_sha256=hashlib.sha256(
+                        self._config.request_id.encode("utf-8")).hexdigest())
                 return ObserverResult(
                     found.status, found.observer_ready, found.review_required,
                     self._reads, self._cursor, True, True,
                     found.receipt_sha256, found.error_category)
             return self._safe(error="CURSOR_GAP_UNRESOLVED", gap=True, exported=True)
-        return self._receipts(records, generation)
+        self._cursor = last_seq
+        found = self._receipts(records, generation)
+        self._store.save_checkpoint(
+            generation=generation, cursor=self._cursor,
+            observation_started_at=self._config.observation_started_at,
+            request_reference_sha256=hashlib.sha256(
+                self._config.request_id.encode("utf-8")).hexdigest())
+        return found
 
     def prepare(self) -> ObserverResult:
         if self._reads:
@@ -757,6 +852,15 @@ class ReceiptObserver:
             saved = self._store.load()
             if saved:
                 return self.reconcile_saved()
+            expected_reference = hashlib.sha256(
+                self._config.request_id.encode("utf-8")).hexdigest()
+            checkpoint = self._store.load_checkpoint(
+                generation=self._config.expected_generation,
+                initial_since=self._config.initial_since,
+                observation_started_at=self._config.observation_started_at,
+                request_reference_sha256=expected_reference)
+            if checkpoint is not None:
+                self._cursor = checkpoint["cursor"]
             result = self._read(0)
             if result is not None:
                 return result
@@ -784,12 +888,81 @@ class ReceiptObserver:
         return self._safe(error="BOUNDED_OBSERVATION_COMPLETE")
 
 
-def _seal_production_factory() -> tuple[Callable[..., _Config], Callable[..., ReceiptObserver]]:
+class ReceiptObservationSession:
+    """Background observation that keeps polling after its ready signal."""
+
+    __slots__ = ("_ready", "_done", "_result", "_thread")
+
+    def __init__(self, observer: ReceiptObserver) -> None:
+        self._ready = threading.Event()
+        self._done = threading.Event()
+        self._result: ObserverResult | None = None
+
+        def run() -> None:
+            try:
+                prepared = observer.prepare()
+                if (prepared.observer_ready and prepared.status == "UNCONFIRMED"
+                        and prepared.error_category == "AWAITING_RECEIPT"):
+                    self._ready.set()
+                    self._result = observer.observe()
+                else:
+                    self._result = prepared
+            except Exception:
+                self._result = observer._safe(error="OBSERVER_INTERNAL_FAILURE")
+            finally:
+                observer._store.close()
+                self._done.set()
+
+        self._thread = threading.Thread(
+            target=run, name="sonnet-receipt-observer", daemon=True)
+        self._thread.start()
+
+    def wait_until_ready(self, timeout: float | None = None) -> bool:
+        """Wait for readiness; false also means bounded terminal completion."""
+        if self._ready.wait(timeout):
+            return True
+        return False
+
+    def wait_for_result(self, timeout: float | None = None) -> ObserverResult | None:
+        """Return the terminal three-state result, or None on local wait timeout."""
+        if not self._done.wait(timeout):
+            return None
+        return self._result
+
+    def __repr__(self) -> str:
+        return "<Sonnet receipt observation session>"
+
+
+class _ProductionReceiptObserver:
+    """Production facade that exposes only continuous start and saved recovery."""
+
+    __slots__ = ("_observer", "_started")
+
+    def __init__(self, observer: ReceiptObserver) -> None:
+        self._observer = observer
+        self._started = False
+
+    def start(self) -> ReceiptObservationSession:
+        if self._started:
+            raise ReceiptObserverError("OBSERVER_ALREADY_STARTED")
+        self._started = True
+        return ReceiptObservationSession(self._observer)
+
+    def reconcile_saved(self) -> ObserverResult:
+        if self._started:
+            raise ReceiptObserverError("OBSERVER_ALREADY_STARTED")
+        return self._observer.reconcile_saved()
+
+    def __repr__(self) -> str:
+        return "<fixed Sonnet receipt observer>"
+
+
+def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
     config_type = _Config
     observer_type = ReceiptObserver
+    production_type = _ProductionReceiptObserver
     transport_type = FixedReadonlyTransport
     store_type = PrivateReceiptStore
-    provision_root = _provision_fixed_evidence_root
     trusted_classifier = registration_adapters._classify_observed_receipt
     origin = OFFICIAL_ORIGIN
     room = ROOM
@@ -816,20 +989,20 @@ def _seal_production_factory() -> tuple[Callable[..., _Config], Callable[..., Re
     def build(
         *, expected_generation: int, initial_since: int,
         observation_started_at: datetime,
-    ) -> ReceiptObserver:
+    ) -> _ProductionReceiptObserver:
         """Build the fixed GET-only observer; private values are never projected."""
-        provision_root(evidence_root)
-        return observer_type(
+        core = observer_type(
             production_config(
                 expected_generation=expected_generation, initial_since=initial_since,
                 observation_started_at=observation_started_at),
             transport_type(), store_type(evidence_root), None,
             lambda: datetime.now(timezone.utc), trusted_classifier)
+        return production_type(core)
 
-    return production_config, build
+    return build
 
 
-_production_config, build_production_receipt_observer = _seal_production_factory()
+build_production_receipt_observer = _seal_production_factory()
 del _seal_production_factory
 
 

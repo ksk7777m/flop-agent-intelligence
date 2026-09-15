@@ -1,9 +1,10 @@
 # Sonnet-2 Registration Receipt Capture
 
 This package is a read-only companion to the human-approved Sonnet-2 writer
-registration boundary. It must be prepared before the one-shot registration is
-attempted. It owns no POST method, signing key, identity loader, nonce allocator,
-request-ID generator, approval issuer, or automatic resend path.
+registration boundary. Its continuous session must signal readiness before the
+one-shot registration is attempted. It owns no POST method, signing key, identity
+loader, nonce allocator, request-ID generator, approval issuer, or automatic
+resend path.
 
 ## Fixed boundary
 
@@ -14,13 +15,19 @@ pinned manifest commit and SHA-256. Only the expected observed deployment
 generation, initial high-water cursor, and UTC observation start are supplied by
 the local runner. The evidence root is a sealed `receipt-evidence` child of the
 existing private registration runtime root; callers cannot select a filesystem
-destination, and its absolute path is never projected.
+destination, and its absolute path is never projected. Production construction
+does not create this directory. A separate human-reviewed provisioning step must
+create it with the required owner and `0700` mode before construction can succeed.
 
 `observer_ready` is true only after all sealed configuration and bounded-read
 limits validate, the private store is descriptor-anchored to an owner-controlled
 `0700` directory, and a GET-only read confirms the expected room generation and
 a non-regressing cursor without an unresolved gap. Readiness is status for the
 external human-controlled runner. It grants no registration or write authority.
+The production facade exposes a single continuous `start()` operation. Its
+background observer establishes the baseline, emits readiness, and immediately
+continues bounded polling; it does not expose a production `prepare()`/`observe()`
+pair that could leave a monitoring gap around the human-controlled POST.
 
 ## Polling and recovery
 
@@ -28,6 +35,12 @@ The observer uses the official JSON read view with `since=<last_seq>`, a limit o
 200, and a bounded long poll. The server-assigned sequence must be contiguous and
 strictly newer than the cursor. `first_seq > since + 1` is a gap. The cursor only
 advances after a structurally valid response in the expected generation.
+
+Each validated high-water cursor is appended as a private, digest-named,
+fsynced checkpoint before readiness is exposed. A restart reuses the highest
+checkpoint only when its fixed request reference, generation, and original UTC
+start all match; it never guesses a replacement cursor. Receipt evidence is
+made durable before a cursor covering that receipt is checkpointed.
 
 The raw JSONL export is used only after a gap. It is accepted only from the same
 fixed origin and room, without redirects, within fixed byte/record bounds, and
@@ -63,10 +76,16 @@ file `fsync`, atomic rename, and directory `fsync`. The canonical signed record
 and minimized verification metadata are separate files keyed by a content
 digest. Metadata never contains the signature, receipt body, request payload,
 or private path. A metadata file is the completion marker, so orphan temporary
-or receipt files are not formal evidence. Existing evidence is re-read and its
+or receipt files are not formal evidence. Checkpoints are not receipt evidence
+and cannot create a terminal state. Existing evidence is re-read and its
 digest and signature are verified before reuse.
 
 Restart reconciliation uses the same sealed request ID and never signs, posts,
 allocates a nonce, or creates a replacement request. Saved verified evidence can
 still be checked after the contest deadline. Missing or damaged evidence remains
 `UNCONFIRMED` and is never deleted automatically.
+
+Raw transport bodies, response headers, and private configuration use immutable
+non-dataclass containers with redacted representations. They therefore cannot be
+leaked by ordinary `repr` or dataclass serialization in test failures or debug
+output.
