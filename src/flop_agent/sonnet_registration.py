@@ -22,7 +22,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .did_key import public_key_from_did
-from .identity import sweep_text
+from .message_verification import sweep_text
 
 
 ACTION_CLASS = "SONNET2_WRITER_REGISTRATION"

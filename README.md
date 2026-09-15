@@ -29,9 +29,13 @@ must run continuously before the human-controlled one-shot registration. Its
 production evidence root is an explicit operator-supplied, repository-external
 `0700` directory with a separately provisioned fixed child; `.gitignore` alone
 is not an acceptable storage boundary.
-Receipt observation remains `RECEIPT_CHILD_NOT_PROVISIONED` until that separate
-filesystem step is approved; registration remains
-`REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing or external writes.
+The [foreground production supervisor](docs/SONNET2_PRODUCTION_RECEIPT_SUPERVISOR.md)
+keeps the same GET-only observer session alive for at most 30 minutes after its
+redacted ready signal, with interruptible pacing, hard read bounds, and no
+automatic restart. Its separately provisioned fixed child is available, but
+production launch and registration remain independent human approvals;
+registration remains `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing
+or external writes.
 
 ## Collaboration Readiness V1
 

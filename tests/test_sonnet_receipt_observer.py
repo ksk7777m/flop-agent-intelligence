@@ -186,7 +186,9 @@ class ReceiptObserverTests(unittest.TestCase):
         core = observer._build_receipt_observer_for_test(
             config=config(), transport=fixture.transport, store=fixture.store,
             signature_verifier=lambda *_args: None, clock=lambda: NOW)
-        production = observer._ProductionReceiptObserver(core)
+        production = observer._ProductionReceiptObserver(
+            core, lambda item: observer.ReceiptObservationSession(
+                item, maximum_wall_seconds=30, minimum_poll_seconds=0))
         session = production.start()
         self.assertTrue(session.wait_until_ready(2))
         self.assertTrue(entered_poll.wait(2))
@@ -534,7 +536,10 @@ class ReceiptObserverTests(unittest.TestCase):
         transport_public = {name for name, _ in inspect.getmembers(
             observer.FixedReadonlyTransport, predicate=inspect.isfunction)
             if not name.startswith("_")}
-        self.assertEqual(transport_public, {"page_url", "export_url", "read_page", "read_export"})
+        self.assertEqual(
+            transport_public,
+            {"highwater_url", "page_url", "export_url", "read_highwater",
+             "read_page", "read_export", "close"})
         self.assertNotIn("POST", inspect.getsource(observer.FixedReadonlyTransport))
         self.assertNotIn("identity", inspect.getsource(observer.ReceiptObserver).lower())
         self.assertNotIn("signer", inspect.getsource(observer.ReceiptObserver).lower())
@@ -546,7 +551,9 @@ class ReceiptObserverTests(unittest.TestCase):
             observer.ReceiptObservationSession, predicate=inspect.isfunction)
             if not name.startswith("_")}
         self.assertEqual(
-            session_public, {"wait_until_ready", "wait_for_result"})
+            session_public,
+            {"wait_until_ready", "wait_for_result", "stop", "is_running",
+             "remaining_seconds"})
 
     def test_production_factory_seals_protocol_and_request_bindings(self):
         signature = inspect.signature(observer.build_production_receipt_observer)
@@ -566,7 +573,7 @@ class ReceiptObserverTests(unittest.TestCase):
         self.assertEqual(cfg.room, observer.ROOM)
         self.assertIs(
             closure["trusted_classifier"],
-            observer.registration_adapters._classify_observed_receipt)
+            observer.receipt_verifier._classify_observed_receipt)
         with mock.patch.object(observer.registration, "REQUEST_ID", "changed"), \
                 mock.patch.object(observer.registration, "PARTICIPANT_DID", "changed"), \
                 mock.patch.object(observer, "OFFICIAL_ORIGIN", "https://invalid.example"), \

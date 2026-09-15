@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,7 +27,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from . import sonnet_registration as registration
-from . import sonnet_registration_adapters as registration_adapters
+from . import sonnet_receipt_verifier as receipt_verifier
 
 
 OFFICIAL_ORIGIN = "https://technocore.chat"
@@ -44,6 +45,9 @@ MAX_EXPORT_RECORDS = 50_000
 MAX_READS = 3
 LONG_POLL_SECONDS = 10
 HTTP_TIMEOUT_SECONDS = 20
+SUPERVISOR_MAX_WALL_SECONDS = 30 * 60
+SUPERVISOR_MIN_POLL_SECONDS = 2
+SUPERVISOR_MAX_READS = 902
 SAFE_INTEGER_MAX = 9_007_199_254_740_991
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 RECEIPT_CHILD_BASENAME = "sonnet-registration-receipts"
@@ -210,7 +214,8 @@ def _validate_config(config: _Config) -> None:
             raise ReceiptObserverError("CURSOR_CONFIG_INVALID")
     if config.expected_generation < 1:
         raise ReceiptObserverError("GENERATION_INVALID")
-    if (type(config.max_reads) is not int or not 1 <= config.max_reads <= MAX_READS
+    if (type(config.max_reads) is not int
+            or not 1 <= config.max_reads <= SUPERVISOR_MAX_READS
             or type(config.wait_seconds) is not int
             or not 0 <= config.wait_seconds <= LONG_POLL_SECONDS):
         raise ReceiptObserverError("READ_BOUND_INVALID")
@@ -366,11 +371,20 @@ class _RejectRedirect(urllib.request.HTTPRedirectHandler):
 class FixedReadonlyTransport:
     """GET-only transport with fixed origin/room and no proxy or retry."""
 
-    __slots__ = ("_opener",)
+    __slots__ = ("_opener", "_state_lock", "_active_response", "_closed")
 
     def __init__(self) -> None:
         self._opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), _RejectRedirect())
+        self._state_lock = threading.Lock()
+        self._active_response: Any | None = None
+        self._closed = False
+
+    @staticmethod
+    def highwater_url() -> str:
+        return (
+            "https://technocore.chat/r/mb-sonnet-2-registration?"
+            "format=json&limit=1")
 
     @staticmethod
     def page_url(since: int, wait_seconds: int) -> str:
@@ -385,12 +399,22 @@ class FixedReadonlyTransport:
         return "https://technocore.chat/r/mb-sonnet-2-registration/export"
 
     def _get(self, url: str, maximum: int) -> HttpRead:
+        with self._state_lock:
+            if self._closed:
+                raise ReceiptObserverError("TRANSPORT_CLOSED")
         request = urllib.request.Request(url, method="GET", headers={
             "Accept": "application/json, application/x-ndjson",
             "Accept-Encoding": "identity",
         })
+        response: Any | None = None
         try:
-            with self._opener.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            response = self._opener.open(request, timeout=HTTP_TIMEOUT_SECONDS)
+            with self._state_lock:
+                if self._closed:
+                    response.close()
+                    raise ReceiptObserverError("TRANSPORT_CLOSED")
+                self._active_response = response
+            with response:
                 chunks: list[bytes] = []
                 total = 0
                 while True:
@@ -409,17 +433,38 @@ class FixedReadonlyTransport:
                             "X-Room-Generation", "")}),
                     redirected=response.geturl() != url)
         except urllib.error.HTTPError as error:
-            return HttpRead(int(error.code), url, "", b"", MappingProxyType({}))
+            try:
+                return HttpRead(
+                    int(error.code), url, "", b"", MappingProxyType({}))
+            finally:
+                error.close()
         except ReceiptObserverError:
             raise
         except (OSError, TimeoutError, urllib.error.URLError):
             raise ReceiptObserverError("NETWORK_FAILURE") from None
+        finally:
+            with self._state_lock:
+                if self._active_response is response:
+                    self._active_response = None
+            if response is not None:
+                response.close()
+
+    def read_highwater(self) -> HttpRead:
+        return self._get(self.highwater_url(), MAX_PAGE_BYTES)
 
     def read_page(self, since: int, wait_seconds: int) -> HttpRead:
         return self._get(self.page_url(since, wait_seconds), MAX_PAGE_BYTES)
 
     def read_export(self) -> HttpRead:
         return self._get(self.export_url(), MAX_EXPORT_BYTES)
+
+    def close(self) -> None:
+        with self._state_lock:
+            self._closed = True
+            response = self._active_response
+            self._active_response = None
+        if response is not None:
+            response.close()
 
 
 def _is_within(candidate: Path, boundary: Path) -> bool:
@@ -1158,12 +1203,33 @@ class ReceiptObserver:
 class ReceiptObservationSession:
     """Background observation that keeps polling after its ready signal."""
 
-    __slots__ = ("_ready", "_done", "_result", "_thread")
+    __slots__ = (
+        "_ready", "_done", "_stop", "_result", "_thread", "_observer",
+        "_monotonic", "_wall_deadline", "_waiter",
+    )
 
-    def __init__(self, observer: ReceiptObserver) -> None:
+    def __init__(
+        self, observer: ReceiptObserver, *,
+        monotonic: Callable[[], float] = time.monotonic,
+        maximum_wall_seconds: int = SUPERVISOR_MAX_WALL_SECONDS,
+        minimum_poll_seconds: int = SUPERVISOR_MIN_POLL_SECONDS,
+        waiter: Callable[[threading.Event, float], bool] | None = None,
+    ) -> None:
+        if (type(maximum_wall_seconds) is not int
+                or not HTTP_TIMEOUT_SECONDS < maximum_wall_seconds
+                <= SUPERVISOR_MAX_WALL_SECONDS
+                or type(minimum_poll_seconds) is not int
+                or not 0 <= minimum_poll_seconds
+                <= SUPERVISOR_MIN_POLL_SECONDS):
+            raise ReceiptObserverError("SUPERVISOR_BOUND_INVALID")
         self._ready = threading.Event()
         self._done = threading.Event()
+        self._stop = threading.Event()
         self._result: ObserverResult | None = None
+        self._observer = observer
+        self._monotonic = monotonic
+        self._waiter = waiter or (lambda event, seconds: event.wait(seconds))
+        self._wall_deadline = monotonic() + maximum_wall_seconds
 
         def run() -> None:
             try:
@@ -1171,17 +1237,94 @@ class ReceiptObservationSession:
                 if (prepared.observer_ready and prepared.status == "UNCONFIRMED"
                         and prepared.error_category == "AWAITING_RECEIPT"):
                     self._ready.set()
-                    self._result = observer.observe()
+                    last_request_started = self._monotonic()
+                    while observer._reads < observer._config.max_reads:
+                        if self._stop.is_set():
+                            self._result = observer._safe(
+                                error="SUPERVISOR_STOPPED")
+                            break
+                        remaining = self._wall_deadline - self._monotonic()
+                        if remaining <= 0:
+                            self._result = observer._safe(
+                                error="SUPERVISOR_TIMEOUT")
+                            break
+                        elapsed = self._monotonic() - last_request_started
+                        delay = min(
+                            max(0.0, minimum_poll_seconds - elapsed), remaining)
+                        if delay and self._waiter(self._stop, delay):
+                            self._result = observer._safe(
+                                error="SUPERVISOR_STOPPED")
+                            break
+                        remaining = self._wall_deadline - self._monotonic()
+                        if remaining <= 0:
+                            self._result = observer._safe(
+                                error="SUPERVISOR_TIMEOUT")
+                            break
+                        # Never start a request which can outlive the hard wall.
+                        if remaining <= HTTP_TIMEOUT_SECONDS:
+                            if self._waiter(self._stop, remaining):
+                                self._result = observer._safe(
+                                    error="SUPERVISOR_STOPPED")
+                            else:
+                                self._result = observer._safe(
+                                    error="SUPERVISOR_TIMEOUT")
+                            break
+                        if _utc(observer._clock()) >= observer._config.deadline:
+                            self._result = observer._safe(
+                                error="DEADLINE_REACHED")
+                            break
+                        last_request_started = self._monotonic()
+                        try:
+                            result = observer._read(
+                                observer._config.wait_seconds)
+                        except ReceiptObserverError as error:
+                            review = (
+                                error.code.startswith("EVIDENCE_")
+                                or error.code.startswith("SAVED_")
+                                or error.code in {
+                                    "GENERATION_CHANGED",
+                                    "CURSOR_GAP_UNRESOLVED",
+                                    "CONFLICTING_VALID_RECEIPTS",
+                                })
+                            self._result = observer._safe(
+                                error=("SUPERVISOR_STOPPED"
+                                       if self._stop.is_set()
+                                       else error.code),
+                                review=False if self._stop.is_set() else review)
+                            break
+                        if self._stop.is_set():
+                            self._result = observer._safe(
+                                error="SUPERVISOR_STOPPED")
+                            break
+                        if result is not None:
+                            self._result = result
+                            break
+                    if self._result is None:
+                        self._result = observer._safe(
+                            error="SUPERVISOR_READ_LIMIT")
                 else:
                     self._result = prepared
             except Exception:
-                self._result = observer._safe(error="OBSERVER_INTERNAL_FAILURE")
+                self._result = observer._safe(
+                    error="OBSERVER_INTERNAL_FAILURE", review=True)
             finally:
-                observer._store.close()
-                self._done.set()
+                close_transport = getattr(observer._transport, "close", None)
+                if close_transport is not None:
+                    try:
+                        close_transport()
+                    except Exception:
+                        self._result = observer._safe(
+                            error="TRANSPORT_CLOSE_FAILED", review=True)
+                try:
+                    observer._store.close()
+                except Exception:
+                    self._result = observer._safe(
+                        error="STORE_CLOSE_FAILED", review=True)
+                finally:
+                    self._done.set()
 
         self._thread = threading.Thread(
-            target=run, name="sonnet-receipt-observer", daemon=True)
+            target=run, name="sonnet-receipt-observer", daemon=False)
         self._thread.start()
 
     def wait_until_ready(self, timeout: float | None = None) -> bool:
@@ -1196,6 +1339,22 @@ class ReceiptObservationSession:
             return None
         return self._result
 
+    def stop(self) -> None:
+        """Request one-way shutdown and interrupt an active production read."""
+        self._stop.set()
+        close_transport = getattr(self._observer._transport, "close", None)
+        if close_transport is not None:
+            try:
+                close_transport()
+            except Exception:
+                pass
+
+    def is_running(self) -> bool:
+        return not self._done.is_set()
+
+    def remaining_seconds(self) -> int:
+        return max(0, int(self._wall_deadline - self._monotonic()))
+
     def __repr__(self) -> str:
         return "<Sonnet receipt observation session>"
 
@@ -1203,17 +1362,21 @@ class ReceiptObservationSession:
 class _ProductionReceiptObserver:
     """Production facade that exposes only continuous start and saved recovery."""
 
-    __slots__ = ("_observer", "_started")
+    __slots__ = ("_observer", "_started", "_session_factory")
 
-    def __init__(self, observer: ReceiptObserver) -> None:
+    def __init__(
+        self, observer: ReceiptObserver,
+        session_factory: Callable[[ReceiptObserver], ReceiptObservationSession],
+    ) -> None:
         self._observer = observer
         self._started = False
+        self._session_factory = session_factory
 
     def start(self) -> ReceiptObservationSession:
         if self._started:
             raise ReceiptObserverError("OBSERVER_ALREADY_STARTED")
         self._started = True
-        return ReceiptObservationSession(self._observer)
+        return self._session_factory(self._observer)
 
     def reconcile_saved(self) -> ObserverResult:
         if self._started:
@@ -1228,13 +1391,14 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
     config_type = _Config
     observer_type = ReceiptObserver
     production_type = _ProductionReceiptObserver
+    session_type = ReceiptObservationSession
     transport_type = FixedReadonlyTransport
     store_type = PrivateReceiptStore
     open_receipt_child = _open_receipt_child_core
     known_worktree_roots = _known_worktree_roots
     filesystem_validator = _filesystem_is_local
     repository_root = REPOSITORY_ROOT
-    trusted_classifier = registration_adapters._classify_observed_receipt
+    trusted_classifier = receipt_verifier._classify_observed_receipt
     origin = OFFICIAL_ORIGIN
     room = ROOM
     contest_id = CONTEST_ID
@@ -1246,6 +1410,14 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
     manifest_commit = MANIFEST_COMMIT
     manifest_sha256 = MANIFEST_SHA256
     deadline = DEADLINE
+    maximum_wall_seconds = SUPERVISOR_MAX_WALL_SECONDS
+    minimum_poll_seconds = SUPERVISOR_MIN_POLL_SECONDS
+    maximum_reads = SUPERVISOR_MAX_READS
+
+    def production_session(observer: ReceiptObserver) -> ReceiptObservationSession:
+        return session_type(
+            observer, maximum_wall_seconds=maximum_wall_seconds,
+            minimum_poll_seconds=minimum_poll_seconds)
 
     def production_config(
         *, expected_generation: int, initial_since: int,
@@ -1254,7 +1426,8 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
         return config_type(
             origin, room, contest_id, request_id, participant_did, role,
             x_account_url, referee_did, manifest_commit, manifest_sha256,
-            expected_generation, initial_since, observation_started_at, deadline)
+            expected_generation, initial_since, observation_started_at, deadline,
+            max_reads=maximum_reads)
 
     def build(
         *, private_runtime_root: Path | None, expected_generation: int, initial_since: int,
@@ -1277,7 +1450,7 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
             core = observer_type(
                 config, transport_type(), store, None,
                 lambda: datetime.now(timezone.utc), trusted_classifier)
-            return production_type(core)
+            return production_type(core, production_session)
         except BaseException:
             store.close()
             raise
