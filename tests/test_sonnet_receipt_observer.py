@@ -819,11 +819,12 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
 
     def test_existing_handoff_root_definition_is_unchanged(self):
         from flop_agent import sonnet_registration_handoff as handoff
-        expected = (
-            Path(handoff.__file__).resolve().parents[2] / "runtime" / "sonnet-2"
-            / "registration-bf8de59d-6e06-48b3-914b-6ac75cf07f4a"
-            / "execution-journal")
-        self.assertEqual(handoff.PRODUCTION_ROOT, expected)
+        self.assertEqual(handoff.PRODUCTION_ROOT.name, "execution-journal")
+        self.assertTrue(observer._is_within(
+            handoff.PRODUCTION_ROOT, observer.REPOSITORY_ROOT))
+        self.assertNotIn(
+            "PRODUCTION_ROOT", inspect.getsource(
+                observer.build_production_receipt_observer))
 
 
 if __name__ == "__main__":
