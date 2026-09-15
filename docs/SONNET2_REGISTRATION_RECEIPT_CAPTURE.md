@@ -11,13 +11,20 @@ resend path.
 Production construction seals the official `https://technocore.chat` origin,
 the `mb-sonnet-2-registration` room, contest and writer role, the existing
 registration request and participant identity, the pinned referee DID, and the
-pinned manifest commit and SHA-256. Only the expected observed deployment
-generation, initial high-water cursor, and UTC observation start are supplied by
-the local runner. The evidence root is a sealed `receipt-evidence` child of the
-existing private registration runtime root; callers cannot select a filesystem
-destination, and its absolute path is never projected. Production construction
-does not create this directory. A separate human-reviewed provisioning step must
-create it with the required owner and `0700` mode before construction can succeed.
+pinned manifest commit and SHA-256. The operator must explicitly supply a local
+`Path` for an existing private runtime root in addition to the expected observed
+deployment generation, initial high-water cursor, and UTC observation start.
+There is no environment, repository-runtime, or registration-handoff fallback.
+
+The private runtime root must be outside the repository, `.git`, the current
+worktree, and every linked worktree known from bounded local Git metadata.
+`.gitignore` is not structural separation. The root must already be an
+owner-controlled, non-symlink local directory with exact mode `0700`. The fixed
+`sonnet-registration-receipts` child is exactly one level below that root. The
+factory creates neither root nor child and never changes permissions or owner.
+A separate human-reviewed provisioning stage may create only that fixed child;
+until then construction fails closed as `RECEIPT_CHILD_NOT_PROVISIONED`.
+Absolute paths are private operational metadata and are never projected.
 
 `observer_ready` is true only after all sealed configuration and bounded-read
 limits validate, the private store is descriptor-anchored to an owner-controlled
@@ -89,3 +96,19 @@ Raw transport bodies, response headers, and private configuration use immutable
 non-dataclass containers with redacted representations. They therefore cannot be
 leaked by ordinary `repr` or dataclass serialization in test failures or debug
 output.
+
+## Provisioning boundary
+
+Root validation rejects missing, empty, relative, traversal-bearing,
+repository-contained, symlinked, wrong-owner, wrong-mode, non-directory, and
+known cloud-sync or non-local filesystem candidates with fixed redacted error
+codes. The child is
+opened relative to the validated root descriptor with no symlink following, and
+its owner, mode, inode identity, and filesystem device are rechecked before a
+path-free descriptor capability is transferred to the evidence store.
+
+The legacy repository-local registration runtime remains untouched and may
+continue to serve the separate durable handoff. Receipt observation never falls
+back to it and performs no automatic migration, copy, rename, or deletion.
+Provisioning approval is separate from observer readiness and live registration
+approval.

@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -25,7 +27,6 @@ from typing import Any, Callable, Mapping
 
 from . import sonnet_registration as registration
 from . import sonnet_registration_adapters as registration_adapters
-from . import sonnet_registration_handoff as handoff
 
 
 OFFICIAL_ORIGIN = "https://technocore.chat"
@@ -44,6 +45,8 @@ MAX_READS = 3
 LONG_POLL_SECONDS = 10
 HTTP_TIMEOUT_SECONDS = 20
 SAFE_INTEGER_MAX = 9_007_199_254_740_991
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+RECEIPT_CHILD_BASENAME = "sonnet-registration-receipts"
 
 _RECEIPT_FIELDS = frozenset({
     "type", "contest_id", "request_id", "participant_did", "role",
@@ -68,6 +71,31 @@ class ReceiptObserverError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+class _PrivateDirectoryCapability:
+    """A path-free, single-use descriptor capability with a redacted repr."""
+
+    __slots__ = ("_fd", "_identity")
+
+    def __init__(self, fd: int, identity: tuple[int, int]) -> None:
+        self._fd = fd
+        self._identity = identity
+
+    def take(self) -> tuple[int, tuple[int, int]]:
+        if self._fd is None:
+            raise ReceiptObserverError("RECEIPT_CHILD_UNSAFE")
+        fd = self._fd
+        self._fd = None
+        return fd, self._identity
+
+    def close(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+    def __repr__(self) -> str:
+        return "<private directory capability>"
 
 
 class HttpRead:
@@ -394,12 +422,245 @@ class FixedReadonlyTransport:
         return self._get(self.export_url(), MAX_EXPORT_BYTES)
 
 
+def _is_within(candidate: Path, boundary: Path) -> bool:
+    try:
+        return os.path.commonpath((str(candidate), str(boundary))) == str(boundary)
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_within_by_inode(candidate: Path, boundary: Path) -> bool:
+    """Compare existing ancestry by inode to resist case and separator aliases."""
+    try:
+        boundary_info = boundary.lstat()
+        current = candidate
+        while True:
+            info = current.lstat()
+            if ((info.st_dev, info.st_ino)
+                    == (boundary_info.st_dev, boundary_info.st_ino)):
+                return True
+            if current.parent == current:
+                return False
+            current = current.parent
+    except OSError:
+        return False
+
+
+def _is_known_cloud_sync_path(candidate: Path) -> bool:
+    blocked = {"cloudstorage", "mobile documents", "dropbox", "onedrive",
+               "google drive"}
+    return any(component.casefold() in blocked for component in candidate.parts)
+
+
+def _read_small_file(path: Path, maximum: int = 4096) -> str:
+    fd: int | None = None
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_nlink != 1 or info.st_size > maximum):
+            raise OSError
+        raw = os.read(fd, maximum + 1)
+        if len(raw) > maximum:
+            raise OSError
+        return raw.decode("utf-8")
+    except (OSError, UnicodeError):
+        raise ReceiptObserverError(
+            "PRIVATE_ROOT_REPOSITORY_BOUNDARY_UNAVAILABLE") from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _known_worktree_roots(
+    repository_root: Path,
+    _read: Callable[[Path], str] = _read_small_file,
+) -> tuple[Path, ...]:
+    """Read bounded local Git metadata without invoking Git or exposing paths."""
+    roots = {repository_root}
+    git_directory = repository_root / ".git"
+    if git_directory.is_symlink():
+        raise ReceiptObserverError(
+            "PRIVATE_ROOT_REPOSITORY_BOUNDARY_UNAVAILABLE")
+    if git_directory.is_file():
+        value = _read(git_directory).strip()
+        if not value.startswith("gitdir: "):
+            raise ReceiptObserverError(
+                "PRIVATE_ROOT_REPOSITORY_BOUNDARY_UNAVAILABLE")
+        git_directory = Path(value[8:])
+        if not git_directory.is_absolute():
+            git_directory = (repository_root / git_directory).absolute()
+    try:
+        resolved_git_directory = git_directory.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ReceiptObserverError(
+            "PRIVATE_ROOT_REPOSITORY_BOUNDARY_UNAVAILABLE") from None
+    common = (resolved_git_directory.parents[1]
+              if resolved_git_directory.parent.name == "worktrees"
+              else resolved_git_directory)
+    worktrees = common / "worktrees"
+    if worktrees.exists():
+        if worktrees.is_symlink():
+            raise ReceiptObserverError(
+                "PRIVATE_ROOT_REPOSITORY_BOUNDARY_UNAVAILABLE")
+        try:
+            entries = tuple(worktrees.iterdir())
+        except OSError:
+            raise ReceiptObserverError(
+                "PRIVATE_ROOT_REPOSITORY_BOUNDARY_UNAVAILABLE") from None
+        for entry in entries:
+            if entry.is_symlink() or not entry.is_dir():
+                raise ReceiptObserverError(
+                    "PRIVATE_ROOT_REPOSITORY_BOUNDARY_UNAVAILABLE")
+            gitdir = _read(entry / "gitdir").strip()
+            candidate = Path(gitdir)
+            if not candidate.is_absolute() or candidate.name != ".git":
+                raise ReceiptObserverError(
+                    "PRIVATE_ROOT_REPOSITORY_BOUNDARY_UNAVAILABLE")
+            roots.add(candidate.parent.absolute())
+    return tuple(roots)
+
+
+def _filesystem_is_local(path: Path) -> bool:
+    """Fail closed unless the mounted filesystem is from a local allowlist."""
+    local = {"apfs", "hfs", "hfsplus", "ext4", "xfs", "btrfs", "zfs",
+             "ufs", "overlay", "overlayfs", "tmpfs"}
+    network = {"nfs", "nfs4", "smbfs", "afpfs", "webdav", "cifs",
+               "sshfs", "fuse.sshfs"}
+    try:
+        if sys.platform == "darwin":
+            mounted = subprocess.run(
+                ["/usr/bin/stat", "-f", "%T", str(path)], capture_output=True,
+                text=True, check=True, timeout=2).stdout.strip()
+            lines = subprocess.run(
+                ["/sbin/mount"], capture_output=True, text=True, check=True,
+                timeout=2).stdout.splitlines()
+            matches = [line for line in lines if f" on {mounted} (" in line]
+            if len(matches) != 1:
+                return False
+            kind = matches[0].split("(", 1)[1].split(",", 1)[0].strip().lower()
+        elif sys.platform.startswith("linux"):
+            device = os.stat(path).st_dev
+            identity = f"{os.major(device)}:{os.minor(device)}"
+            raw = Path("/proc/self/mountinfo").read_text(
+                encoding="utf-8", errors="strict")
+            if len(raw.encode("utf-8")) > 1024 * 1024:
+                return False
+            matches = []
+            for line in raw.splitlines():
+                left, marker, right = line.partition(" - ")
+                fields = left.split()
+                if marker and len(fields) >= 5 and fields[2] == identity:
+                    matches.append((len(fields[4]), right.split()[0]))
+            if not matches:
+                return False
+            kind = max(matches)[1].lower()
+        else:
+            return False
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError, IndexError):
+        return False
+    return kind in local and kind not in network
+
+
+def _open_receipt_child_core(
+    private_runtime_root: Path | None, *, repository_roots: tuple[Path, ...],
+    filesystem_validator: Callable[[Path], bool],
+    _within: Callable[[Path, Path], bool] = _is_within,
+    _within_by_inode: Callable[[Path, Path], bool] = _is_within_by_inode,
+    _cloud_sync_path: Callable[[Path], bool] = _is_known_cloud_sync_path,
+    _child_basename: str = RECEIPT_CHILD_BASENAME,
+) -> _PrivateDirectoryCapability:
+    if private_runtime_root is None or private_runtime_root == "":
+        raise ReceiptObserverError("PRIVATE_ROOT_NOT_CONFIGURED")
+    if type(private_runtime_root) is not type(Path()):
+        raise ReceiptObserverError("PRIVATE_ROOT_NOT_CONFIGURED")
+    if not private_runtime_root.is_absolute():
+        raise ReceiptObserverError("PRIVATE_ROOT_NOT_ABSOLUTE")
+    if ".." in private_runtime_root.parts:
+        raise ReceiptObserverError("PRIVATE_ROOT_PATH_TRAVERSAL")
+    lexical_root = private_runtime_root.absolute()
+    if _cloud_sync_path(lexical_root):
+        raise ReceiptObserverError("PRIVATE_ROOT_UNSAFE_LOCATION")
+    if any(_within(lexical_root, boundary.absolute())
+           for boundary in repository_roots):
+        raise ReceiptObserverError("PRIVATE_ROOT_INSIDE_REPOSITORY")
+    current = Path(lexical_root.anchor)
+    try:
+        info = current.lstat()
+        for component in lexical_root.parts[1:]:
+            current = current / component
+            info = current.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                raise ReceiptObserverError("PRIVATE_ROOT_SYMLINK")
+        if not stat.S_ISDIR(info.st_mode):
+            raise ReceiptObserverError("PRIVATE_ROOT_NOT_DIRECTORY")
+        if lexical_root.resolve(strict=True) != lexical_root:
+            raise ReceiptObserverError("PRIVATE_ROOT_SYMLINK")
+        if any(boundary.exists()
+               and _within_by_inode(lexical_root, boundary)
+               for boundary in repository_roots):
+            raise ReceiptObserverError("PRIVATE_ROOT_INSIDE_REPOSITORY")
+    except ReceiptObserverError:
+        raise
+    except FileNotFoundError:
+        raise ReceiptObserverError("PRIVATE_ROOT_NOT_CONFIGURED") from None
+    except (OSError, RuntimeError):
+        raise ReceiptObserverError("PRIVATE_ROOT_SYMLINK") from None
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    root_fd: int | None = None
+    child_fd: int | None = None
+    try:
+        root_fd = os.open(lexical_root, flags)
+        root_info = os.fstat(root_fd)
+        current_info = os.stat(lexical_root, follow_symlinks=False)
+        if not stat.S_ISDIR(root_info.st_mode):
+            raise ReceiptObserverError("PRIVATE_ROOT_NOT_DIRECTORY")
+        if root_info.st_uid != os.getuid():
+            raise ReceiptObserverError("PRIVATE_ROOT_UNSAFE_OWNER")
+        if stat.S_IMODE(root_info.st_mode) != 0o700:
+            raise ReceiptObserverError("PRIVATE_ROOT_UNSAFE_MODE")
+        if ((root_info.st_dev, root_info.st_ino)
+                != (current_info.st_dev, current_info.st_ino)):
+            raise ReceiptObserverError("PRIVATE_ROOT_SYMLINK")
+        if not filesystem_validator(lexical_root):
+            raise ReceiptObserverError("PRIVATE_ROOT_UNSAFE_FILESYSTEM")
+        try:
+            child_fd = os.open(_child_basename, flags, dir_fd=root_fd)
+        except FileNotFoundError:
+            raise ReceiptObserverError("RECEIPT_CHILD_NOT_PROVISIONED") from None
+        child_info = os.fstat(child_fd)
+        child_current = os.stat(
+            _child_basename, dir_fd=root_fd, follow_symlinks=False)
+        if (not stat.S_ISDIR(child_info.st_mode)
+                or stat.S_ISLNK(child_current.st_mode)
+                or child_info.st_uid != os.getuid()
+                or stat.S_IMODE(child_info.st_mode) != 0o700
+                or (child_info.st_dev, child_info.st_ino)
+                != (child_current.st_dev, child_current.st_ino)
+                or child_info.st_dev != root_info.st_dev):
+            raise ReceiptObserverError("RECEIPT_CHILD_UNSAFE")
+        capability = _PrivateDirectoryCapability(
+            child_fd, (child_info.st_dev, child_info.st_ino))
+        child_fd = None
+        return capability
+    except OSError:
+        raise ReceiptObserverError("RECEIPT_CHILD_UNSAFE") from None
+    finally:
+        if child_fd is not None:
+            os.close(child_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+
+
 class PrivateReceiptStore:
     """Descriptor-anchored private evidence store; callers supply an existing root."""
 
     __slots__ = ("_fd", "_identity")
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path | _PrivateDirectoryCapability):
+        if isinstance(root, _PrivateDirectoryCapability):
+            self._fd, self._identity = root.take()
+            return
         try:
             candidate = Path(root)
             if not candidate.is_absolute() or candidate.resolve(strict=True) != candidate:
@@ -963,6 +1224,10 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
     production_type = _ProductionReceiptObserver
     transport_type = FixedReadonlyTransport
     store_type = PrivateReceiptStore
+    open_receipt_child = _open_receipt_child_core
+    known_worktree_roots = _known_worktree_roots
+    filesystem_validator = _filesystem_is_local
+    repository_root = REPOSITORY_ROOT
     trusted_classifier = registration_adapters._classify_observed_receipt
     origin = OFFICIAL_ORIGIN
     room = ROOM
@@ -975,7 +1240,6 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
     manifest_commit = MANIFEST_COMMIT
     manifest_sha256 = MANIFEST_SHA256
     deadline = DEADLINE
-    evidence_root = handoff.PRODUCTION_ROOT / "receipt-evidence"
 
     def production_config(
         *, expected_generation: int, initial_since: int,
@@ -987,15 +1251,24 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
             expected_generation, initial_since, observation_started_at, deadline)
 
     def build(
-        *, expected_generation: int, initial_since: int,
+        *, private_runtime_root: Path | None, expected_generation: int, initial_since: int,
         observation_started_at: datetime,
     ) -> _ProductionReceiptObserver:
         """Build the fixed GET-only observer; private values are never projected."""
+        config = production_config(
+            expected_generation=expected_generation, initial_since=initial_since,
+            observation_started_at=observation_started_at)
+        capability = open_receipt_child(
+            private_runtime_root,
+            repository_roots=known_worktree_roots(repository_root),
+            filesystem_validator=filesystem_validator)
+        try:
+            store = store_type(capability)
+        except Exception:
+            capability.close()
+            raise
         core = observer_type(
-            production_config(
-                expected_generation=expected_generation, initial_since=initial_since,
-                observation_started_at=observation_started_at),
-            transport_type(), store_type(evidence_root), None,
+            config, transport_type(), store, None,
             lambda: datetime.now(timezone.utc), trusted_classifier)
         return production_type(core)
 

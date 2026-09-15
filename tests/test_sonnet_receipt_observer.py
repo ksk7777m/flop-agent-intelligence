@@ -6,6 +6,7 @@ import os
 import stat
 import tempfile
 import threading
+import types
 import unittest
 from unittest import mock
 from datetime import datetime, timedelta, timezone
@@ -462,9 +463,13 @@ class ReceiptObserverTests(unittest.TestCase):
         source = inspect.getsource(observer.build_production_receipt_observer)
         self.assertNotIn("mkdir", source)
         self.assertNotIn("provision", source)
+        self.assertNotIn("chmod", source)
+        self.assertNotIn("chown", source)
         closure = inspect.getclosurevars(
             observer.build_production_receipt_observer).nonlocals
-        self.assertEqual(closure["evidence_root"].name, "receipt-evidence")
+        self.assertNotIn("evidence_root", closure)
+        self.assertEqual(
+            observer.RECEIPT_CHILD_BASENAME, "sonnet-registration-receipts")
 
     def test_tampered_saved_receipt_and_metadata_fail_closed(self):
         fixture = self.fixture([page(10), page(10, receipt())])
@@ -547,7 +552,8 @@ class ReceiptObserverTests(unittest.TestCase):
         signature = inspect.signature(observer.build_production_receipt_observer)
         self.assertEqual(
             tuple(signature.parameters),
-            ("expected_generation", "initial_since", "observation_started_at"))
+            ("private_runtime_root", "expected_generation", "initial_since",
+             "observation_started_at"))
         self.assertFalse(hasattr(observer, "_production_config"))
         closure = inspect.getclosurevars(
             observer.build_production_receipt_observer).nonlocals
@@ -572,6 +578,252 @@ class ReceiptObserverTests(unittest.TestCase):
             self.assertEqual(rebound.participant_did, cfg.participant_did)
             self.assertEqual(rebound.origin, cfg.origin)
             self.assertEqual(rebound.room, cfg.room)
+
+
+class ReceiptPathBoundaryTests(unittest.TestCase):
+    def temporary_root(self, *, child=True, mode=0o700):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        root.chmod(mode)
+        if child:
+            (root / observer.RECEIPT_CHILD_BASENAME).mkdir(mode=0o700)
+        return root
+
+    def open_child(self, root, *, repository_roots=(), filesystem=lambda _path: True):
+        return observer._open_receipt_child_core(
+            root, repository_roots=tuple(repository_roots),
+            filesystem_validator=filesystem)
+
+    def assert_error(self, code, value, **kwargs):
+        with self.assertRaises(observer.ReceiptObserverError) as raised:
+            self.open_child(value, **kwargs)
+        self.assertEqual(raised.exception.code, code)
+        self.assertEqual(str(raised.exception), code)
+
+    def test_missing_empty_relative_and_non_path_roots_fail_closed(self):
+        self.assert_error("PRIVATE_ROOT_NOT_CONFIGURED", None)
+        self.assert_error("PRIVATE_ROOT_NOT_CONFIGURED", "")
+        self.assert_error("PRIVATE_ROOT_NOT_ABSOLUTE", Path("relative"))
+        self.assert_error("PRIVATE_ROOT_NOT_CONFIGURED", "/absolute/string")
+
+    def test_repository_git_current_and_linked_worktrees_are_rejected(self):
+        repository = self.temporary_root()
+        candidates = (
+            repository,
+            repository / "nested",
+            repository / ".git",
+        )
+        for candidate in candidates:
+            with self.subTest(kind=candidate.name):
+                self.assert_error(
+                    "PRIVATE_ROOT_INSIDE_REPOSITORY", candidate,
+                    repository_roots=(repository,))
+        linked = self.temporary_root()
+        self.assert_error(
+            "PRIVATE_ROOT_INSIDE_REPOSITORY", linked,
+            repository_roots=(repository, linked))
+
+    def test_repository_comparison_is_component_aware_not_string_prefix(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve()
+            repository = base / "repo"
+            repository.mkdir(mode=0o700)
+            candidate = base / "repo2"
+            candidate.mkdir(mode=0o700)
+            (candidate / observer.RECEIPT_CHILD_BASENAME).mkdir(mode=0o700)
+            capability = self.open_child(
+                candidate, repository_roots=(repository,))
+            self.assertEqual(repr(capability), "<private directory capability>")
+            capability.close()
+
+    def test_known_cloud_sync_location_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve() / "CloudStorage" / "private"
+            root.mkdir(parents=True, mode=0o700)
+            (root / observer.RECEIPT_CHILD_BASENAME).mkdir(mode=0o700)
+            self.assert_error("PRIVATE_ROOT_UNSAFE_LOCATION", root)
+
+    def test_lexical_traversal_is_rejected_before_normalization(self):
+        root = self.temporary_root()
+        candidate = root / "nested" / ".."
+        self.assertIn("..", candidate.parts)
+        self.assert_error("PRIVATE_ROOT_PATH_TRAVERSAL", candidate)
+
+    def test_root_and_intermediate_symlinks_are_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve()
+            real = base / "real"
+            real.mkdir(mode=0o700)
+            (real / observer.RECEIPT_CHILD_BASENAME).mkdir(mode=0o700)
+            alias = base / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            self.assert_error("PRIVATE_ROOT_SYMLINK", alias)
+            parent = base / "parent"
+            parent.mkdir(mode=0o700)
+            intermediate = parent / "linked"
+            intermediate.symlink_to(real, target_is_directory=True)
+            nested = real / "nested"
+            nested.mkdir(mode=0o700)
+            (nested / observer.RECEIPT_CHILD_BASENAME).mkdir(mode=0o700)
+            self.assert_error("PRIVATE_ROOT_SYMLINK", intermediate / "nested")
+
+    def test_missing_nondirectory_wrong_owner_mode_and_filesystem_are_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve()
+            missing = base / "missing"
+            self.assert_error("PRIVATE_ROOT_NOT_CONFIGURED", missing)
+            self.assertFalse(missing.exists())
+            regular = base / "regular"
+            regular.write_bytes(b"")
+            self.assert_error("PRIVATE_ROOT_NOT_DIRECTORY", regular)
+        wrong_mode = self.temporary_root(mode=0o755)
+        self.assert_error("PRIVATE_ROOT_UNSAFE_MODE", wrong_mode)
+        root = self.temporary_root()
+        with mock.patch.object(observer.os, "getuid", return_value=os.getuid() + 1):
+            self.assert_error("PRIVATE_ROOT_UNSAFE_OWNER", root)
+        self.assert_error(
+            "PRIVATE_ROOT_UNSAFE_FILESYSTEM", root,
+            filesystem=lambda _path: False)
+
+    def test_child_is_fixed_direct_existing_and_never_auto_created(self):
+        root = self.temporary_root(child=False)
+        nested = root / "execution-journal"
+        nested.mkdir(mode=0o700)
+        (nested / observer.RECEIPT_CHILD_BASENAME).mkdir(mode=0o700)
+        before = sorted(path.name for path in root.iterdir())
+        self.assert_error("RECEIPT_CHILD_NOT_PROVISIONED", root)
+        self.assertEqual(before, sorted(path.name for path in root.iterdir()))
+        self.assertFalse((root / observer.RECEIPT_CHILD_BASENAME).exists())
+        signature = inspect.signature(observer.build_production_receipt_observer)
+        self.assertFalse(any("child" in name for name in signature.parameters))
+
+    def test_child_mode_symlink_owner_and_inode_type_are_rejected(self):
+        wrong_mode = self.temporary_root()
+        (wrong_mode / observer.RECEIPT_CHILD_BASENAME).chmod(0o755)
+        self.assert_error("RECEIPT_CHILD_UNSAFE", wrong_mode)
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve()
+            base.chmod(0o700)
+            target = base / "target"
+            target.mkdir(mode=0o700)
+            (base / observer.RECEIPT_CHILD_BASENAME).symlink_to(
+                target, target_is_directory=True)
+            self.assert_error("RECEIPT_CHILD_UNSAFE", base)
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve()
+            base.chmod(0o700)
+            (base / observer.RECEIPT_CHILD_BASENAME).write_bytes(b"")
+            self.assert_error("RECEIPT_CHILD_UNSAFE", base)
+        root = self.temporary_root()
+        real_fstat = observer.os.fstat
+        calls = 0
+
+        def wrong_child_owner(fd):
+            nonlocal calls
+            calls += 1
+            value = real_fstat(fd)
+            if calls == 2:
+                return types.SimpleNamespace(
+                    st_mode=value.st_mode, st_uid=value.st_uid + 1,
+                    st_dev=value.st_dev, st_ino=value.st_ino)
+            return value
+
+        with mock.patch.object(observer.os, "fstat", side_effect=wrong_child_owner):
+            self.assert_error("RECEIPT_CHILD_UNSAFE", root)
+
+    def test_safe_root_yields_path_free_single_use_capability(self):
+        root = self.temporary_root()
+        capability = self.open_child(root)
+        self.assertNotIn(str(root), repr(capability))
+        self.assertFalse(dataclasses.is_dataclass(capability))
+        with self.assertRaises(TypeError):
+            dataclasses.asdict(capability)
+        store = observer.PrivateReceiptStore(capability)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "RECEIPT_CHILD_UNSAFE"):
+            capability.take()
+        store.close()
+
+    def test_production_factory_has_no_legacy_fallback_or_filesystem_mutation(self):
+        signature = inspect.signature(observer.build_production_receipt_observer)
+        parameter = signature.parameters["private_runtime_root"]
+        self.assertIs(parameter.default, inspect.Parameter.empty)
+        closure = inspect.getclosurevars(
+            observer.build_production_receipt_observer).nonlocals
+        self.assertNotIn("evidence_root", closure)
+        self.assertNotIn("handoff", inspect.getsource(observer))
+        with tempfile.TemporaryDirectory() as folder:
+            missing = Path(folder).resolve() / "missing"
+            with mock.patch.object(observer.os, "mkdir") as mkdir, \
+                    mock.patch.object(observer.os, "chmod") as chmod, \
+                    mock.patch.object(observer.os, "chown") as chown:
+                with self.assertRaisesRegex(
+                        observer.ReceiptObserverError,
+                        "PRIVATE_ROOT_NOT_CONFIGURED"):
+                    observer.build_production_receipt_observer(
+                        private_runtime_root=missing, expected_generation=1,
+                        initial_since=10, observation_started_at=NOW)
+                mkdir.assert_not_called()
+                chmod.assert_not_called()
+                chown.assert_not_called()
+            self.assertFalse(missing.exists())
+
+    def test_factory_build_does_not_start_network_or_ready_state(self):
+        root = self.temporary_root()
+        with mock.patch.object(
+                observer.FixedReadonlyTransport, "_get") as network:
+            service = observer.build_production_receipt_observer(
+                private_runtime_root=root, expected_generation=1,
+                initial_since=10, observation_started_at=NOW)
+            network.assert_not_called()
+            self.assertFalse(service._started)
+            self.assertEqual(repr(service), "<fixed Sonnet receipt observer>")
+            service._observer._store.close()
+
+    def test_production_path_policy_is_sealed_against_module_rebinding(self):
+        root = self.temporary_root()
+        actual_repository = observer.REPOSITORY_ROOT
+        with mock.patch.object(observer, "REPOSITORY_ROOT", root), \
+                mock.patch.object(observer, "RECEIPT_CHILD_BASENAME", "attacker"), \
+                mock.patch.object(observer, "_open_receipt_child_core") as rebound:
+            service = observer.build_production_receipt_observer(
+                private_runtime_root=root, expected_generation=1,
+                initial_since=10, observation_started_at=NOW)
+            rebound.assert_not_called()
+            service._observer._store.close()
+        with mock.patch.object(observer, "REPOSITORY_ROOT", root.parent), \
+                mock.patch.object(observer, "_is_within", return_value=False), \
+                self.assertRaisesRegex(
+                    observer.ReceiptObserverError,
+                    "PRIVATE_ROOT_INSIDE_REPOSITORY"):
+            observer.build_production_receipt_observer(
+                private_runtime_root=actual_repository,
+                expected_generation=1, initial_since=10,
+                observation_started_at=NOW)
+
+    def test_errors_and_public_projection_never_include_private_path(self):
+        root = self.temporary_root(child=False)
+        try:
+            self.open_child(root)
+        except observer.ReceiptObserverError as error:
+            rendered = repr(error) + str(error)
+        else:
+            self.fail("missing child unexpectedly accepted")
+        self.assertNotIn(str(root), rendered)
+        result = observer.ObserverResult(
+            "UNCONFIRMED", False, False, 0, 0, False, False,
+            error_category="RECEIPT_CHILD_NOT_PROVISIONED")
+        projection = json.dumps(dict(result.journal_projection()))
+        self.assertNotIn(str(root), projection)
+
+    def test_existing_handoff_root_definition_is_unchanged(self):
+        from flop_agent import sonnet_registration_handoff as handoff
+        expected = (
+            Path(handoff.__file__).resolve().parents[2] / "runtime" / "sonnet-2"
+            / "registration-bf8de59d-6e06-48b3-914b-6ac75cf07f4a"
+            / "execution-journal")
+        self.assertEqual(handoff.PRODUCTION_ROOT, expected)
 
 
 if __name__ == "__main__":

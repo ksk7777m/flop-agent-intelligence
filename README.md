@@ -25,8 +25,12 @@ unconfirmed official archive eligibility, and registration absence is only an
 observed-window statement. The live deployment's JSON-body generation is kept
 as unsigned `OBSERVED_DEPLOYMENT_FIELD`, not an OpenAPI or signed-referee claim.
 The [read-only durable receipt observer](docs/SONNET2_REGISTRATION_RECEIPT_CAPTURE.md)
-must be prepared before the human-controlled one-shot registration.
-The current status is
+must run continuously before the human-controlled one-shot registration. Its
+production evidence root is an explicit operator-supplied, repository-external
+`0700` directory with a separately provisioned fixed child; `.gitignore` alone
+is not an acceptable storage boundary.
+Receipt observation remains `RECEIPT_CHILD_NOT_PROVISIONED` until that separate
+filesystem step is approved; registration remains
 `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing or external writes.
 
 ## Collaboration Readiness V1
