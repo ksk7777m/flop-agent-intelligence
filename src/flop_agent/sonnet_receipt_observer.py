@@ -1306,7 +1306,9 @@ class ReceiptObservationSession:
                     self._result = prepared
             except Exception:
                 self._result = observer._safe(
-                    error="OBSERVER_INTERNAL_FAILURE", review=True)
+                    error=("SUPERVISOR_STOPPED" if self._stop.is_set()
+                           else "OBSERVER_INTERNAL_FAILURE"),
+                    review=not self._stop.is_set())
             finally:
                 close_transport = getattr(observer._transport, "close", None)
                 if close_transport is not None:

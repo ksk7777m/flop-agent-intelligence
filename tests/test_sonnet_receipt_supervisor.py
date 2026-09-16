@@ -238,6 +238,17 @@ class SupervisorTests(unittest.TestCase):
         self.assertIs(
             closure["observer_factory"],
             observer.build_production_receipt_observer)
+        unit = supervisor.build_production_receipt_supervisor(
+            private_runtime_root=Path("/fixture/private"))
+        for field, value in (
+            ("_transport_factory", lambda: object()),
+            ("_observer_factory", lambda **_kwargs: object()),
+            ("_private_runtime_root", Path("/other")),
+            ("_clock", lambda: NOW),
+            ("_monotonic", lambda: 0.0),
+        ):
+            with self.subTest(field=field), self.assertRaises(AttributeError):
+                setattr(unit, field, value)
         source = inspect.getsource(supervisor)
         for forbidden in (
             "sonnet_registration_adapters", "production_identity_signer",
@@ -413,7 +424,8 @@ class SessionLifecycleTests(unittest.TestCase):
         def blocking_read(_wait):
             entered.set()
             released.wait(2)
-            raise observer.ReceiptObserverError("NETWORK_FAILURE")
+            # CPython/macOS may surface a cross-thread response close this way.
+            raise ValueError("fixture closed response")
 
         core._read = blocking_read
         session = observer.ReceiptObservationSession(

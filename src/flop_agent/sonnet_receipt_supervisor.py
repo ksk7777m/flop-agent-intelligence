@@ -154,18 +154,21 @@ class _ProductionSupervisor:
         observer_factory: Callable[..., Any],
         clock: Callable[[], datetime], monotonic: Callable[[], float],
     ) -> None:
-        self._private_runtime_root = private_runtime_root
-        self._transport_factory = transport_factory
-        self._observer_factory = observer_factory
-        self._clock = clock
-        self._monotonic = monotonic
-        self._started = False
+        object.__setattr__(self, "_private_runtime_root", private_runtime_root)
+        object.__setattr__(self, "_transport_factory", transport_factory)
+        object.__setattr__(self, "_observer_factory", observer_factory)
+        object.__setattr__(self, "_clock", clock)
+        object.__setattr__(self, "_monotonic", monotonic)
+        object.__setattr__(self, "_started", False)
+
+    def __setattr__(self, _name: str, _value: Any) -> None:
+        raise AttributeError("production supervisor is immutable")
 
     def start(self) -> SupervisorHandle:
         if self._started:
             raise receipt_observer.ReceiptObserverError(
                 "SUPERVISOR_ALREADY_STARTED")
-        self._started = True
+        object.__setattr__(self, "_started", True)
         started_monotonic = self._monotonic()
         transport = self._transport_factory()
         try:
