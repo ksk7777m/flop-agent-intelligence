@@ -56,6 +56,9 @@ MAX_RETRY_AFTER_SECONDS = 30
 SAFE_INTEGER_MAX = 9_007_199_254_740_991
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 RECEIPT_CHILD_BASENAME = "sonnet-registration-receipts"
+SESSION_LOCK_BASENAME = ".receipt-store.lock"
+NEW_OBSERVATION = "NEW_OBSERVATION"
+RESUMING_OBSERVATION = "RESUMING_OBSERVATION"
 
 _RECEIPT_FIELDS = frozenset({
     "type", "contest_id", "request_id", "participant_did", "role",
@@ -842,9 +845,10 @@ def _open_receipt_child_core(
 class PrivateReceiptStore:
     """Descriptor-anchored private evidence store; callers supply an existing root."""
 
-    __slots__ = ("_fd", "_identity")
+    __slots__ = ("_fd", "_identity", "_session_lock_fd")
 
     def __init__(self, root: Path | _PrivateDirectoryCapability):
+        self._session_lock_fd = None
         if isinstance(root, _PrivateDirectoryCapability):
             self._fd, self._identity = root.take()
             return
@@ -869,9 +873,27 @@ class PrivateReceiptStore:
         self._identity = (info.st_dev, info.st_ino)
 
     def close(self) -> None:
+        failed = False
+        if self._session_lock_fd is not None:
+            descriptor = self._session_lock_fd
+            self._session_lock_fd = None
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                failed = True
+            try:
+                os.close(descriptor)
+            except OSError:
+                failed = True
         if self._fd is not None:
-            os.close(self._fd)
+            descriptor = self._fd
             self._fd = None
+            try:
+                os.close(descriptor)
+            except OSError:
+                failed = True
+        if failed:
+            raise ReceiptObserverError("EVIDENCE_CLOSE_FAILED")
 
     def _check_root(self) -> int:
         if self._fd is None:
@@ -913,24 +935,72 @@ class PrivateReceiptStore:
             raise ReceiptObserverError("EVIDENCE_FILE_UNSAFE")
         return b"".join(chunks)
 
-    def _atomic_write(self, name: str, raw: bytes) -> str:
-        root_fd = self._check_root()
+    def acquire_session_lock(self, *, create: bool) -> None:
+        """Hold the fixed process lock until ``close``; never wait for it."""
+        if self._session_lock_fd is not None:
+            raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE")
+        flags = ((os.O_RDWR | os.O_CREAT) if create else os.O_RDONLY)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor: int | None = None
         try:
-            lock_fd = os.open(
-                ".receipt-store.lock",
-                os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-                0o600, dir_fd=root_fd)
-            lock_info = os.fstat(lock_fd)
-            if (not stat.S_ISREG(lock_info.st_mode)
-                    or stat.S_IMODE(lock_info.st_mode) != 0o600
-                    or lock_info.st_uid != os.getuid() or lock_info.st_nlink != 1):
-                os.close(lock_fd)
+            descriptor = os.open(
+                SESSION_LOCK_BASENAME, flags, 0o600,
+                dir_fd=self._check_root())
+            info = os.fstat(descriptor)
+            current = os.stat(
+                SESSION_LOCK_BASENAME, dir_fd=self._check_root(),
+                follow_symlinks=False)
+            if (not stat.S_ISREG(info.st_mode)
+                    or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_uid != os.getuid() or info.st_nlink != 1
+                    or (info.st_dev, info.st_ino)
+                    != (current.st_dev, current.st_ino)):
                 raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE")
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ReceiptObserverError("EVIDENCE_LOCK_HELD") from None
+            self._session_lock_fd = descriptor
+            descriptor = None
+        except FileNotFoundError:
+            raise ReceiptObserverError("EVIDENCE_LOCK_ABSENT") from None
+        except ReceiptObserverError:
+            raise
         except OSError:
             raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE") from None
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def _atomic_write(self, name: str, raw: bytes) -> str:
+        root_fd = self._check_root()
+        owns_lock = self._session_lock_fd is None
+        lock_fd = self._session_lock_fd
+        if owns_lock:
+            try:
+                lock_fd = os.open(
+                    SESSION_LOCK_BASENAME,
+                    os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                    0o600, dir_fd=root_fd)
+                lock_info = os.fstat(lock_fd)
+                if (not stat.S_ISREG(lock_info.st_mode)
+                        or stat.S_IMODE(lock_info.st_mode) != 0o600
+                        or lock_info.st_uid != os.getuid()
+                        or lock_info.st_nlink != 1):
+                    raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE")
+            except ReceiptObserverError:
+                if lock_fd is not None:
+                    os.close(lock_fd)
+                raise
+            except OSError:
+                if lock_fd is not None:
+                    os.close(lock_fd)
+                raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE") from None
+        assert lock_fd is not None
         temporary = f".tmp-{uuid.uuid4().hex}"
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if owns_lock:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
             try:
                 existing_info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
             except FileNotFoundError:
@@ -969,8 +1039,9 @@ class PrivateReceiptStore:
                 os.unlink(temporary, dir_fd=root_fd)
             except FileNotFoundError:
                 pass
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            os.close(lock_fd)
+            if owns_lock:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
 
     def archive(
         self, raw_record: bytes, *, disposition: str, generation: int, seq: int,
@@ -1021,7 +1092,22 @@ class PrivateReceiptStore:
         self, *, generation: int, cursor: int, observation_started_at: datetime,
         request_reference_sha256: str,
     ) -> None:
-        """Append a private, non-secret cursor checkpoint before signaling ready."""
+        """Create the immutable private lineage checkpoint before readiness."""
+        existing = self.load_restart_checkpoint(
+            request_reference_sha256=request_reference_sha256,
+            allow_terminal_without_checkpoint=True)
+        if existing is not None:
+            expected_started = _utc(observation_started_at).isoformat().replace(
+                "+00:00", "Z")
+            if (existing["generation"] != generation
+                    or existing["observation_started_at"] != expected_started
+                    or cursor < existing["cursor"]):
+                raise ReceiptObserverError(
+                    "CHECKPOINT_RESTART_BINDING_INVALID")
+            # The one existing file is the immutable lineage anchor.  Runtime
+            # progress remains in memory; never create an ambiguous second
+            # checkpoint or rewrite production bytes during a resume.
+            return
         checkpoint = {
             "schema": "sonnet-registration-receipt-checkpoint.v1",
             "request_reference_sha256": request_reference_sha256,
@@ -1093,6 +1179,78 @@ class PrivateReceiptStore:
             return None
         return by_cursor[max(by_cursor)]
 
+    def load_restart_checkpoint(
+        self, *, request_reference_sha256: str,
+        allow_terminal_without_checkpoint: bool = False,
+    ) -> dict[str, Any] | None:
+        """Strictly recover one persistent observation identity, if present."""
+        root_fd = self._check_root()
+        try:
+            names = os.listdir(root_fd)
+        except OSError:
+            raise ReceiptObserverError("EVIDENCE_READ_FAILED") from None
+        checkpoint_names: list[str] = []
+        receipts: set[str] = set()
+        metadata: set[str] = set()
+        for name in names:
+            if name == SESSION_LOCK_BASENAME:
+                continue
+            suffix = next((item for item in (
+                ".checkpoint", ".receipt", ".json", ".conflict")
+                if name.endswith(item)), None)
+            if suffix is None or name.startswith(".tmp-"):
+                raise ReceiptObserverError("EVIDENCE_UNKNOWN_ARTIFACT")
+            digest = name.removesuffix(suffix)
+            if (len(digest) != 64
+                    or any(character not in "0123456789abcdef"
+                           for character in digest)):
+                raise ReceiptObserverError("EVIDENCE_NAME_INVALID")
+            if suffix == ".checkpoint":
+                checkpoint_names.append(name)
+            elif suffix == ".receipt":
+                receipts.add(digest)
+            elif suffix == ".json":
+                metadata.add(digest)
+            else:
+                if not allow_terminal_without_checkpoint:
+                    raise ReceiptObserverError("CONFLICTING_VALID_RECEIPTS")
+        if receipts != metadata:
+            raise ReceiptObserverError("EVIDENCE_ORPHAN_RECEIPT")
+        if len(checkpoint_names) > 1:
+            raise ReceiptObserverError("CHECKPOINT_RESTART_AMBIGUOUS")
+        if not checkpoint_names:
+            if receipts and not allow_terminal_without_checkpoint:
+                raise ReceiptObserverError("CHECKPOINT_RESTART_BINDING_INVALID")
+            return None
+        name = checkpoint_names[0]
+        digest = name.removesuffix(".checkpoint")
+        raw = self._read(name, MAX_PAGE_BYTES)
+        if hashlib.sha256(raw).hexdigest() != digest:
+            raise ReceiptObserverError("EVIDENCE_DIGEST_MISMATCH")
+        checkpoint = _json_object(raw, code="EVIDENCE_CHECKPOINT_INVALID")
+        if (set(checkpoint) != _CHECKPOINT_FIELDS
+                or checkpoint.get("schema")
+                != "sonnet-registration-receipt-checkpoint.v1"
+                or checkpoint.get("contest_id") != CONTEST_ID
+                or checkpoint.get("room") != ROOM
+                or checkpoint.get("request_reference_sha256")
+                != request_reference_sha256
+                or type(checkpoint.get("generation")) is not int
+                or not 1 <= checkpoint["generation"] <= SAFE_INTEGER_MAX
+                or type(checkpoint.get("cursor")) is not int
+                or not 0 <= checkpoint["cursor"] <= SAFE_INTEGER_MAX
+                or type(checkpoint.get("observation_started_at")) is not str):
+            raise ReceiptObserverError(
+                "CHECKPOINT_RESTART_BINDING_INVALID")
+        try:
+            started = datetime.fromisoformat(
+                checkpoint["observation_started_at"].replace("Z", "+00:00"))
+            _utc(started)
+        except (ValueError, ReceiptObserverError):
+            raise ReceiptObserverError(
+                "CHECKPOINT_RESTART_BINDING_INVALID") from None
+        return checkpoint
+
     def load(self) -> list[tuple[dict[str, Any], dict[str, Any], bytes]]:
         root_fd = self._check_root()
         try:
@@ -1133,6 +1291,168 @@ class PrivateReceiptStore:
             record = _json_object(raw, code="EVIDENCE_RECORD_INVALID")
             results.append((record, metadata, raw))
         return results
+
+
+class _ObservationRestartCapability:
+    """Single-use, path-free ownership of one locked observation lineage."""
+
+    __slots__ = ("_store", "_mode", "_checkpoint", "_identity", "_used")
+
+    def __init__(
+        self, store: PrivateReceiptStore, *, mode: str,
+        checkpoint: Mapping[str, Any] | None, identity: datetime,
+    ) -> None:
+        self._store = store
+        self._mode = mode
+        self._checkpoint = (None if checkpoint is None
+                            else MappingProxyType(dict(checkpoint)))
+        self._identity = _utc(identity)
+        self._used = False
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def has_saved_receipt(self) -> bool:
+        if self._used:
+            raise ReceiptObserverError("RESTART_CAPABILITY_CONSUMED")
+        return bool(self._store.load())
+
+    def _consume(
+        self,
+    ) -> tuple[PrivateReceiptStore, str, Mapping[str, Any] | None, datetime]:
+        if self._used:
+            raise ReceiptObserverError("RESTART_CAPABILITY_CONSUMED")
+        self._used = True
+        return self._store, self._mode, self._checkpoint, self._identity
+
+    def close(self) -> None:
+        if not self._used:
+            self._used = True
+            self._store.close()
+
+    def __repr__(self) -> str:
+        return "<opaque Sonnet observation restart capability>"
+
+    def __copy__(self) -> Any:
+        raise TypeError("restart capability is not copyable")
+
+    def __deepcopy__(self, _memo: Any) -> Any:
+        raise TypeError("restart capability is not copyable")
+
+    def __reduce_ex__(self, _protocol: int) -> Any:
+        raise TypeError("restart capability is not serializable")
+
+
+def _prepare_restart_core(
+    private_runtime_root: Path | None, *, clock: Callable[[], datetime],
+    create_lock: bool,
+    _open_child: Callable[..., _PrivateDirectoryCapability] = _open_receipt_child_core,
+    _worktrees: Callable[[Path], tuple[Path, ...]] = _known_worktree_roots,
+    _repository_root: Path = REPOSITORY_ROOT,
+    _filesystem_validator: Callable[[Path], bool] = _filesystem_is_local,
+    _store_type: type[PrivateReceiptStore] = PrivateReceiptStore,
+    _request_id: str = registration.REQUEST_ID,
+) -> _ObservationRestartCapability:
+    capability = _open_child(
+        private_runtime_root,
+        repository_roots=_worktrees(_repository_root),
+        filesystem_validator=_filesystem_validator)
+    store: PrivateReceiptStore | None = None
+    try:
+        store = _store_type(capability)
+        store.acquire_session_lock(create=create_lock)
+        reference = hashlib.sha256(
+            _request_id.encode("utf-8")).hexdigest()
+        checkpoint = store.load_restart_checkpoint(
+            request_reference_sha256=reference)
+        # Validate any terminal evidence before permitting network bootstrap.
+        store.load()
+        if checkpoint is None:
+            return _ObservationRestartCapability(
+                store, mode=NEW_OBSERVATION, checkpoint=None,
+                identity=_utc(clock()))
+        identity = datetime.fromisoformat(
+            checkpoint["observation_started_at"].replace("Z", "+00:00"))
+        return _ObservationRestartCapability(
+            store, mode=RESUMING_OBSERVATION, checkpoint=checkpoint,
+            identity=identity)
+    except BaseException:
+        if store is not None:
+            store.close()
+        else:
+            capability.close()
+        raise
+
+
+def validate_production_restart(
+    *, private_runtime_root: Path | None,
+) -> Mapping[str, str]:
+    """Read-only, network-free validation with a fixed sanitized result."""
+    capability: _ObservationRestartCapability | None = None
+    try:
+        capability = _prepare_restart_core(
+            private_runtime_root, clock=lambda: datetime.now(timezone.utc),
+            create_lock=False)
+        status = ("RESTART_VALIDATION_PASS"
+                  if capability.mode == RESUMING_OBSERVATION
+                  else "NEW_OBSERVATION_AVAILABLE")
+        return MappingProxyType({"status": status, "mode": capability.mode})
+    except ReceiptObserverError as error:
+        if error.code == "EVIDENCE_LOCK_ABSENT":
+            # A never-started child legitimately has no lock artifact.  Reopen
+            # descriptor-relative and accept only a completely empty lineage.
+            store: PrivateReceiptStore | None = None
+            child: _PrivateDirectoryCapability | None = None
+            try:
+                child = _open_receipt_child_core(
+                    private_runtime_root,
+                    repository_roots=_known_worktree_roots(REPOSITORY_ROOT),
+                    filesystem_validator=_filesystem_is_local)
+                store = PrivateReceiptStore(child)
+                reference = hashlib.sha256(
+                    registration.REQUEST_ID.encode("utf-8")).hexdigest()
+                if (store.load_restart_checkpoint(
+                        request_reference_sha256=reference) is None
+                        and not store.load()):
+                    return MappingProxyType({
+                        "status": "NEW_OBSERVATION_AVAILABLE",
+                        "mode": NEW_OBSERVATION,
+                    })
+            except Exception:
+                pass
+            finally:
+                if store is not None:
+                    store.close()
+                elif child is not None:
+                    child.close()
+        status = {
+            "EVIDENCE_LOCK_HELD": "LOCK_HELD",
+            "CHECKPOINT_RESTART_AMBIGUOUS": "CHECKPOINT_RESTART_AMBIGUOUS",
+        }.get(error.code, "CHECKPOINT_RESTART_BINDING_INVALID")
+        return MappingProxyType({"status": status})
+    except Exception:
+        return MappingProxyType({"status": "CHECKPOINT_RESTART_BINDING_INVALID"})
+    finally:
+        if capability is not None:
+            capability.close()
+
+
+def _seal_restart_preparer() -> Callable[..., _ObservationRestartCapability]:
+    core = _prepare_restart_core
+    clock = lambda: datetime.now(timezone.utc)
+
+    def prepare(
+        *, private_runtime_root: Path | None,
+    ) -> _ObservationRestartCapability:
+        return core(private_runtime_root, clock=clock, create_lock=True)
+
+    return prepare
+
+
+prepare_production_observation = _seal_restart_preparer()
+del _seal_restart_preparer
 
 
 class ReceiptObserver:
@@ -1659,11 +1979,7 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
     production_type = _ProductionReceiptObserver
     session_type = ReceiptObservationSession
     transport_type = FixedReadonlyTransport
-    store_type = PrivateReceiptStore
-    open_receipt_child = _open_receipt_child_core
-    known_worktree_roots = _known_worktree_roots
-    filesystem_validator = _filesystem_is_local
-    repository_root = REPOSITORY_ROOT
+    restart_capability_type = _ObservationRestartCapability
     trusted_classifier = receipt_verifier._classify_observed_receipt
     origin = OFFICIAL_ORIGIN
     room = ROOM
@@ -1696,23 +2012,33 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
             max_reads=maximum_reads)
 
     def build(
-        *, private_runtime_root: Path | None, expected_generation: int, initial_since: int,
-        observation_started_at: datetime,
+        *, restart_capability: _ObservationRestartCapability,
+        observed_generation: int | None = None,
+        observed_cursor: int | None = None,
     ) -> _ProductionReceiptObserver:
-        """Build the fixed GET-only observer; private values are never projected."""
-        config = production_config(
-            expected_generation=expected_generation, initial_since=initial_since,
-            observation_started_at=observation_started_at)
-        capability = open_receipt_child(
-            private_runtime_root,
-            repository_roots=known_worktree_roots(repository_root),
-            filesystem_validator=filesystem_validator)
+        """Consume one verified lineage; callers cannot inject saved bindings."""
+        if not isinstance(restart_capability, restart_capability_type):
+            raise ReceiptObserverError("RESTART_CAPABILITY_INVALID")
+        store, mode, checkpoint, identity = restart_capability._consume()
         try:
-            store = store_type(capability)
-        except BaseException:
-            capability.close()
-            raise
-        try:
+            if mode == RESUMING_OBSERVATION:
+                if checkpoint is None or (observed_generation is not None
+                                          or observed_cursor is not None):
+                    raise ReceiptObserverError("RESTART_CAPABILITY_INVALID")
+                generation = checkpoint["generation"]
+                cursor = checkpoint["cursor"]
+            elif mode == NEW_OBSERVATION:
+                if (checkpoint is not None
+                        or type(observed_generation) is not int
+                        or type(observed_cursor) is not int):
+                    raise ReceiptObserverError("RESTART_CAPABILITY_INVALID")
+                generation = observed_generation
+                cursor = observed_cursor
+            else:
+                raise ReceiptObserverError("RESTART_CAPABILITY_INVALID")
+            config = production_config(
+                expected_generation=generation, initial_since=cursor,
+                observation_started_at=identity)
             core = observer_type(
                 config, transport_type(), store, None,
                 lambda: datetime.now(timezone.utc), trusted_classifier)

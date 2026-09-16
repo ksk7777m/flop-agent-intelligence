@@ -559,8 +559,7 @@ class ReceiptObserverTests(unittest.TestCase):
         signature = inspect.signature(observer.build_production_receipt_observer)
         self.assertEqual(
             tuple(signature.parameters),
-            ("private_runtime_root", "expected_generation", "initial_since",
-             "observation_started_at"))
+            ("restart_capability", "observed_generation", "observed_cursor"))
         self.assertFalse(hasattr(observer, "_production_config"))
         closure = inspect.getclosurevars(
             observer.build_production_receipt_observer).nonlocals
@@ -798,7 +797,7 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
         self.assertEqual(closed, opened)
 
     def test_production_factory_has_no_legacy_fallback_or_filesystem_mutation(self):
-        signature = inspect.signature(observer.build_production_receipt_observer)
+        signature = inspect.signature(observer.prepare_production_observation)
         parameter = signature.parameters["private_runtime_root"]
         self.assertIs(parameter.default, inspect.Parameter.empty)
         closure = inspect.getclosurevars(
@@ -813,9 +812,8 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                         observer.ReceiptObserverError,
                         "PRIVATE_ROOT_NOT_CONFIGURED"):
-                    observer.build_production_receipt_observer(
-                        private_runtime_root=missing, expected_generation=1,
-                        initial_since=10, observation_started_at=NOW)
+                    observer.prepare_production_observation(
+                        private_runtime_root=missing)
                 mkdir.assert_not_called()
                 chmod.assert_not_called()
                 chown.assert_not_called()
@@ -825,9 +823,11 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
         root = self.temporary_root()
         with mock.patch.object(
                 observer.FixedReadonlyTransport, "_get") as network:
+            capability = observer._prepare_restart_core(
+                root, clock=lambda: NOW, create_lock=True)
             service = observer.build_production_receipt_observer(
-                private_runtime_root=root, expected_generation=1,
-                initial_since=10, observation_started_at=NOW)
+                restart_capability=capability, observed_generation=1,
+                observed_cursor=10)
             network.assert_not_called()
             self.assertFalse(service._started)
             self.assertEqual(repr(service), "<fixed Sonnet receipt observer>")
@@ -845,11 +845,13 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
         with mock.patch.object(
                 observer.PrivateReceiptStore, "close", autospec=True,
                 side_effect=record_close):
+            capability = observer._prepare_restart_core(
+                root, clock=lambda: NOW, create_lock=True)
             with self.assertRaisesRegex(
                     observer.ReceiptObserverError, "GENERATION_INVALID"):
                 observer.build_production_receipt_observer(
-                    private_runtime_root=root, expected_generation=0,
-                    initial_since=10, observation_started_at=NOW)
+                    restart_capability=capability, observed_generation=0,
+                    observed_cursor=10)
         self.assertEqual(len(closed), 1)
 
     def test_production_path_policy_is_sealed_against_module_rebinding(self):
@@ -858,9 +860,11 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
         with mock.patch.object(observer, "REPOSITORY_ROOT", root), \
                 mock.patch.object(observer, "RECEIPT_CHILD_BASENAME", "attacker"), \
                 mock.patch.object(observer, "_open_receipt_child_core") as rebound:
+            capability = observer.prepare_production_observation(
+                private_runtime_root=root)
             service = observer.build_production_receipt_observer(
-                private_runtime_root=root, expected_generation=1,
-                initial_since=10, observation_started_at=NOW)
+                restart_capability=capability, observed_generation=1,
+                observed_cursor=10)
             rebound.assert_not_called()
             service._observer._store.close()
         with mock.patch.object(observer, "REPOSITORY_ROOT", root.parent), \
@@ -869,9 +873,9 @@ class ReceiptPathBoundaryTests(unittest.TestCase):
                     observer.ReceiptObserverError,
                     "PRIVATE_ROOT_INSIDE_REPOSITORY"):
             observer.build_production_receipt_observer(
-                private_runtime_root=actual_repository,
-                expected_generation=1, initial_since=10,
-                observation_started_at=NOW)
+                restart_capability=observer.prepare_production_observation(
+                    private_runtime_root=actual_repository),
+                observed_generation=1, observed_cursor=10)
 
     def test_errors_and_public_projection_never_include_private_path(self):
         root = self.temporary_root(child=False)

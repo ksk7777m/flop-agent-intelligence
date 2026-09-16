@@ -225,19 +225,21 @@ class _ProductionSupervisor:
 
     __slots__ = (
         "_private_runtime_root", "_transport_factory", "_observer_factory",
-        "_clock", "_monotonic", "_waiter", "_started",
+        "_restart_factory", "_clock", "_monotonic", "_waiter", "_started",
     )
 
     def __init__(
         self, *, private_runtime_root: Path,
         transport_factory: Callable[[], Any],
         observer_factory: Callable[..., Any],
+        restart_factory: Callable[..., Any],
         clock: Callable[[], datetime], monotonic: Callable[[], float],
         waiter: Callable[[threading.Event, float], bool],
     ) -> None:
         object.__setattr__(self, "_private_runtime_root", private_runtime_root)
         object.__setattr__(self, "_transport_factory", transport_factory)
         object.__setattr__(self, "_observer_factory", observer_factory)
+        object.__setattr__(self, "_restart_factory", restart_factory)
         object.__setattr__(self, "_clock", clock)
         object.__setattr__(self, "_monotonic", monotonic)
         object.__setattr__(self, "_waiter", waiter)
@@ -255,6 +257,28 @@ class _ProductionSupervisor:
         object.__setattr__(self, "_started", True)
         started_monotonic = self._monotonic()
         stop_event = stop_requested or threading.Event()
+        restart_capability = self._restart_factory(
+            private_runtime_root=self._private_runtime_root)
+        if stop_event.is_set():
+            restart_capability.close()
+            raise receipt_observer.ReceiptObserverError("SUPERVISOR_STOPPED")
+        remaining = (started_monotonic
+                     + receipt_observer.SUPERVISOR_MAX_WALL_SECONDS
+                     - self._monotonic())
+        if remaining <= receipt_observer.HTTP_TIMEOUT_SECONDS:
+            restart_capability.close()
+            raise receipt_observer._read_error(
+                "READ_NETWORK_TIMEOUT", "BOOTSTRAP")
+        if restart_capability.mode == receipt_observer.RESUMING_OBSERVATION:
+            try:
+                service = self._observer_factory(
+                    restart_capability=restart_capability)
+                return SupervisorHandle(
+                    service.start(), monotonic=self._monotonic,
+                    started_at=started_monotonic)
+            except BaseException:
+                restart_capability.close()
+                raise
         transport = self._transport_factory()
         primary_error: BaseException | None = None
         last_request_started: float | None = None
@@ -338,12 +362,14 @@ class _ProductionSupervisor:
                             "SUPERVISOR_STOPPED") from None
         except BaseException as error:
             primary_error = error
+            restart_capability.close()
             raise
         finally:
             try:
                 transport.close()
             except Exception:
                 if primary_error is None:
+                    restart_capability.close()
                     raise receipt_observer._read_error(
                         "READ_CLEANUP_FAILURE", "CLEANUP") from None
         pacing = max(
@@ -353,17 +379,20 @@ class _ProductionSupervisor:
                      + receipt_observer.SUPERVISOR_MAX_WALL_SECONDS
                      - self._monotonic())
         if remaining <= pacing + receipt_observer.HTTP_TIMEOUT_SECONDS:
+            restart_capability.close()
             raise receipt_observer._read_error(
                 "READ_NETWORK_TIMEOUT", "BOOTSTRAP")
         if pacing and self._waiter(stop_event, pacing):
+            restart_capability.close()
             raise receipt_observer.ReceiptObserverError(
                 "SUPERVISOR_STOPPED") from None
-        started_at = self._clock()
-        service = self._observer_factory(
-            private_runtime_root=self._private_runtime_root,
-            expected_generation=generation,
-            initial_since=cursor,
-            observation_started_at=started_at)
+        try:
+            service = self._observer_factory(
+                restart_capability=restart_capability,
+                observed_generation=generation, observed_cursor=cursor)
+        except BaseException:
+            restart_capability.close()
+            raise
         return SupervisorHandle(
             service.start(), monotonic=self._monotonic,
             started_at=started_monotonic)
@@ -376,6 +405,7 @@ def _seal_production_factory() -> Callable[..., _ProductionSupervisor]:
     supervisor_type = _ProductionSupervisor
     transport_type = receipt_observer.FixedReadonlyTransport
     observer_factory = receipt_observer.build_production_receipt_observer
+    restart_factory = receipt_observer.prepare_production_observation
     utc_clock = lambda: datetime.now(timezone.utc)
     monotonic = time.monotonic
     waiter = lambda event, seconds: event.wait(seconds)
@@ -389,6 +419,7 @@ def _seal_production_factory() -> Callable[..., _ProductionSupervisor]:
             private_runtime_root=private_runtime_root,
             transport_factory=transport_type,
             observer_factory=observer_factory,
+            restart_factory=restart_factory,
             clock=utc_clock, monotonic=monotonic, waiter=waiter)
 
     return build
@@ -400,14 +431,23 @@ del _seal_production_factory
 
 def _build_receipt_supervisor_for_test(
     *, private_runtime_root: Path, transport_factory: Callable[[], Any],
-    observer_factory: Callable[..., Any], clock: Callable[[], datetime],
+    observer_factory: Callable[..., Any],
+    restart_factory: Callable[..., Any] | None = None,
+    clock: Callable[[], datetime],
     monotonic: Callable[[], float] = time.monotonic,
     waiter: Callable[[threading.Event, float], bool] | None = None,
 ) -> _ProductionSupervisor:
     """Fixture-only dependency seam, separate from the production API."""
+    if restart_factory is None:
+        class FixtureCapability:
+            mode = receipt_observer.NEW_OBSERVATION
+            def close(self) -> None:
+                return None
+        restart_factory = lambda **_kwargs: FixtureCapability()
     return _ProductionSupervisor(
         private_runtime_root=private_runtime_root,
         transport_factory=transport_factory,
         observer_factory=observer_factory,
+        restart_factory=restart_factory,
         clock=clock, monotonic=monotonic,
         waiter=waiter or (lambda _event, _seconds: False))

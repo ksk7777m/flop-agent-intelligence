@@ -173,9 +173,9 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(transport.get_calls, 1)
         self.assertEqual(transport.close_calls, 1)
         self.assertEqual(service.start_calls, 1)
-        self.assertEqual(calls[0]["expected_generation"], 1)
-        self.assertEqual(calls[0]["initial_since"], 95927)
-        self.assertEqual(calls[0]["observation_started_at"], NOW)
+        self.assertEqual(calls[0]["observed_generation"], 1)
+        self.assertEqual(calls[0]["observed_cursor"], 95927)
+        self.assertIn("restart_capability", calls[0])
         self.assertEqual(repr(handle), "<Sonnet receipt supervisor handle>")
         self.assertNotIn("fixture", repr(handle))
 
@@ -238,11 +238,15 @@ class SupervisorTests(unittest.TestCase):
         self.assertIs(
             closure["observer_factory"],
             observer.build_production_receipt_observer)
+        self.assertIs(
+            closure["restart_factory"],
+            observer.prepare_production_observation)
         unit = supervisor.build_production_receipt_supervisor(
             private_runtime_root=Path("/fixture/private"))
         for field, value in (
             ("_transport_factory", lambda: object()),
             ("_observer_factory", lambda **_kwargs: object()),
+            ("_restart_factory", lambda **_kwargs: object()),
             ("_private_runtime_root", Path("/other")),
             ("_clock", lambda: NOW),
             ("_monotonic", lambda: 0.0),
