@@ -62,6 +62,9 @@ timeout, connection failure, unexpected GET 408, and 5xx have at most two
 consecutive retries with fixed two-second fallback backoff and a 60-second
 aggregate retry-wait ceiling. Every attempt consumes the read bound and all
 waiting remains inside the 1,800-second wall clock and stop signal.
+Bootstrap attempts and the first observer read share the same interruptible,
+monotonic two-second request-start gate, so bootstrap retry cannot add requests
+on top of the 30-GET/minute pacing boundary.
 
 The OpenAPI 408 describes POST body upload timeout. Registration POST retains
 its outcome-unknown/no-auto-resend behavior. An unexpected GET 408 is merely a

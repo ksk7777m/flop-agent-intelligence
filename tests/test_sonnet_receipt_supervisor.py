@@ -246,6 +246,7 @@ class SupervisorTests(unittest.TestCase):
             ("_private_runtime_root", Path("/other")),
             ("_clock", lambda: NOW),
             ("_monotonic", lambda: 0.0),
+            ("_waiter", lambda _event, _seconds: False),
         ):
             with self.subTest(field=field), self.assertRaises(AttributeError):
                 setattr(unit, field, value)

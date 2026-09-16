@@ -225,7 +225,7 @@ class _ProductionSupervisor:
 
     __slots__ = (
         "_private_runtime_root", "_transport_factory", "_observer_factory",
-        "_clock", "_monotonic", "_started",
+        "_clock", "_monotonic", "_waiter", "_started",
     )
 
     def __init__(
@@ -233,12 +233,14 @@ class _ProductionSupervisor:
         transport_factory: Callable[[], Any],
         observer_factory: Callable[..., Any],
         clock: Callable[[], datetime], monotonic: Callable[[], float],
+        waiter: Callable[[threading.Event, float], bool],
     ) -> None:
         object.__setattr__(self, "_private_runtime_root", private_runtime_root)
         object.__setattr__(self, "_transport_factory", transport_factory)
         object.__setattr__(self, "_observer_factory", observer_factory)
         object.__setattr__(self, "_clock", clock)
         object.__setattr__(self, "_monotonic", monotonic)
+        object.__setattr__(self, "_waiter", waiter)
         object.__setattr__(self, "_started", False)
 
     def __setattr__(self, _name: str, _value: Any) -> None:
@@ -252,16 +254,32 @@ class _ProductionSupervisor:
                 "SUPERVISOR_ALREADY_STARTED")
         object.__setattr__(self, "_started", True)
         started_monotonic = self._monotonic()
+        stop_event = stop_requested or threading.Event()
         transport = self._transport_factory()
         primary_error: BaseException | None = None
+        last_request_started: float | None = None
         try:
             retries = 0
             retry_wait_total = 0
             read_attempts = 0
             while True:
-                if stop_requested is not None and stop_requested.is_set():
+                if stop_event.is_set():
                     raise receipt_observer.ReceiptObserverError(
                         "SUPERVISOR_STOPPED")
+                if last_request_started is not None:
+                    pacing = max(
+                        0.0, receipt_observer.SUPERVISOR_MIN_POLL_SECONDS
+                        - (self._monotonic() - last_request_started))
+                    remaining = (started_monotonic
+                                 + receipt_observer.SUPERVISOR_MAX_WALL_SECONDS
+                                 - self._monotonic())
+                    if (remaining <= pacing
+                            + receipt_observer.HTTP_TIMEOUT_SECONDS):
+                        raise receipt_observer._read_error(
+                            "READ_NETWORK_TIMEOUT", "BOOTSTRAP")
+                    if pacing and self._waiter(stop_event, pacing):
+                        raise receipt_observer.ReceiptObserverError(
+                            "SUPERVISOR_STOPPED")
                 remaining = (started_monotonic
                              + receipt_observer.SUPERVISOR_MAX_WALL_SECONDS
                              - self._monotonic())
@@ -270,6 +288,7 @@ class _ProductionSupervisor:
                         "READ_NETWORK_TIMEOUT", "BOOTSTRAP")
                 try:
                     read_attempts += 1
+                    last_request_started = self._monotonic()
                     read = transport.read_highwater()
                     if read.status_code == 429:
                         values = read.retry_after_values()
@@ -284,7 +303,7 @@ class _ProductionSupervisor:
                     generation, cursor = _parse_highwater(read)
                     break
                 except receipt_observer.ReceiptObserverError as error:
-                    if stop_requested is not None and stop_requested.is_set():
+                    if stop_event.is_set():
                         raise receipt_observer.ReceiptObserverError(
                             "SUPERVISOR_STOPPED") from None
                     error = receipt_observer._read_error(
@@ -314,12 +333,9 @@ class _ProductionSupervisor:
                             read_attempt_count=read_attempts) from None
                     retries += 1
                     retry_wait_total += delay
-                    if stop_requested is not None:
-                        if stop_requested.wait(delay):
-                            raise receipt_observer.ReceiptObserverError(
-                                "SUPERVISOR_STOPPED") from None
-                    else:
-                        time.sleep(delay)
+                    if self._waiter(stop_event, delay):
+                        raise receipt_observer.ReceiptObserverError(
+                            "SUPERVISOR_STOPPED") from None
         except BaseException as error:
             primary_error = error
             raise
@@ -330,6 +346,18 @@ class _ProductionSupervisor:
                 if primary_error is None:
                     raise receipt_observer._read_error(
                         "READ_CLEANUP_FAILURE", "CLEANUP") from None
+        pacing = max(
+            0.0, receipt_observer.SUPERVISOR_MIN_POLL_SECONDS
+            - (self._monotonic() - (last_request_started or started_monotonic)))
+        remaining = (started_monotonic
+                     + receipt_observer.SUPERVISOR_MAX_WALL_SECONDS
+                     - self._monotonic())
+        if remaining <= pacing + receipt_observer.HTTP_TIMEOUT_SECONDS:
+            raise receipt_observer._read_error(
+                "READ_NETWORK_TIMEOUT", "BOOTSTRAP")
+        if pacing and self._waiter(stop_event, pacing):
+            raise receipt_observer.ReceiptObserverError(
+                "SUPERVISOR_STOPPED") from None
         started_at = self._clock()
         service = self._observer_factory(
             private_runtime_root=self._private_runtime_root,
@@ -350,6 +378,7 @@ def _seal_production_factory() -> Callable[..., _ProductionSupervisor]:
     observer_factory = receipt_observer.build_production_receipt_observer
     utc_clock = lambda: datetime.now(timezone.utc)
     monotonic = time.monotonic
+    waiter = lambda event, seconds: event.wait(seconds)
 
     def build(*, private_runtime_root: Path) -> _ProductionSupervisor:
         """Build without opening storage or contacting the network."""
@@ -360,7 +389,7 @@ def _seal_production_factory() -> Callable[..., _ProductionSupervisor]:
             private_runtime_root=private_runtime_root,
             transport_factory=transport_type,
             observer_factory=observer_factory,
-            clock=utc_clock, monotonic=monotonic)
+            clock=utc_clock, monotonic=monotonic, waiter=waiter)
 
     return build
 
@@ -373,10 +402,12 @@ def _build_receipt_supervisor_for_test(
     *, private_runtime_root: Path, transport_factory: Callable[[], Any],
     observer_factory: Callable[..., Any], clock: Callable[[], datetime],
     monotonic: Callable[[], float] = time.monotonic,
+    waiter: Callable[[threading.Event, float], bool] | None = None,
 ) -> _ProductionSupervisor:
     """Fixture-only dependency seam, separate from the production API."""
     return _ProductionSupervisor(
         private_runtime_root=private_runtime_root,
         transport_factory=transport_factory,
         observer_factory=observer_factory,
-        clock=clock, monotonic=monotonic)
+        clock=clock, monotonic=monotonic,
+        waiter=waiter or (lambda _event, _seconds: False))

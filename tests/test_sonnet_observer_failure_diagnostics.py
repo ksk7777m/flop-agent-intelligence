@@ -16,6 +16,7 @@ from flop_agent import sonnet_receipt_supervisor as supervisor
 from tests.test_sonnet_receipt_observer import (
     NOW, BoundaryFixture, config, page, receipt,
 )
+from tests.test_sonnet_receipt_supervisor import highwater
 
 
 class FakeMonotonic:
@@ -292,13 +293,9 @@ class DiagnosticTests(unittest.TestCase):
             private_runtime_root=Path("/fixture/private"),
             transport_factory=lambda: transport,
             observer_factory=lambda **_kwargs: None,
-            clock=lambda: NOW, monotonic=clock)
-        with mock.patch.object(
-                supervisor.time, "sleep",
-                side_effect=lambda seconds: setattr(
-                    clock, "value", clock.value + seconds)):
-            with self.assertRaises(observer.ReceiptObserverError) as caught:
-                unit.start()
+            clock=lambda: NOW, monotonic=clock, waiter=clock.wait)
+        with self.assertRaises(observer.ReceiptObserverError) as caught:
+            unit.start()
         self.assertEqual(caught.exception.category, "READ_HTTP_429")
         self.assertFalse(caught.exception.retryable)
         self.assertEqual(caught.exception.read_attempt_count, 3)
@@ -349,10 +346,43 @@ class DiagnosticTests(unittest.TestCase):
             private_runtime_root=Path("/fixture/private"),
             transport_factory=ThrottledTransport,
             observer_factory=lambda **_kwargs: None,
-            clock=lambda: NOW)
+            clock=lambda: NOW,
+            waiter=lambda event, seconds: event.wait(seconds))
         with self.assertRaisesRegex(
                 observer.ReceiptObserverError, "SUPERVISOR_STOPPED"):
             unit.start(stop_requested=StopDuringWait())
+
+    def test_bootstrap_and_first_observer_read_share_two_second_gate(self):
+        throttled = observer.HttpRead(
+            429, observer.FixedReadonlyTransport.highwater_url(), "", b"",
+            {"Retry-After": "1"})
+        clock = FakeMonotonic()
+        request_times = []
+
+        class Transport:
+            def __init__(self):
+                self.values = [throttled, highwater()]
+            def read_highwater(self):
+                request_times.append(clock())
+                return self.values.pop(0)
+            def close(self):
+                pass
+
+        observer_start_times = []
+
+        def stop_at_factory(**_kwargs):
+            observer_start_times.append(clock())
+            raise RuntimeError("fixture stop")
+
+        unit = supervisor._build_receipt_supervisor_for_test(
+            private_runtime_root=Path("/fixture/private"),
+            transport_factory=Transport,
+            observer_factory=stop_at_factory, clock=lambda: NOW,
+            monotonic=clock, waiter=clock.wait)
+        with self.assertRaisesRegex(RuntimeError, "fixture stop"):
+            unit.start()
+        self.assertEqual(request_times, [0.0, 2.0])
+        self.assertEqual(observer_start_times, [4.0])
 
     def test_runner_output_failure_is_single_and_never_reemitted(self):
         result = observer.ObserverResult(
