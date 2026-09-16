@@ -34,11 +34,27 @@ does not extend it, and the monotonic value is never serialized.
   checkpoint sets fail as `CHECKPOINT_RESTART_AMBIGUOUS`. Neither falls back
   to a fresh scan or a new request identifier.
 
-The existing checkpoint bytes and schema remain unchanged. Once present, the
-checkpoint is an immutable lineage anchor: resumed polling never rewrites it
-or creates a second ambiguous checkpoint. Process-local cursor progress can
-therefore be replayed after a later attended restart; a retention gap still
-requires the existing bounded export proof and otherwise fails closed.
+The existing content-addressed checkpoint bytes and schema remain unchanged
+and form an immutable lineage anchor. Verified progress after that anchor is
+stored separately in one fixed, private cursor-progress file bound to the
+same request reference, contest, room, generation, and observation identity.
+The cursor may only advance. An unchanged cursor causes no rewrite, and a
+regression or binding change fails closed.
+
+Progress replacement writes a private temporary file, fsyncs it, atomically
+renames it over the fixed progress file, verifies the replacement, and fsyncs
+the containing directory. A crash before rename leaves the previous durable
+cursor authoritative; a temporary artifact is never selected as a
+checkpoint. A crash after rename can expose only the old or new monotonic
+cursor. No timestamp or filename ordering is used to select among multiple
+lineage checkpoints.
+
+Verified terminal receipt evidence is archived before cursor progress is
+advanced. For a conflict, the fail-closed marker and both verified receipts
+are durable before the cursor update is attempted. Re-reading after a crash
+is idempotent, cannot create a request identifier, and cannot skip a receipt;
+a retention gap still requires the existing bounded export proof and
+otherwise fails closed.
 
 Deleting the checkpoint would erase continuity and could incorrectly turn a
 resume into a new observation. Operators must not delete, edit, rename, or

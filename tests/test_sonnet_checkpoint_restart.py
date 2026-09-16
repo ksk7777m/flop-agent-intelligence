@@ -6,6 +6,7 @@ import pickle
 import stat
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -74,7 +75,7 @@ class RestartBindingTests(unittest.TestCase):
         finally:
             store.close()
 
-    def test_resume_progress_does_not_rewrite_or_duplicate_lineage_anchor(self):
+    def test_resume_progress_preserves_lineage_and_durably_advances_cursor(self):
         original = self.seed_checkpoint(cursor=10)
         capability = self.prepare(lambda: START_B)
         store, _mode, _checkpoint, identity = capability._consume()
@@ -88,6 +89,98 @@ class RestartBindingTests(unittest.TestCase):
         checkpoints = list(self.child.glob("*.checkpoint"))
         self.assertEqual(len(checkpoints), 1)
         self.assertEqual(checkpoints[0].read_bytes(), original)
+        resumed = self.prepare(lambda: START_B)
+        resumed_store, mode, checkpoint, resumed_identity = resumed._consume()
+        try:
+            self.assertEqual(mode, observer.RESUMING_OBSERVATION)
+            self.assertEqual(checkpoint["cursor"], 11)
+            self.assertEqual(resumed_identity, identity)
+        finally:
+            resumed_store.close()
+
+    def test_cursor_regression_is_rejected_and_same_cursor_is_not_rewritten(self):
+        self.seed_checkpoint(cursor=10)
+        capability = self.prepare(lambda: START_B)
+        store, _mode, _checkpoint, identity = capability._consume()
+        reference = hashlib.sha256(
+            observer.registration.REQUEST_ID.encode()).hexdigest()
+        try:
+            store.save_checkpoint(
+                generation=1, cursor=12, observation_started_at=identity,
+                request_reference_sha256=reference)
+            progress = self.child / observer.CURSOR_PROGRESS_BASENAME
+            original = progress.read_bytes()
+            store.save_checkpoint(
+                generation=1, cursor=12, observation_started_at=identity,
+                request_reference_sha256=reference)
+            self.assertEqual(progress.read_bytes(), original)
+            with self.assertRaisesRegex(
+                    observer.ReceiptObserverError,
+                    "CHECKPOINT_RESTART_BINDING_INVALID"):
+                store.save_checkpoint(
+                    generation=1, cursor=11,
+                    observation_started_at=identity,
+                    request_reference_sha256=reference)
+        finally:
+            store.close()
+
+    def test_progress_without_lineage_and_temporary_artifact_fail_closed(self):
+        progress = {
+            "schema": "sonnet-registration-receipt-progress.v1",
+            "request_reference_sha256": hashlib.sha256(
+                observer.registration.REQUEST_ID.encode()).hexdigest(),
+            "contest_id": observer.CONTEST_ID,
+            "room": observer.ROOM,
+            "generation": 1,
+            "cursor": 11,
+            "observation_started_at": START_A.isoformat().replace(
+                "+00:00", "Z"),
+        }
+        path = self.child / observer.CURSOR_PROGRESS_BASENAME
+        path.write_text(json.dumps(progress, separators=(",", ":")))
+        os.chmod(path, 0o600)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError,
+                "CHECKPOINT_RESTART_BINDING_INVALID"):
+            self.prepare(lambda: START_B)
+        path.unlink()
+        self.seed_checkpoint(cursor=10)
+        temporary = self.child / ".tmp-crash-artifact"
+        temporary.write_bytes(b"not-a-checkpoint")
+        os.chmod(temporary, 0o600)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "EVIDENCE_UNKNOWN_ARTIFACT"):
+            self.prepare(lambda: START_B)
+
+    def test_failed_progress_rename_preserves_last_durable_cursor(self):
+        self.seed_checkpoint(cursor=10)
+        capability = self.prepare(lambda: START_B)
+        store, _mode, _checkpoint, identity = capability._consume()
+        reference = hashlib.sha256(
+            observer.registration.REQUEST_ID.encode()).hexdigest()
+        try:
+            store.save_checkpoint(
+                generation=1, cursor=11, observation_started_at=identity,
+                request_reference_sha256=reference)
+            with mock.patch.object(
+                    observer.os, "rename", side_effect=OSError("fixture")):
+                with self.assertRaisesRegex(
+                        observer.ReceiptObserverError,
+                        "EVIDENCE_WRITE_FAILED"):
+                    store.save_checkpoint(
+                        generation=1, cursor=12,
+                        observation_started_at=identity,
+                        request_reference_sha256=reference)
+        finally:
+            store.close()
+        resumed = self.prepare(lambda: START_B)
+        resumed_store, _mode, checkpoint, _identity = resumed._consume()
+        try:
+            self.assertEqual(checkpoint["cursor"], 11)
+            self.assertFalse(any(
+                path.name.startswith(".tmp-") for path in self.child.iterdir()))
+        finally:
+            resumed_store.close()
 
     def test_resume_factory_uses_saved_generation_cursor_and_identity(self):
         self.seed_checkpoint(generation=2, cursor=14)

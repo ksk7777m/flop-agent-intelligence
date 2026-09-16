@@ -248,6 +248,27 @@ class ReceiptObserverTests(unittest.TestCase):
         self.assertEqual(restarted.prepare().status, "ACCEPTED")
         self.assertEqual(restarted_transport.page_calls, [(11, 0)])
 
+    def test_restart_uses_latest_progress_after_multiple_verified_pages(self):
+        fixture = self.fixture([
+            page(10, message(11)),
+            page(11, message(12)),
+            page(12),
+        ])
+        self.assertTrue(fixture.service.prepare().observer_ready)
+        self.assertEqual(fixture.service.observe().status, "UNCONFIRMED")
+        checkpoint = fixture.store.load_checkpoint(
+            generation=1, initial_since=10, observation_started_at=NOW,
+            request_reference_sha256=hashlib.sha256(
+                REQUEST_ID.encode("utf-8")).hexdigest())
+        self.assertEqual(checkpoint["cursor"], 12)
+        restarted_transport = FakeTransport([page(12, receipt(seq=13))])
+        restarted = observer._build_receipt_observer_for_test(
+            config=config(initial_since=10), transport=restarted_transport,
+            store=fixture.store, signature_verifier=lambda *_args: None,
+            clock=lambda: NOW)
+        self.assertEqual(restarted.prepare().status, "ACCEPTED")
+        self.assertEqual(restarted_transport.page_calls, [(12, 0)])
+
     def test_checkpoint_binding_mismatch_fails_closed_without_network(self):
         fixture = self.fixture([page(10, message(11))])
         fixture.service.prepare()
@@ -276,7 +297,13 @@ class ReceiptObserverTests(unittest.TestCase):
         result = fixture.service.prepare()
         self.assertEqual(result.status, "UNCONFIRMED")
         self.assertEqual(result.error_category, "CURSOR_GAP_UNRESOLVED")
-        self.assertEqual(list(fixture.root.glob("*.checkpoint")), [])
+        checkpoint = fixture.store.load_checkpoint(
+            generation=1, initial_since=10, observation_started_at=NOW,
+            request_reference_sha256=hashlib.sha256(
+                REQUEST_ID.encode("utf-8")).hexdigest())
+        self.assertEqual(checkpoint["cursor"], 10)
+        self.assertFalse(
+            (fixture.root / observer.CURSOR_PROGRESS_BASENAME).exists())
 
     def test_generation_change_fails_closed_without_export(self):
         fixture = self.fixture([page(10, generation=2)])
@@ -401,6 +428,138 @@ class ReceiptObserverTests(unittest.TestCase):
             signature_verifier=lambda *_args: None, clock=lambda: NOW)
         self.assertEqual(
             restarted.prepare().error_category, "CONFLICTING_VALID_RECEIPTS")
+
+    def test_receipt_and_conflict_evidence_precede_cursor_progress(self):
+        original_archive = observer.PrivateReceiptStore.archive
+        original_marker = observer.PrivateReceiptStore.mark_conflict
+        original_checkpoint = observer.PrivateReceiptStore.save_checkpoint
+
+        def run(records):
+            events = []
+            def archive(store, *args, **kwargs):
+                events.append("receipt")
+                return original_archive(store, *args, **kwargs)
+            def marker(store, *args, **kwargs):
+                events.append("conflict")
+                return original_marker(store, *args, **kwargs)
+            def checkpoint(store, *args, **kwargs):
+                events.append("cursor")
+                return original_checkpoint(store, *args, **kwargs)
+            fixture = self.fixture([page(10), page(10, *records)])
+            fixture.service.prepare()
+            events.clear()
+            with mock.patch.object(
+                    observer.PrivateReceiptStore, "archive", new=archive), \
+                 mock.patch.object(
+                    observer.PrivateReceiptStore, "mark_conflict", new=marker), \
+                 mock.patch.object(
+                    observer.PrivateReceiptStore, "save_checkpoint",
+                    new=checkpoint):
+                fixture.service.observe()
+            return events
+
+        accepted = run([receipt()])
+        self.assertEqual(accepted[-2:], ["receipt", "cursor"])
+        conflict = run([receipt(), receipt("rejected", seq=12)])
+        self.assertEqual(conflict.count("receipt"), 2)
+        self.assertIn("conflict", conflict)
+        self.assertEqual(conflict[-1], "cursor")
+        final_cursor = len(conflict) - 1
+        self.assertLess(conflict.index("conflict"), final_cursor)
+        self.assertTrue(all(
+            conflict.index(item) < final_cursor
+            for item in {"receipt", "conflict"}))
+
+    def test_crash_after_receipt_before_cursor_reconciles_without_network(self):
+        fixture = self.fixture([page(10), page(10, receipt())])
+        fixture.service.prepare()
+        original_checkpoint = observer.PrivateReceiptStore.save_checkpoint
+
+        def fail_progress(store, *args, **kwargs):
+            if kwargs["cursor"] > 10:
+                raise observer.ReceiptObserverError("FIXTURE_CRASH")
+            return original_checkpoint(store, *args, **kwargs)
+
+        with mock.patch.object(
+                observer.PrivateReceiptStore, "save_checkpoint",
+                new=fail_progress):
+            result = fixture.service.observe()
+        self.assertEqual(result.error_category, "READ_CHECKPOINT_FAILURE")
+        self.assertEqual(len(list(fixture.root.glob("*.receipt"))), 1)
+        restarted_transport = FakeTransport([])
+        restarted = observer._build_receipt_observer_for_test(
+            config=config(), transport=restarted_transport,
+            store=fixture.store, signature_verifier=lambda *_args: None,
+            clock=lambda: NOW)
+        self.assertEqual(restarted.prepare().status, "ACCEPTED")
+        self.assertEqual(restarted_transport.page_calls, [])
+
+    def test_partial_conflict_replays_old_cursor_until_both_receipts_are_durable(self):
+        records = [receipt(), receipt("rejected", seq=12)]
+        fixture = self.fixture([page(10), page(10, *records)])
+        fixture.service.prepare()
+        original_archive = observer.PrivateReceiptStore.archive
+        calls = 0
+
+        def fail_second(store, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise observer.ReceiptObserverError("FIXTURE_CRASH")
+            return original_archive(store, *args, **kwargs)
+
+        with mock.patch.object(
+                observer.PrivateReceiptStore, "archive", new=fail_second):
+            result = fixture.service.observe()
+        self.assertEqual(result.status, "UNCONFIRMED")
+        self.assertEqual(len(list(fixture.root.glob("*.receipt"))), 1)
+        self.assertEqual(len(list(fixture.root.glob("*.conflict"))), 1)
+
+        restarted_transport = FakeTransport([page(10, *records)])
+        restarted = observer._build_receipt_observer_for_test(
+            config=config(), transport=restarted_transport,
+            store=fixture.store, signature_verifier=lambda *_args: None,
+            clock=lambda: NOW)
+        replayed = restarted.prepare()
+        self.assertTrue(replayed.review_required)
+        self.assertEqual(
+            replayed.error_category, "CONFLICTING_VALID_RECEIPTS")
+        self.assertEqual(restarted_transport.page_calls, [(10, 0)])
+        self.assertEqual(len(list(fixture.root.glob("*.receipt"))), 2)
+        checkpoint = fixture.store.load_checkpoint(
+            generation=1, initial_since=10, observation_started_at=NOW,
+            request_reference_sha256=hashlib.sha256(
+                REQUEST_ID.encode("utf-8")).hexdigest())
+        self.assertEqual(checkpoint["cursor"], 12)
+
+    def test_partial_receipt_pair_replays_old_cursor_and_completes_idempotently(self):
+        fixture = self.fixture([page(10), page(10, receipt())])
+        fixture.service.prepare()
+        original_write = observer.PrivateReceiptStore._atomic_write
+
+        def fail_metadata(store, name, raw):
+            if name.endswith(".json"):
+                raise observer.ReceiptObserverError("FIXTURE_CRASH")
+            return original_write(store, name, raw)
+
+        with mock.patch.object(
+                observer.PrivateReceiptStore, "_atomic_write",
+                new=fail_metadata):
+            result = fixture.service.observe()
+        self.assertEqual(result.status, "UNCONFIRMED")
+        self.assertEqual(len(list(fixture.root.glob("*.receipt"))), 1)
+        self.assertEqual(len(list(fixture.root.glob("*.json"))), 0)
+
+        restarted_transport = FakeTransport([page(10, receipt())])
+        restarted = observer._build_receipt_observer_for_test(
+            config=config(), transport=restarted_transport,
+            store=fixture.store, signature_verifier=lambda *_args: None,
+            clock=lambda: NOW)
+        replayed = restarted.prepare()
+        self.assertEqual(replayed.status, "ACCEPTED")
+        self.assertEqual(restarted_transport.page_calls, [(10, 0)])
+        self.assertEqual(len(list(fixture.root.glob("*.receipt"))), 1)
+        self.assertEqual(len(list(fixture.root.glob("*.json"))), 1)
 
     def test_only_formal_accept_and_reject_become_terminal(self):
         for status, expected in (("accepted", "ACCEPTED"), ("rejected", "REJECTED")):

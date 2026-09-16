@@ -57,6 +57,7 @@ SAFE_INTEGER_MAX = 9_007_199_254_740_991
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 RECEIPT_CHILD_BASENAME = "sonnet-registration-receipts"
 SESSION_LOCK_BASENAME = ".receipt-store.lock"
+CURSOR_PROGRESS_BASENAME = ".receipt-cursor.progress"
 NEW_OBSERVATION = "NEW_OBSERVATION"
 RESUMING_OBSERVATION = "RESUMING_OBSERVATION"
 
@@ -75,6 +76,7 @@ _CHECKPOINT_FIELDS = frozenset({
     "schema", "request_reference_sha256", "contest_id", "room",
     "generation", "cursor", "observation_started_at",
 })
+_PROGRESS_FIELDS = _CHECKPOINT_FIELDS
 
 
 FAILURE_CATEGORIES = frozenset({
@@ -1043,6 +1045,89 @@ class PrivateReceiptStore:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
                 os.close(lock_fd)
 
+    def _atomic_replace(self, name: str, raw: bytes) -> str:
+        """Durably replace one fixed mutable file under the held store lock."""
+        if name != CURSOR_PROGRESS_BASENAME:
+            raise ReceiptObserverError("EVIDENCE_NAME_INVALID")
+        root_fd = self._check_root()
+        owns_lock = self._session_lock_fd is None
+        lock_fd = self._session_lock_fd
+        if owns_lock:
+            try:
+                lock_fd = os.open(
+                    SESSION_LOCK_BASENAME,
+                    os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                    0o600, dir_fd=root_fd)
+                lock_info = os.fstat(lock_fd)
+                if (not stat.S_ISREG(lock_info.st_mode)
+                        or stat.S_IMODE(lock_info.st_mode) != 0o600
+                        or lock_info.st_uid != os.getuid()
+                        or lock_info.st_nlink != 1):
+                    raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE")
+            except ReceiptObserverError:
+                if lock_fd is not None:
+                    os.close(lock_fd)
+                raise
+            except OSError:
+                if lock_fd is not None:
+                    os.close(lock_fd)
+                raise ReceiptObserverError("EVIDENCE_LOCK_UNSAFE") from None
+        assert lock_fd is not None
+        temporary = f".tmp-{uuid.uuid4().hex}"
+        try:
+            if owns_lock:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                existing_info = os.stat(
+                    name, dir_fd=root_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                existing_info = None
+            except OSError:
+                raise ReceiptObserverError("EVIDENCE_EXISTING_UNSAFE") from None
+            if existing_info is not None and (
+                    not stat.S_ISREG(existing_info.st_mode)
+                    or stat.S_IMODE(existing_info.st_mode) != 0o600
+                    or existing_info.st_uid != os.getuid()
+                    or existing_info.st_nlink != 1):
+                raise ReceiptObserverError("EVIDENCE_EXISTING_UNSAFE")
+            if existing_info is not None and self._read(name, MAX_PAGE_BYTES) == raw:
+                return "DEDUPLICATED"
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600, dir_fd=root_fd)
+            try:
+                view = memoryview(raw)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise ReceiptObserverError("EVIDENCE_WRITE_FAILED")
+                    view = view[written:]
+                os.fsync(fd)
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode)
+                        or stat.S_IMODE(info.st_mode) != 0o600
+                        or info.st_uid != os.getuid() or info.st_nlink != 1):
+                    raise ReceiptObserverError("EVIDENCE_FILE_UNSAFE")
+            finally:
+                os.close(fd)
+            os.rename(temporary, name, src_dir_fd=root_fd, dst_dir_fd=root_fd)
+            if self._read(name, MAX_PAGE_BYTES) != raw:
+                raise ReceiptObserverError("EVIDENCE_WRITE_FAILED")
+            os.fsync(root_fd)
+            return "ARCHIVED"
+        except OSError:
+            raise ReceiptObserverError("EVIDENCE_WRITE_FAILED") from None
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+            if owns_lock:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+
     def archive(
         self, raw_record: bytes, *, disposition: str, generation: int, seq: int,
         observed_at: datetime, request_reference_sha256: str,
@@ -1092,7 +1177,7 @@ class PrivateReceiptStore:
         self, *, generation: int, cursor: int, observation_started_at: datetime,
         request_reference_sha256: str,
     ) -> None:
-        """Create the immutable private lineage checkpoint before readiness."""
+        """Create immutable lineage, then durably advance its verified cursor."""
         existing = self.load_restart_checkpoint(
             request_reference_sha256=request_reference_sha256,
             allow_terminal_without_checkpoint=True)
@@ -1104,9 +1189,22 @@ class PrivateReceiptStore:
                     or cursor < existing["cursor"]):
                 raise ReceiptObserverError(
                     "CHECKPOINT_RESTART_BINDING_INVALID")
-            # The one existing file is the immutable lineage anchor.  Runtime
-            # progress remains in memory; never create an ambiguous second
-            # checkpoint or rewrite production bytes during a resume.
+            if cursor == existing["cursor"]:
+                return
+            progress = {
+                "schema": "sonnet-registration-receipt-progress.v1",
+                "request_reference_sha256": request_reference_sha256,
+                "contest_id": CONTEST_ID,
+                "room": ROOM,
+                "generation": generation,
+                "cursor": cursor,
+                "observation_started_at": expected_started,
+            }
+            progress_raw = json.dumps(
+                progress, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+            self._atomic_replace(CURSOR_PROGRESS_BASENAME, progress_raw)
             return
         checkpoint = {
             "schema": "sonnet-registration-receipt-checkpoint.v1",
@@ -1128,56 +1226,19 @@ class PrivateReceiptStore:
         self, *, generation: int, initial_since: int,
         observation_started_at: datetime, request_reference_sha256: str,
     ) -> dict[str, Any] | None:
-        """Return the highest durable cursor, rejecting conflicting snapshots."""
-        root_fd = self._check_root()
-        try:
-            names = sorted(name for name in os.listdir(root_fd)
-                           if name.endswith(".checkpoint"))
-        except OSError:
-            raise ReceiptObserverError("EVIDENCE_READ_FAILED") from None
-        by_cursor: dict[int, dict[str, Any]] = {}
-        for name in names:
-            digest = name.removesuffix(".checkpoint")
-            if (len(digest) != 64
-                    or any(character not in "0123456789abcdef" for character in digest)):
-                raise ReceiptObserverError("EVIDENCE_NAME_INVALID")
-            raw = self._read(name, MAX_PAGE_BYTES)
-            if hashlib.sha256(raw).hexdigest() != digest:
-                raise ReceiptObserverError("EVIDENCE_DIGEST_MISMATCH")
-            checkpoint = _json_object(raw, code="EVIDENCE_CHECKPOINT_INVALID")
-            if (set(checkpoint) != _CHECKPOINT_FIELDS
-                    or checkpoint.get("schema")
-                    != "sonnet-registration-receipt-checkpoint.v1"
-                    or checkpoint.get("contest_id") != CONTEST_ID
-                    or checkpoint.get("room") != ROOM
-                    or type(checkpoint.get("generation")) is not int
-                    or not 1 <= checkpoint["generation"] <= SAFE_INTEGER_MAX
-                    or type(checkpoint.get("cursor")) is not int
-                    or not 0 <= checkpoint["cursor"] <= SAFE_INTEGER_MAX
-                    or type(checkpoint.get("request_reference_sha256")) is not str
-                    or len(checkpoint["request_reference_sha256"]) != 64
-                    or type(checkpoint.get("observation_started_at")) is not str):
-                raise ReceiptObserverError("EVIDENCE_CHECKPOINT_INVALID")
-            try:
-                started = datetime.fromisoformat(
-                    checkpoint["observation_started_at"].replace("Z", "+00:00"))
-            except ValueError:
-                raise ReceiptObserverError("EVIDENCE_CHECKPOINT_INVALID") from None
-            _utc(started)
-            prior = by_cursor.get(checkpoint["cursor"])
-            if prior is not None and prior != checkpoint:
-                raise ReceiptObserverError("EVIDENCE_CHECKPOINT_CONFLICT")
-            expected_started = _utc(observation_started_at).isoformat().replace(
-                "+00:00", "Z")
-            if (checkpoint["request_reference_sha256"] != request_reference_sha256
-                    or checkpoint["generation"] != generation
-                    or checkpoint["observation_started_at"] != expected_started
-                    or checkpoint["cursor"] < initial_since):
-                raise ReceiptObserverError("SAVED_CHECKPOINT_BINDING_MISMATCH")
-            by_cursor[checkpoint["cursor"]] = checkpoint
-        if not by_cursor:
+        """Return immutable lineage with its latest durable verified cursor."""
+        checkpoint = self.load_restart_checkpoint(
+            request_reference_sha256=request_reference_sha256,
+            allow_terminal_without_checkpoint=True)
+        if checkpoint is None:
             return None
-        return by_cursor[max(by_cursor)]
+        expected_started = _utc(observation_started_at).isoformat().replace(
+            "+00:00", "Z")
+        if (checkpoint["generation"] != generation
+                or checkpoint["observation_started_at"] != expected_started
+                or checkpoint["cursor"] < initial_since):
+            raise ReceiptObserverError("SAVED_CHECKPOINT_BINDING_MISMATCH")
+        return checkpoint
 
     def load_restart_checkpoint(
         self, *, request_reference_sha256: str,
@@ -1190,10 +1251,14 @@ class PrivateReceiptStore:
         except OSError:
             raise ReceiptObserverError("EVIDENCE_READ_FAILED") from None
         checkpoint_names: list[str] = []
+        progress_present = False
         receipts: set[str] = set()
         metadata: set[str] = set()
         for name in names:
             if name == SESSION_LOCK_BASENAME:
+                continue
+            if name == CURSOR_PROGRESS_BASENAME:
+                progress_present = True
                 continue
             suffix = next((item for item in (
                 ".checkpoint", ".receipt", ".json", ".conflict")
@@ -1214,11 +1279,13 @@ class PrivateReceiptStore:
             else:
                 if not allow_terminal_without_checkpoint:
                     raise ReceiptObserverError("CONFLICTING_VALID_RECEIPTS")
-        if receipts != metadata:
-            raise ReceiptObserverError("EVIDENCE_ORPHAN_RECEIPT")
         if len(checkpoint_names) > 1:
             raise ReceiptObserverError("CHECKPOINT_RESTART_AMBIGUOUS")
         if not checkpoint_names:
+            if progress_present:
+                raise ReceiptObserverError("CHECKPOINT_RESTART_BINDING_INVALID")
+            if receipts != metadata:
+                raise ReceiptObserverError("EVIDENCE_ORPHAN_RECEIPT")
             if receipts and not allow_terminal_without_checkpoint:
                 raise ReceiptObserverError("CHECKPOINT_RESTART_BINDING_INVALID")
             return None
@@ -1249,6 +1316,28 @@ class PrivateReceiptStore:
         except (ValueError, ReceiptObserverError):
             raise ReceiptObserverError(
                 "CHECKPOINT_RESTART_BINDING_INVALID") from None
+        if progress_present:
+            progress_raw = self._read(CURSOR_PROGRESS_BASENAME, MAX_PAGE_BYTES)
+            progress = _json_object(
+                progress_raw, code="CHECKPOINT_RESTART_BINDING_INVALID")
+            if (set(progress) != _PROGRESS_FIELDS
+                    or progress.get("schema")
+                    != "sonnet-registration-receipt-progress.v1"
+                    or progress.get("request_reference_sha256")
+                    != checkpoint["request_reference_sha256"]
+                    or progress.get("contest_id") != checkpoint["contest_id"]
+                    or progress.get("room") != checkpoint["room"]
+                    or type(progress.get("generation")) is not int
+                    or progress["generation"] != checkpoint["generation"]
+                    or type(progress.get("cursor")) is not int
+                    or not checkpoint["cursor"] <= progress["cursor"]
+                    <= SAFE_INTEGER_MAX
+                    or progress.get("observation_started_at")
+                    != checkpoint["observation_started_at"]):
+                raise ReceiptObserverError(
+                    "CHECKPOINT_RESTART_BINDING_INVALID")
+            checkpoint = dict(checkpoint)
+            checkpoint["cursor"] = progress["cursor"]
         return checkpoint
 
     def load(self) -> list[tuple[dict[str, Any], dict[str, Any], bytes]]:
@@ -1257,8 +1346,47 @@ class PrivateReceiptStore:
             names = os.listdir(root_fd)
         except OSError:
             raise ReceiptObserverError("EVIDENCE_READ_FAILED") from None
-        if any(name.endswith(".conflict") for name in names):
-            raise ReceiptObserverError("CONFLICTING_VALID_RECEIPTS")
+        receipts = {
+            name.removesuffix(".receipt") for name in names
+            if name.endswith(".receipt")}
+        metadata_names = {
+            name.removesuffix(".json") for name in names
+            if name.endswith(".json")}
+        conflict_names = [name for name in names if name.endswith(".conflict")]
+        if conflict_names:
+            if len(conflict_names) != 1:
+                raise ReceiptObserverError("CONFLICTING_VALID_RECEIPTS")
+            conflict_name = conflict_names[0]
+            digest = conflict_name.removesuffix(".conflict")
+            raw = self._read(conflict_name, MAX_PAGE_BYTES)
+            marker = _json_object(raw, code="EVIDENCE_CONFLICT_INVALID")
+            evidence = marker.get("evidence")
+            if (hashlib.sha256(raw).hexdigest() != digest
+                    or set(marker) != {
+                        "schema", "request_reference_sha256", "evidence"}
+                    or marker.get("schema")
+                    != "sonnet-registration-receipt-conflict.v1"
+                    or type(marker.get("request_reference_sha256")) is not str
+                    or len(marker["request_reference_sha256"]) != 64
+                    or type(evidence) is not dict or len(evidence) < 2
+                    or set(evidence.values()) != {"ACCEPTED", "REJECTED"}
+                    or any(type(item) is not str or len(item) != 64
+                           or any(character not in "0123456789abcdef"
+                                  for character in item)
+                           for item in evidence)):
+                raise ReceiptObserverError("EVIDENCE_CONFLICT_INVALID")
+            expected = set(evidence)
+            if expected <= receipts and expected <= metadata_names:
+                raise ReceiptObserverError("CONFLICTING_VALID_RECEIPTS")
+            # A crash can leave the fail-closed marker before both verified
+            # receipt pairs are archived.  Do not reconcile a partial pair as
+            # terminal; re-read from the unchanged durable cursor instead.
+            return []
+        if receipts != metadata_names:
+            # A verified archive consists of two independently atomic files.
+            # A crash between them must replay the unchanged durable cursor,
+            # never treat the surviving half as terminal evidence.
+            return []
         results: list[tuple[dict[str, Any], dict[str, Any], bytes]] = []
         for name in sorted(item for item in names if item.endswith(".json")):
             digest = name[:-5]
@@ -1641,6 +1769,18 @@ class ReceiptObserver:
         if generation != self._config.expected_generation:
             raise _read_error(
                 "READ_GENERATION_CHANGE", "POLL", code="GENERATION_CHANGED")
+        try:
+            # Establish the immutable lineage at the pre-response cursor
+            # before any receipt pair can be only partially archived.  This is
+            # not progress: the verified response's last_seq is persisted only
+            # after all terminal evidence is durable.
+            self._store.save_checkpoint(
+                generation=generation, cursor=self._cursor,
+                observation_started_at=self._config.observation_started_at,
+                request_reference_sha256=hashlib.sha256(
+                    self._config.request_id.encode("utf-8")).hexdigest())
+        except Exception:
+            raise _read_error("READ_CHECKPOINT_FAILURE", "CHECKPOINT") from None
         if gap:
             try:
                 self._reads += 1
