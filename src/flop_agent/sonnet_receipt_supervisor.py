@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import threading
 import time
-from typing import Any, Callable
+from types import MappingProxyType
+from typing import Any, Callable, Mapping
 
 from . import sonnet_receipt_observer as receipt_observer
 
@@ -27,15 +28,38 @@ TERMINAL_STATUSES = frozenset({
 def _parse_highwater(read: receipt_observer.HttpRead) -> tuple[int, int]:
     """Validate the unsigned deployment fields needed to begin observation."""
     expected_url = receipt_observer.FixedReadonlyTransport.highwater_url()
+    if read.status_code == 400:
+        raise receipt_observer._read_error(
+            "READ_HTTP_400", "BOOTSTRAP", http_status=400)
+    if read.status_code == 429:
+        raise receipt_observer._read_error(
+            "READ_HTTP_429", "BOOTSTRAP", http_status=429)
+    if read.status_code != 200:
+        raise receipt_observer._read_error(
+            "READ_HTTP_UNEXPECTED_STATUS", "BOOTSTRAP",
+            retryable=(read.status_code == 408
+                       or type(read.status_code) is int
+                       and 500 <= read.status_code <= 599),
+            http_status=read.status_code)
     if (type(read.status_code) is not int or read.status_code != 200
             or read.redirected or read.final_url != expected_url
             or read.content_type.split(";", 1)[0].strip().lower()
             != "application/json"
             or len(read.body) > receipt_observer.MAX_PAGE_BYTES):
-        raise receipt_observer.ReceiptObserverError(
-            "HIGHWATER_TRANSPORT_INVALID")
-    value = receipt_observer._json_object(
-        read.body, code="HIGHWATER_JSON_INVALID")
+        if read.content_type.split(";", 1)[0].strip().lower() != "application/json":
+            raise receipt_observer._read_error(
+                "READ_CONTENT_TYPE_MISMATCH", "BOOTSTRAP")
+        if len(read.body) > receipt_observer.MAX_PAGE_BYTES:
+            raise receipt_observer._read_error(
+                "READ_RESPONSE_LIMIT", "BOOTSTRAP")
+        raise receipt_observer._read_error(
+            "READ_MALFORMED_RESPONSE", "BOOTSTRAP")
+    try:
+        value = receipt_observer._json_object(
+            read.body, code="HIGHWATER_JSON_INVALID")
+    except receipt_observer.ReceiptObserverError:
+        raise receipt_observer._read_error(
+            "READ_MALFORMED_RESPONSE", "BOOTSTRAP") from None
     allowed = {
         "room", "count", "first_seq", "last_seq", "generation", "messages",
     }
@@ -50,17 +74,19 @@ def _parse_highwater(read: receipt_observer.HttpRead) -> tuple[int, int]:
             or type(value.get("messages")) is not list
             or len(value["messages"]) > 1
             or value["count"] < len(value["messages"])):
-        raise receipt_observer.ReceiptObserverError("HIGHWATER_SCHEMA_INVALID")
+        raise receipt_observer._read_error(
+            "READ_MALFORMED_RESPONSE", "BOOTSTRAP")
     first_seq = value.get("first_seq")
     if (first_seq is not None
             and (type(first_seq) is not int
                  or not 0 <= first_seq <= value["last_seq"])):
-        raise receipt_observer.ReceiptObserverError("HIGHWATER_SCHEMA_INVALID")
+        raise receipt_observer._read_error(
+            "READ_MALFORMED_RESPONSE", "BOOTSTRAP")
     records = [receipt_observer._normalize_record(item)
                for item in value["messages"]]
     if records and records[-1]["seq"] != value["last_seq"]:
-        raise receipt_observer.ReceiptObserverError(
-            "HIGHWATER_SEQUENCE_INVALID")
+        raise receipt_observer._read_error(
+            "READ_CURSOR_REGRESSION", "BOOTSTRAP")
     return value["generation"], value["last_seq"]
 
 
@@ -78,12 +104,57 @@ def _terminal_status(result: receipt_observer.ObserverResult) -> str:
     return UNCONFIRMED
 
 
+def _terminal_projection(
+    status: str, result: receipt_observer.ObserverResult,
+) -> Mapping[str, Any]:
+    value: dict[str, Any] = {
+        "status": status,
+        "failure_category": result.failure_category,
+        "failure_phase": result.failure_phase,
+        "retryable": result.retryable,
+        "observed_at": (result.observed_at
+                        or datetime.now(timezone.utc).isoformat().replace(
+                            "+00:00", "Z")),
+        "read_attempt_count": min(
+            max(result.read_count, 0), receipt_observer.SUPERVISOR_MAX_READS),
+    }
+    if result.http_status is not None:
+        value["http_status"] = result.http_status
+    return MappingProxyType(value)
+
+
+def safe_start_failure_projection(error: BaseException) -> Mapping[str, Any]:
+    """Collapse all bootstrap exceptions to a fixed, path-free projection."""
+    if isinstance(error, receipt_observer.ReceiptObserverError):
+        category = error.category or "READ_INTERNAL_FAILURE"
+        phase = "BOOTSTRAP"
+        retryable = False
+        status = error.http_status
+    else:
+        category, phase, retryable, status = (
+            "READ_INTERNAL_FAILURE", "BOOTSTRAP", False, None)
+    value: dict[str, Any] = {
+        "status": REVIEW_REQUIRED,
+        "failure_category": category,
+        "failure_phase": phase,
+        "retryable": retryable,
+        "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "read_attempt_count": (error.read_attempt_count
+                               if isinstance(
+                                   error, receipt_observer.ReceiptObserverError)
+                               else 0),
+    }
+    if status is not None:
+        value["http_status"] = status
+    return MappingProxyType(value)
+
+
 class SupervisorHandle:
     """Redacted, stoppable handle for exactly one observer session."""
 
     __slots__ = (
         "_session", "_monotonic", "_deadline", "_state_lock",
-        "_explicit_stop", "_wall_timeout", "_watchdog",
+        "_explicit_stop", "_wall_timeout", "_watchdog", "_terminal",
     )
 
     def __init__(
@@ -97,6 +168,7 @@ class SupervisorHandle:
         self._state_lock = threading.Lock()
         self._explicit_stop = False
         self._wall_timeout = False
+        self._terminal: Mapping[str, Any] | None = None
 
         def enforce_wall() -> None:
             remaining = max(0.0, self._deadline - self._monotonic())
@@ -122,7 +194,12 @@ class SupervisorHandle:
             return None
         with self._state_lock:
             wall_timeout = self._wall_timeout
-        return TIMEOUT if wall_timeout else _terminal_status(result)
+        status = TIMEOUT if wall_timeout else _terminal_status(result)
+        self._terminal = _terminal_projection(status, result)
+        return status
+
+    def terminal_projection(self) -> Mapping[str, Any] | None:
+        return self._terminal
 
     def stop(self) -> None:
         with self._state_lock:
@@ -164,7 +241,9 @@ class _ProductionSupervisor:
     def __setattr__(self, _name: str, _value: Any) -> None:
         raise AttributeError("production supervisor is immutable")
 
-    def start(self) -> SupervisorHandle:
+    def start(
+        self, stop_requested: threading.Event | None = None,
+    ) -> SupervisorHandle:
         if self._started:
             raise receipt_observer.ReceiptObserverError(
                 "SUPERVISOR_ALREADY_STARTED")
@@ -172,7 +251,68 @@ class _ProductionSupervisor:
         started_monotonic = self._monotonic()
         transport = self._transport_factory()
         try:
-            generation, cursor = _parse_highwater(transport.read_highwater())
+            retries = 0
+            retry_wait_total = 0
+            read_attempts = 0
+            while True:
+                if stop_requested is not None and stop_requested.is_set():
+                    raise receipt_observer.ReceiptObserverError(
+                        "SUPERVISOR_STOPPED")
+                remaining = (started_monotonic
+                             + receipt_observer.SUPERVISOR_MAX_WALL_SECONDS
+                             - self._monotonic())
+                if remaining <= receipt_observer.HTTP_TIMEOUT_SECONDS:
+                    raise receipt_observer._read_error(
+                        "READ_NETWORK_TIMEOUT", "BOOTSTRAP")
+                try:
+                    read_attempts += 1
+                    read = transport.read_highwater()
+                    if read.status_code == 429:
+                        values = read.retry_after_values()
+                        if (len(values) != 1 or not values[0].isdigit()
+                                or not 0 < int(values[0])
+                                <= receipt_observer.MAX_RETRY_AFTER_SECONDS):
+                            raise receipt_observer._read_error(
+                                "READ_HTTP_429", "BOOTSTRAP", http_status=429)
+                        raise receipt_observer._read_error(
+                            "READ_HTTP_429", "BOOTSTRAP", retryable=True,
+                            http_status=429, retry_after=int(values[0]))
+                    generation, cursor = _parse_highwater(read)
+                    break
+                except receipt_observer.ReceiptObserverError as error:
+                    error = receipt_observer._read_error(
+                        error.category or "READ_INTERNAL_FAILURE", "BOOTSTRAP",
+                        retryable=error.retryable,
+                        http_status=error.http_status,
+                        retry_after=error.retry_after, code=error.code)
+                    delay = (error.retry_after
+                             if error.retry_after is not None
+                             else receipt_observer.RETRY_BACKOFF_SECONDS)
+                    remaining = (started_monotonic
+                                 + receipt_observer.SUPERVISOR_MAX_WALL_SECONDS
+                                 - self._monotonic())
+                    can_retry = (
+                        error.retryable
+                        and retries < receipt_observer.MAX_CONSECUTIVE_READ_RETRIES
+                        and retry_wait_total + delay
+                        <= receipt_observer.MAX_TOTAL_RETRY_WAIT_SECONDS
+                        and remaining
+                        > delay + receipt_observer.HTTP_TIMEOUT_SECONDS)
+                    if not can_retry:
+                        raise receipt_observer._read_error(
+                            error.category or "READ_INTERNAL_FAILURE",
+                            "BOOTSTRAP", retryable=False,
+                            http_status=error.http_status,
+                            code=error.code,
+                            read_attempt_count=read_attempts) from None
+                    retries += 1
+                    retry_wait_total += delay
+                    if stop_requested is not None:
+                        if stop_requested.wait(delay):
+                            raise receipt_observer.ReceiptObserverError(
+                                "SUPERVISOR_STOPPED") from None
+                    else:
+                        time.sleep(delay)
         finally:
             transport.close()
         started_at = self._clock()

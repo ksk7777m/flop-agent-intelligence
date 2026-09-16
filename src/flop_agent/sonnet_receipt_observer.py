@@ -11,6 +11,8 @@ import fcntl
 import hashlib
 import json
 import os
+import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -48,6 +50,10 @@ HTTP_TIMEOUT_SECONDS = 20
 SUPERVISOR_MAX_WALL_SECONDS = 30 * 60
 SUPERVISOR_MIN_POLL_SECONDS = 2
 SUPERVISOR_MAX_READS = 902
+MAX_CONSECUTIVE_READ_RETRIES = 2
+RETRY_BACKOFF_SECONDS = 2
+MAX_TOTAL_RETRY_WAIT_SECONDS = 60
+MAX_RETRY_AFTER_SECONDS = 30
 SAFE_INTEGER_MAX = 9_007_199_254_740_991
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 RECEIPT_CHILD_BASENAME = "sonnet-registration-receipts"
@@ -69,12 +75,54 @@ _CHECKPOINT_FIELDS = frozenset({
 })
 
 
+FAILURE_CATEGORIES = frozenset({
+    "READ_HTTP_400", "READ_HTTP_429", "READ_HTTP_UNEXPECTED_STATUS",
+    "READ_NETWORK_TIMEOUT", "READ_CONNECTION_FAILURE", "READ_TLS_FAILURE",
+    "READ_CONTENT_TYPE_MISMATCH", "READ_MALFORMED_RESPONSE",
+    "READ_RESPONSE_LIMIT", "READ_GENERATION_CHANGE",
+    "READ_CURSOR_REGRESSION", "READ_CURSOR_GAP", "READ_EXPORT_FAILURE",
+    "READ_STORAGE_FAILURE", "READ_CHECKPOINT_FAILURE",
+    "READ_CLEANUP_FAILURE", "READ_INTERNAL_FAILURE",
+})
+FAILURE_PHASES = frozenset({"BOOTSTRAP", "POLL", "EXPORT", "CHECKPOINT", "CLEANUP"})
+
+
 class ReceiptObserverError(RuntimeError):
     """A fixed error category that never reflects remote or private values."""
 
-    def __init__(self, code: str):
+    def __init__(
+        self, code: str, *, category: str | None = None,
+        phase: str | None = None, retryable: bool = False,
+        http_status: int | None = None, retry_after: int | None = None,
+        read_attempt_count: int = 0,
+    ):
+        if category is not None and category not in FAILURE_CATEGORIES:
+            category = "READ_INTERNAL_FAILURE"
+        if phase is not None and phase not in FAILURE_PHASES:
+            phase = "POLL"
         self.code = code
+        self.category = category
+        self.phase = phase
+        self.retryable = retryable is True
+        self.http_status = (http_status if type(http_status) is int
+                            and 100 <= http_status <= 599 else None)
+        self.retry_after = (retry_after if type(retry_after) is int
+                            and 0 <= retry_after <= MAX_RETRY_AFTER_SECONDS
+                            else None)
+        self.read_attempt_count = min(
+            max(read_attempt_count, 0), SUPERVISOR_MAX_READS)
         super().__init__(code)
+
+
+def _read_error(
+    category: str, phase: str, *, retryable: bool = False,
+    http_status: int | None = None, retry_after: int | None = None,
+    code: str | None = None, read_attempt_count: int = 0,
+) -> ReceiptObserverError:
+    return ReceiptObserverError(
+        code or category, category=category, phase=phase, retryable=retryable,
+        http_status=http_status, retry_after=retry_after,
+        read_attempt_count=read_attempt_count)
 
 
 class _PrivateDirectoryCapability:
@@ -127,10 +175,17 @@ class HttpRead:
 
     def __repr__(self) -> str:
         return (
-            f"HttpRead(status_code={self.status_code!r}, content_type="
-            f"{self.content_type!r}, body=<redacted>, headers=<redacted>, "
+            f"HttpRead(status_code={self.status_code!r}, content_type=<redacted>, "
+            f"body=<redacted>, headers=<redacted>, "
             f"redirected={self.redirected!r})"
         )
+
+    def retry_after_values(self) -> tuple[str, ...]:
+        values: list[str] = []
+        for key, value in self.headers.items():
+            if key.casefold() == "retry-after" and type(value) is str:
+                values.extend(part.strip() for part in value.split(","))
+        return tuple(values)
 
 
 @dataclass(frozen=True)
@@ -144,20 +199,27 @@ class ObserverResult:
     export_fallback_used: bool
     receipt_sha256: str | None = None
     error_category: str | None = None
+    failure_category: str | None = None
+    failure_phase: str | None = None
+    retryable: bool = False
+    http_status: int | None = None
+    observed_at: str | None = None
 
     def journal_projection(self) -> Mapping[str, Any]:
         """Return only values safe for an ordinary/public journal."""
-        return MappingProxyType({
-            "contest_id": CONTEST_ID,
+        value: dict[str, Any] = {
             "status": self.status,
-            "observer_ready": self.observer_ready,
-            "verification": "VALID" if self.receipt_sha256 else "UNCONFIRMED",
-            "receipt_sha256": self.receipt_sha256,
-            "error_category": self.error_category,
-            "read_count": self.read_count,
-            "gap_detected": self.gap_detected,
-            "export_fallback_used": self.export_fallback_used,
-        })
+            "failure_category": self.failure_category,
+            "failure_phase": self.failure_phase,
+            "retryable": self.retryable,
+            "observed_at": (self.observed_at
+                            or datetime.now(timezone.utc).isoformat().replace(
+                                "+00:00", "Z")),
+            "read_attempt_count": min(max(self.read_count, 0), SUPERVISOR_MAX_READS),
+        }
+        if self.http_status is not None:
+            value["http_status"] = self.http_status
+        return MappingProxyType(value)
 
 
 class _Config:
@@ -308,13 +370,25 @@ def _classify_receipt(
             _canonical_record(normalized))
 
 
-def _parse_page(read: HttpRead, *, expected_url: str, since: int) -> tuple[int, int, list[dict[str, Any]], bool]:
+def _parse_page(
+    read: HttpRead, *, expected_url: str, since: int, wait_seconds: int,
+) -> tuple[int, int, list[dict[str, Any]], bool, bool | None]:
     if (type(read.status_code) is not int or read.status_code != 200
-            or read.redirected or read.final_url != expected_url
-            or read.content_type.split(";", 1)[0].strip().lower() != "application/json"
-            or len(read.body) > MAX_PAGE_BYTES):
-        raise ReceiptObserverError("PAGE_TRANSPORT_INVALID")
-    value = _json_object(read.body, code="PAGE_JSON_INVALID")
+            or read.redirected or read.final_url != expected_url):
+        raise _read_error(
+            "READ_MALFORMED_RESPONSE", "POLL", code="PAGE_TRANSPORT_INVALID")
+    if (read.content_type.split(";", 1)[0].strip().lower()
+            != "application/json"):
+        raise _read_error(
+            "READ_CONTENT_TYPE_MISMATCH", "POLL", code="PAGE_TRANSPORT_INVALID")
+    if len(read.body) > MAX_PAGE_BYTES:
+        raise _read_error(
+            "READ_RESPONSE_LIMIT", "POLL", code="PAGE_TRANSPORT_INVALID")
+    try:
+        value = _json_object(read.body, code="PAGE_JSON_INVALID")
+    except ReceiptObserverError:
+        raise _read_error(
+            "READ_MALFORMED_RESPONSE", "POLL", code="PAGE_JSON_INVALID") from None
     allowed = {"room", "count", "first_seq", "last_seq", "generation", "messages", "wait_held"}
     required = allowed - {"wait_held"}
     if (not required <= set(value) or not set(value) <= allowed
@@ -328,18 +402,36 @@ def _parse_page(read: HttpRead, *, expected_url: str, since: int) -> tuple[int, 
             or type(value.get("messages")) is not list
             or value["count"] != len(value["messages"])
             or ("wait_held" in value and type(value["wait_held"]) is not bool)):
-        raise ReceiptObserverError("PAGE_SCHEMA_INVALID")
-    records = [_normalize_record(record) for record in value["messages"]]
+        raise _read_error(
+            "READ_MALFORMED_RESPONSE", "POLL", code="PAGE_SCHEMA_INVALID")
+    try:
+        records = [_normalize_record(record) for record in value["messages"]]
+    except ReceiptObserverError:
+        raise _read_error(
+            "READ_MALFORMED_RESPONSE", "POLL", code="PAGE_SCHEMA_INVALID") from None
     seqs = [record["seq"] for record in records]
     if records:
         if (type(value.get("first_seq")) is not int
                 or value["first_seq"] != seqs[0] or value["last_seq"] != seqs[-1]
                 or seqs != list(range(seqs[0], seqs[0] + len(seqs)))
                 or seqs[0] <= since):
-            raise ReceiptObserverError("PAGE_SEQUENCE_INVALID")
-    elif value.get("first_seq") is not None or value["last_seq"] < since:
-        raise ReceiptObserverError("PAGE_SEQUENCE_INVALID")
-    return value["generation"], value["last_seq"], records, bool(records and seqs[0] > since + 1)
+            raise _read_error(
+                "READ_CURSOR_REGRESSION", "POLL", code="PAGE_SEQUENCE_INVALID")
+    elif (value.get("first_seq") is not None
+          or value["last_seq"] != since):
+        raise _read_error(
+            "READ_CURSOR_REGRESSION", "POLL", code="PAGE_SEQUENCE_INVALID")
+    wait_held = value.get("wait_held")
+    if records and "wait_held" in value:
+        raise _read_error(
+            "READ_MALFORMED_RESPONSE", "POLL", code="PAGE_SCHEMA_INVALID")
+    if wait_seconds > 0 and not records and type(wait_held) is not bool:
+        # Official prose makes this conditional signal authoritative.  Missing
+        # cannot safely be guessed as a held long-poll.
+        raise _read_error(
+            "READ_MALFORMED_RESPONSE", "POLL", code="PAGE_SCHEMA_INVALID")
+    return (value["generation"], value["last_seq"], records,
+            bool(records and seqs[0] > since + 1), wait_held)
 
 
 def _parse_export(read: HttpRead, *, expected_url: str, expected_generation: int) -> list[dict[str, Any]]:
@@ -434,14 +526,33 @@ class FixedReadonlyTransport:
                     redirected=response.geturl() != url)
         except urllib.error.HTTPError as error:
             try:
+                retry_after = tuple(error.headers.get_all("Retry-After", []))
                 return HttpRead(
-                    int(error.code), url, "", b"", MappingProxyType({}))
+                    int(error.code), url, "", b"",
+                    MappingProxyType({
+                        "Retry-After": ",".join(retry_after),
+                    } if retry_after else {}))
             finally:
                 error.close()
         except ReceiptObserverError:
             raise
-        except (OSError, TimeoutError, urllib.error.URLError):
-            raise ReceiptObserverError("NETWORK_FAILURE") from None
+        except (TimeoutError, socket.timeout):
+            raise _read_error(
+                "READ_NETWORK_TIMEOUT", "POLL", retryable=True) from None
+        except ssl.SSLError:
+            raise _read_error("READ_TLS_FAILURE", "POLL") from None
+        except urllib.error.URLError as error:
+            reason = error.reason
+            if isinstance(reason, (TimeoutError, socket.timeout)):
+                raise _read_error(
+                    "READ_NETWORK_TIMEOUT", "POLL", retryable=True) from None
+            if isinstance(reason, ssl.SSLError):
+                raise _read_error("READ_TLS_FAILURE", "POLL") from None
+            raise _read_error(
+                "READ_CONNECTION_FAILURE", "POLL", retryable=True) from None
+        except OSError:
+            raise _read_error(
+                "READ_CONNECTION_FAILURE", "POLL", retryable=True) from None
         finally:
             with self._state_lock:
                 if self._active_response is response:
@@ -1001,7 +1112,8 @@ class ReceiptObserver:
     """Bounded state machine for one fixed request; all network use is read-only."""
 
     __slots__ = ("_config", "_transport", "_store", "_verify",
-                 "_trusted_classifier", "_clock", "_cursor", "_ready", "_reads")
+                 "_trusted_classifier", "_clock", "_cursor", "_ready", "_reads",
+                 "_wait_not_held")
 
     def __init__(
         self, config: _Config, transport: Any, store: PrivateReceiptStore,
@@ -1021,6 +1133,7 @@ class ReceiptObserver:
         self._cursor = config.initial_since
         self._ready = False
         self._reads = 0
+        self._wait_not_held = False
 
     @property
     def ready(self) -> bool:
@@ -1030,12 +1143,33 @@ class ReceiptObserver:
     def cursor(self) -> int:
         return self._cursor
 
-    def _safe(self, *, error: str, gap: bool = False, exported: bool = False,
-              review: bool = False) -> ObserverResult:
+    def _safe(self, *, error: str | ReceiptObserverError, gap: bool = False,
+              exported: bool = False, review: bool = False) -> ObserverResult:
         self._ready = False
+        failure = error if isinstance(error, ReceiptObserverError) else None
+        if failure is not None and failure.category is None:
+            if (failure.code.startswith("EVIDENCE_")
+                    or failure.code.startswith("SAVED_")
+                    or failure.code.startswith("LOCK_")):
+                failure = _read_error(
+                    "READ_STORAGE_FAILURE", "CHECKPOINT", code=failure.code)
+            else:
+                failure = _read_error(
+                    "READ_INTERNAL_FAILURE", "POLL", code=failure.code)
+        code = failure.code if failure is not None else error
+        observed_at: str | None = None
+        try:
+            observed_at = _utc(self._clock()).isoformat().replace("+00:00", "Z")
+        except Exception:
+            pass
         return ObserverResult(
             "UNCONFIRMED", False, review, self._reads, self._cursor, gap,
-            exported, error_category=error)
+            exported, error_category=code,
+            failure_category=failure.category if failure else None,
+            failure_phase=failure.phase if failure else None,
+            retryable=failure.retryable if failure else False,
+            http_status=failure.http_status if failure else None,
+            observed_at=observed_at)
 
     def _receipts(
         self, records: list[dict[str, Any]], generation: int, *, persist: bool = True,
@@ -1117,44 +1251,76 @@ class ReceiptObserver:
                 return self._safe(error="SAVED_EVIDENCE_BINDING_MISMATCH", review=True)
             return result
         except ReceiptObserverError as error:
-            return self._safe(error=error.code, review=True)
+            return self._safe(error=error, review=True)
 
     def _read(self, wait_seconds: int) -> ObserverResult | None:
         expected_url = FixedReadonlyTransport.page_url(self._cursor, wait_seconds)
-        read = self._transport.read_page(self._cursor, wait_seconds)
         self._reads += 1
-        if read.status_code == 408:
-            return self._safe(error="HTTP_408")
-        generation, last_seq, records, gap = _parse_page(
-            read, expected_url=expected_url, since=self._cursor)
+        self._wait_not_held = False
+        read = self._transport.read_page(self._cursor, wait_seconds)
+        status = read.status_code
+        if status == 400:
+            raise _read_error("READ_HTTP_400", "POLL", http_status=400)
+        if status == 429:
+            values = read.retry_after_values()
+            if (len(values) != 1 or not values[0].isdigit()
+                    or not 0 < int(values[0]) <= MAX_RETRY_AFTER_SECONDS):
+                raise _read_error("READ_HTTP_429", "POLL", http_status=429)
+            raise _read_error(
+                "READ_HTTP_429", "POLL", retryable=True, http_status=429,
+                retry_after=int(values[0]))
+        if status != 200:
+            retryable = status == 408 or (type(status) is int and 500 <= status <= 599)
+            raise _read_error(
+                "READ_HTTP_UNEXPECTED_STATUS", "POLL", retryable=retryable,
+                http_status=status)
+        generation, last_seq, records, gap, wait_held = _parse_page(
+            read, expected_url=expected_url, since=self._cursor,
+            wait_seconds=wait_seconds)
         if generation != self._config.expected_generation:
-            return self._safe(error="GENERATION_CHANGED", review=True)
+            raise _read_error(
+                "READ_GENERATION_CHANGE", "POLL", code="GENERATION_CHANGED")
         if gap:
-            export = self._transport.read_export()
-            self._reads += 1
-            exported = _parse_export(
-                export, expected_url=FixedReadonlyTransport.export_url(),
-                expected_generation=self._config.expected_generation)
+            try:
+                self._reads += 1
+                export = self._transport.read_export()
+                exported = _parse_export(
+                    export, expected_url=FixedReadonlyTransport.export_url(),
+                    expected_generation=self._config.expected_generation)
+            except ReceiptObserverError:
+                raise _read_error("READ_EXPORT_FAILURE", "EXPORT") from None
+            except Exception:
+                raise _read_error("READ_EXPORT_FAILURE", "EXPORT") from None
             found = self._receipts(exported, generation)
             if found is not None:
                 self._cursor = last_seq
-                self._store.save_checkpoint(
-                    generation=generation, cursor=self._cursor,
-                    observation_started_at=self._config.observation_started_at,
-                    request_reference_sha256=hashlib.sha256(
-                        self._config.request_id.encode("utf-8")).hexdigest())
+                try:
+                    self._store.save_checkpoint(
+                        generation=generation, cursor=self._cursor,
+                        observation_started_at=self._config.observation_started_at,
+                        request_reference_sha256=hashlib.sha256(
+                            self._config.request_id.encode("utf-8")).hexdigest())
+                except Exception:
+                    raise _read_error(
+                        "READ_CHECKPOINT_FAILURE", "CHECKPOINT") from None
                 return ObserverResult(
                     found.status, found.observer_ready, found.review_required,
                     self._reads, self._cursor, True, True,
                     found.receipt_sha256, found.error_category)
-            return self._safe(error="CURSOR_GAP_UNRESOLVED", gap=True, exported=True)
+            raise _read_error(
+                "READ_CURSOR_GAP", "EXPORT", code="CURSOR_GAP_UNRESOLVED")
         self._cursor = last_seq
         found = self._receipts(records, generation)
-        self._store.save_checkpoint(
-            generation=generation, cursor=self._cursor,
-            observation_started_at=self._config.observation_started_at,
-            request_reference_sha256=hashlib.sha256(
-                self._config.request_id.encode("utf-8")).hexdigest())
+        try:
+            self._store.save_checkpoint(
+                generation=generation, cursor=self._cursor,
+                observation_started_at=self._config.observation_started_at,
+                request_reference_sha256=hashlib.sha256(
+                    self._config.request_id.encode("utf-8")).hexdigest())
+        except Exception:
+            raise _read_error("READ_CHECKPOINT_FAILURE", "CHECKPOINT") from None
+        self._wait_not_held = (
+            wait_seconds > 0 and not records and wait_held is False)
         return found
 
     def prepare(self) -> ObserverResult:
@@ -1182,8 +1348,12 @@ class ReceiptObserver:
                 False, False, error_category="AWAITING_RECEIPT")
         except ReceiptObserverError as error:
             return self._safe(
-                error=error.code,
-                review=error.code.startswith("EVIDENCE_") or error.code.startswith("SAVED_"))
+                error=error,
+                review=(error.code.startswith("EVIDENCE_")
+                        or error.code.startswith("SAVED_")
+                        or error.code in {
+                            "GENERATION_CHANGED", "CURSOR_GAP_UNRESOLVED",
+                        }))
 
     def observe(self) -> ObserverResult:
         if not self._ready:
@@ -1194,7 +1364,7 @@ class ReceiptObserver:
             try:
                 result = self._read(self._config.wait_seconds)
             except ReceiptObserverError as error:
-                return self._safe(error=error.code)
+                return self._safe(error=error)
             if result is not None:
                 return result
         return self._safe(error="BOUNDED_OBSERVATION_COMPLETE")
@@ -1232,6 +1402,8 @@ class ReceiptObservationSession:
         self._wall_deadline = monotonic() + maximum_wall_seconds
 
         def run() -> None:
+            retry_count = 0
+            retry_wait_total = 0
             try:
                 prepared = observer.prepare()
                 if (prepared.observer_ready and prepared.status == "UNCONFIRMED"
@@ -1278,6 +1450,30 @@ class ReceiptObservationSession:
                             result = observer._read(
                                 observer._config.wait_seconds)
                         except ReceiptObserverError as error:
+                            delay = (error.retry_after if error.retry_after is not None
+                                     else RETRY_BACKOFF_SECONDS)
+                            remaining = self._wall_deadline - self._monotonic()
+                            can_retry = (
+                                error.retryable
+                                and retry_count < MAX_CONSECUTIVE_READ_RETRIES
+                                and retry_wait_total + delay
+                                <= MAX_TOTAL_RETRY_WAIT_SECONDS
+                                and observer._reads < observer._config.max_reads
+                                and remaining > delay + HTTP_TIMEOUT_SECONDS)
+                            if can_retry:
+                                retry_count += 1
+                                retry_wait_total += delay
+                                if self._waiter(self._stop, delay):
+                                    self._result = observer._safe(
+                                        error="SUPERVISOR_STOPPED")
+                                    break
+                                continue
+                            if error.retryable:
+                                error = _read_error(
+                                    error.category or "READ_INTERNAL_FAILURE",
+                                    error.phase or "POLL", retryable=False,
+                                    http_status=error.http_status,
+                                    code=error.code)
                             review = (
                                 error.code.startswith("EVIDENCE_")
                                 or error.code.startswith("SAVED_")
@@ -1288,8 +1484,7 @@ class ReceiptObservationSession:
                                 })
                             self._result = observer._safe(
                                 error=("SUPERVISOR_STOPPED"
-                                       if self._stop.is_set()
-                                       else error.code),
+                                       if self._stop.is_set() else error),
                                 review=False if self._stop.is_set() else review)
                             break
                         if self._stop.is_set():
@@ -1299,30 +1494,45 @@ class ReceiptObservationSession:
                         if result is not None:
                             self._result = result
                             break
+                        retry_count = 0
+                        if getattr(observer, "_wait_not_held", False):
+                            delay = min(
+                                float(observer._config.wait_seconds),
+                                max(0.0, self._wall_deadline - self._monotonic()))
+                            if delay and self._waiter(self._stop, delay):
+                                self._result = observer._safe(
+                                    error="SUPERVISOR_STOPPED")
+                                break
                     if self._result is None:
                         self._result = observer._safe(
                             error="SUPERVISOR_READ_LIMIT")
                 else:
                     self._result = prepared
             except Exception:
+                failure = _read_error("READ_INTERNAL_FAILURE", "POLL")
                 self._result = observer._safe(
                     error=("SUPERVISOR_STOPPED" if self._stop.is_set()
-                           else "OBSERVER_INTERNAL_FAILURE"),
-                    review=not self._stop.is_set())
+                           else failure), review=not self._stop.is_set())
             finally:
+                cleanup_failed = False
                 close_transport = getattr(observer._transport, "close", None)
                 if close_transport is not None:
                     try:
                         close_transport()
                     except Exception:
-                        self._result = observer._safe(
-                            error="TRANSPORT_CLOSE_FAILED", review=True)
+                        cleanup_failed = True
                 try:
                     observer._store.close()
                 except Exception:
-                    self._result = observer._safe(
-                        error="STORE_CLOSE_FAILED", review=True)
+                    cleanup_failed = True
                 finally:
+                    # Cleanup diagnostics must never erase the causally earlier
+                    # terminal classification or a verified receipt result.
+                    if cleanup_failed and self._result is None:
+                        self._result = observer._safe(
+                            error=_read_error(
+                                "READ_CLEANUP_FAILURE", "CLEANUP"),
+                            review=True)
                     self._done.set()
 
         self._thread = threading.Thread(

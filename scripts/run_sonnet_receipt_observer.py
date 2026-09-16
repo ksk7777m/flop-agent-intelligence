@@ -8,7 +8,7 @@ import signal
 import sys
 import threading
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 from engagement_runtime_contract import (
     install_trusted_project_import_path,
@@ -20,12 +20,13 @@ CODE_ROOT = Path(__file__).resolve().parents[1]
 POLL_SECONDS = 0.2
 
 
-def _emit(status: str) -> None:
-    print(json.dumps({"status": status}, separators=(",", ":")), flush=True)
+def _emit(value: str | Mapping[str, Any]) -> None:
+    payload = {"status": value} if type(value) is str else dict(value)
+    print(json.dumps(payload, separators=(",", ":")), flush=True)
 
 
 def _run_foreground(handle: object, stop_requested: threading.Event,
-                    emit: Callable[[str], None]) -> int:
+                    emit: Callable[[str | Mapping[str, Any]], None]) -> int:
     ready_emitted = False
     stop_forwarded = False
     while True:
@@ -38,7 +39,8 @@ def _run_foreground(handle: object, stop_requested: threading.Event,
                 ready_emitted = True
         terminal = handle.wait_for_terminal(0)
         if terminal is not None:
-            emit(terminal)
+            projection = getattr(handle, "terminal_projection", lambda: None)()
+            emit(projection or terminal)
             return 0 if terminal in {
                 "OBSERVER_ACCEPTED", "OBSERVER_REJECTED",
                 "OBSERVER_STOPPED", "OBSERVER_TIMEOUT",
@@ -64,6 +66,7 @@ def main() -> int:
         install_trusted_project_import_path(CODE_ROOT)
         from flop_agent.sonnet_receipt_supervisor import (  # noqa: PLC0415
             build_production_receipt_supervisor,
+            safe_start_failure_projection,
         )
         root = trusted_production_runtime_root()
         if root is None:
@@ -71,13 +74,23 @@ def main() -> int:
             return 1
         _emit("OBSERVER_STARTING")
         handle = build_production_receipt_supervisor(
-            private_runtime_root=root).start()
+            private_runtime_root=root).start(stop_requested=stop_requested)
         return _run_foreground(handle, stop_requested, _emit)
-    except Exception:
+    except Exception as error:
         if handle is not None:
             handle.stop()
             handle.wait_for_terminal(2)
-        _emit("OBSERVER_REVIEW_REQUIRED")
+        try:
+            _emit(safe_start_failure_projection(error))
+        except Exception:
+            _emit({
+                "status": "OBSERVER_REVIEW_REQUIRED",
+                "failure_category": "READ_INTERNAL_FAILURE",
+                "failure_phase": "BOOTSTRAP",
+                "retryable": False,
+                "observed_at": None,
+                "read_attempt_count": 0,
+            })
         return 1
     finally:
         for signum, handler in previous.items():

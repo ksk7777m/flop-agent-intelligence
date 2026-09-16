@@ -1,5 +1,8 @@
 # Sonnet-2 Production Receipt Observer Supervisor
 
+Safe terminal failure categories and official long-poll handling are specified
+in [SONNET2_OBSERVER_FAILURE_DIAGNOSTICS.md](SONNET2_OBSERVER_FAILURE_DIAGNOSTICS.md).
+
 This package supplies a foreground-only, GET-only lifecycle around the existing
 Sonnet-2 production receipt observer. It is not a registration runner. It has no
 registration POST, signed GET, signer, identity loader, nonce allocator,

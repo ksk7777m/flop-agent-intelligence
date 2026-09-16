@@ -35,7 +35,9 @@ redacted ready signal, with interruptible pacing, hard read bounds, and no
 automatic restart. Its separately provisioned fixed child is available, but
 production launch and registration remain independent human approvals;
 registration remains `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing
-or external writes.
+or external writes. Fixed, redacted failure categories and official empty-read,
+`wait_held`, 429, and bounded GET retry semantics are documented in the
+[observer diagnostics boundary](docs/SONNET2_OBSERVER_FAILURE_DIAGNOSTICS.md).
 
 ## Collaboration Readiness V1
 
