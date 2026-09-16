@@ -56,6 +56,7 @@ MAX_RETRY_AFTER_SECONDS = 30
 SAFE_INTEGER_MAX = 9_007_199_254_740_991
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 RECEIPT_CHILD_BASENAME = "sonnet-registration-receipts"
+REGISTRATION_INTERVAL_CHILD_BASENAME = "sonnet-registration-live-interval"
 SESSION_LOCK_BASENAME = ".receipt-store.lock"
 CURSOR_PROGRESS_BASENAME = ".receipt-cursor.progress"
 LINEAGE_BINDING_SCHEMA = "sonnet-registration-observation-lineage.v1"
@@ -1717,18 +1718,81 @@ prepare_production_observation = _seal_restart_preparer()
 del _seal_restart_preparer
 
 
+def _seal_registration_interval_preparer() -> Callable[..., _ObservationRestartCapability]:
+    """Bind an explicit post-gap interval to its own pre-provisioned child."""
+    core = _prepare_restart_core
+    child_core = _open_receipt_child_core
+    child_basename = REGISTRATION_INTERVAL_CHILD_BASENAME
+    repository_root = REPOSITORY_ROOT
+    worktrees = _known_worktree_roots
+    filesystem_validator = _filesystem_is_local
+
+    def open_child(
+        private_runtime_root: Path | None, *, repository_roots: tuple[Path, ...],
+        filesystem_validator: Callable[[Path], bool],
+    ) -> _PrivateDirectoryCapability:
+        return child_core(
+            private_runtime_root, repository_roots=repository_roots,
+            filesystem_validator=filesystem_validator,
+            _child_basename=child_basename)
+
+    def prepare(
+        *, private_runtime_root: Path | None,
+    ) -> _ObservationRestartCapability:
+        # The first session lock is also the durable one-shot start marker for
+        # this dedicated interval.  Any existing lock means an attempt already
+        # began, even if it failed before the first checkpoint.
+        inspection = open_child(
+            private_runtime_root,
+            repository_roots=worktrees(repository_root),
+            filesystem_validator=filesystem_validator)
+        store: PrivateReceiptStore | None = None
+        try:
+            store = PrivateReceiptStore(inspection)
+            try:
+                store.acquire_session_lock(create=False)
+            except ReceiptObserverError as error:
+                if error.code != "EVIDENCE_LOCK_ABSENT":
+                    raise ReceiptObserverError(
+                        "REGISTRATION_INTERVAL_ALREADY_STARTED") from None
+            else:
+                raise ReceiptObserverError(
+                    "REGISTRATION_INTERVAL_ALREADY_STARTED")
+        finally:
+            if store is not None:
+                store.close()
+            else:
+                inspection.close()
+        capability = core(
+            private_runtime_root, clock=lambda: datetime.now(timezone.utc),
+            create_lock=True, _open_child=open_child,
+            _worktrees=worktrees, _repository_root=repository_root,
+            _filesystem_validator=filesystem_validator)
+        if capability.mode != NEW_OBSERVATION:
+            capability.close()
+            raise ReceiptObserverError("REGISTRATION_INTERVAL_ALREADY_STARTED")
+        return capability
+
+    return prepare
+
+
+prepare_production_registration_interval = _seal_registration_interval_preparer()
+del _seal_registration_interval_preparer
+
+
 class ReceiptObserver:
     """Bounded state machine for one fixed request; all network use is read-only."""
 
     __slots__ = ("_config", "_transport", "_store", "_verify",
                  "_trusted_classifier", "_clock", "_cursor", "_ready", "_reads",
-                 "_wait_not_held")
+                 "_wait_not_held", "_record_guard")
 
     def __init__(
         self, config: _Config, transport: Any, store: PrivateReceiptStore,
         signature_verifier: Callable[[str, str, str, str, str], None] | None,
         clock: Callable[[], datetime],
         trusted_classifier: Callable[[Mapping[str, Any]], Mapping[str, str]] | None = None,
+        record_guard: Callable[[list[dict[str, Any]], int], None] | None = None,
     ):
         _validate_config(config)
         if (signature_verifier is None) == (trusted_classifier is None):
@@ -1743,6 +1807,7 @@ class ReceiptObserver:
         self._ready = False
         self._reads = 0
         self._wait_not_held = False
+        self._record_guard = record_guard
 
     @property
     def ready(self) -> bool:
@@ -1903,6 +1968,8 @@ class ReceiptObserver:
         if generation != self._config.expected_generation:
             raise _read_error(
                 "READ_GENERATION_CHANGE", "POLL", code="GENERATION_CHANGED")
+        if self._record_guard is not None:
+            self._record_guard(records, generation)
         try:
             # Establish the immutable lineage at the pre-response cursor
             # before any receipt pair can be only partially archived.  This is
@@ -1924,6 +1991,8 @@ class ReceiptObserver:
                 exported = _parse_export(
                     export, expected_url=FixedReadonlyTransport.export_url(),
                     expected_generation=self._config.expected_generation)
+                if self._record_guard is not None:
+                    self._record_guard(exported, generation)
             except ReceiptObserverError:
                 raise _read_error("READ_EXPORT_FAILURE", "EXPORT") from None
             except Exception:
@@ -2255,7 +2324,8 @@ class _ProductionReceiptObserver:
         return "<fixed Sonnet receipt observer>"
 
 
-def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
+def _seal_production_factory() -> tuple[Callable[..., _ProductionReceiptObserver],
+                                        Callable[..., _ProductionReceiptObserver]]:
     config_type = _Config
     observer_type = ReceiptObserver
     production_type = _ProductionReceiptObserver
@@ -2293,10 +2363,11 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
             expected_generation, initial_since, observation_started_at, deadline,
             max_reads=maximum_reads)
 
-    def build(
+    def build_core(
         *, restart_capability: _ObservationRestartCapability,
         observed_generation: int | None = None,
         observed_cursor: int | None = None,
+        record_guard: Callable[[list[dict[str, Any]], int], None] | None = None,
     ) -> _ProductionReceiptObserver:
         """Consume one verified lineage; callers cannot inject saved bindings."""
         if not isinstance(restart_capability, restart_capability_type):
@@ -2323,16 +2394,46 @@ def _seal_production_factory() -> Callable[..., _ProductionReceiptObserver]:
                 observation_started_at=identity)
             core = observer_type(
                 config, transport_type(), store, None,
-                lambda: datetime.now(timezone.utc), trusted_classifier)
+                lambda: datetime.now(timezone.utc), trusted_classifier,
+                record_guard)
             return production_type(core, production_session)
         except BaseException:
             store.close()
             raise
 
-    return build
+    def build(
+        *, restart_capability: _ObservationRestartCapability,
+        observed_generation: int | None = None,
+        observed_cursor: int | None = None,
+    ) -> _ProductionReceiptObserver:
+        # Keep the fixed config/verifier visible in this sealed production
+        # closure for the existing audit surface; build_core consumes the same
+        # captured objects.
+        _fixed_audit_surface = (production_config, trusted_classifier)
+        return build_core(
+            restart_capability=restart_capability,
+            observed_generation=observed_generation,
+            observed_cursor=observed_cursor)
+
+    def build_guarded(
+        *, restart_capability: _ObservationRestartCapability,
+        observed_generation: int | None = None,
+        observed_cursor: int | None = None,
+        record_guard: Callable[[list[dict[str, Any]], int], None],
+    ) -> _ProductionReceiptObserver:
+        if not callable(record_guard):
+            raise ReceiptObserverError("RECORD_GUARD_INVALID")
+        return build_core(
+            restart_capability=restart_capability,
+            observed_generation=observed_generation,
+            observed_cursor=observed_cursor,
+            record_guard=record_guard)
+
+    return build, build_guarded
 
 
-build_production_receipt_observer = _seal_production_factory()
+(build_production_receipt_observer,
+ _build_guarded_production_receipt_observer) = _seal_production_factory()
 del _seal_production_factory
 
 
@@ -2340,6 +2441,9 @@ def _build_receipt_observer_for_test(
     *, config: _Config, transport: Any, store: PrivateReceiptStore,
     signature_verifier: Callable[[str, str, str, str, str], None],
     clock: Callable[[], datetime],
+    record_guard: Callable[[list[dict[str, Any]], int], None] | None = None,
 ) -> ReceiptObserver:
     """Fixture-only seam; production protocol bindings remain sealed."""
-    return ReceiptObserver(config, transport, store, signature_verifier, clock)
+    return ReceiptObserver(
+        config, transport, store, signature_verifier, clock,
+        record_guard=record_guard)

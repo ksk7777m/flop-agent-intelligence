@@ -38,6 +38,12 @@ registration remains `REGISTRATION_WRITE_APPROVAL_REQUIRED` with zero signing
 or external writes. Fixed, redacted failure categories and official empty-read,
 `wait_held`, 429, and bounded GET retry semantics are documented in the
 [observer diagnostics boundary](docs/SONNET2_OBSERVER_FAILURE_DIAGNOSTICS.md).
+After an unresolved historical gap, the
+[attended registration boundary](docs/SONNET2_ATTENDED_REGISTRATION.md) keeps
+the old evidence immutable, uses a separately provisioned one-shot interval,
+and joins READY/liveness, local human approval, the durable handoff, and receipt
+reconciliation in one foreground process. It remains inactive until that child
+is provisioned and a human separately authorizes the production run.
 
 ## Collaboration Readiness V1
 

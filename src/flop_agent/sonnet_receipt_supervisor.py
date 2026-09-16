@@ -25,7 +25,9 @@ TERMINAL_STATUSES = frozenset({
 })
 
 
-def _parse_highwater(read: receipt_observer.HttpRead) -> tuple[int, int]:
+def _parse_highwater_details(
+    read: receipt_observer.HttpRead,
+) -> tuple[int, int, list[dict[str, Any]]]:
     """Validate the unsigned deployment fields needed to begin observation."""
     expected_url = receipt_observer.FixedReadonlyTransport.highwater_url()
     if read.status_code == 400:
@@ -87,7 +89,12 @@ def _parse_highwater(read: receipt_observer.HttpRead) -> tuple[int, int]:
     if records and records[-1]["seq"] != value["last_seq"]:
         raise receipt_observer._read_error(
             "READ_CURSOR_REGRESSION", "BOOTSTRAP")
-    return value["generation"], value["last_seq"]
+    return value["generation"], value["last_seq"], records
+
+
+def _parse_highwater(read: receipt_observer.HttpRead) -> tuple[int, int]:
+    generation, cursor, _records = _parse_highwater_details(read)
+    return generation, cursor
 
 
 def _terminal_status(result: receipt_observer.ObserverResult) -> str:
@@ -226,6 +233,7 @@ class _ProductionSupervisor:
     __slots__ = (
         "_private_runtime_root", "_transport_factory", "_observer_factory",
         "_restart_factory", "_clock", "_monotonic", "_waiter", "_started",
+        "_bootstrap_inventory_guard",
     )
 
     def __init__(
@@ -235,6 +243,8 @@ class _ProductionSupervisor:
         restart_factory: Callable[..., Any],
         clock: Callable[[], datetime], monotonic: Callable[[], float],
         waiter: Callable[[threading.Event, float], bool],
+        bootstrap_inventory_guard: (
+            Callable[[list[dict[str, Any]], int], None] | None) = None,
     ) -> None:
         object.__setattr__(self, "_private_runtime_root", private_runtime_root)
         object.__setattr__(self, "_transport_factory", transport_factory)
@@ -243,6 +253,8 @@ class _ProductionSupervisor:
         object.__setattr__(self, "_clock", clock)
         object.__setattr__(self, "_monotonic", monotonic)
         object.__setattr__(self, "_waiter", waiter)
+        object.__setattr__(
+            self, "_bootstrap_inventory_guard", bootstrap_inventory_guard)
         object.__setattr__(self, "_started", False)
 
     def __setattr__(self, _name: str, _value: Any) -> None:
@@ -324,7 +336,8 @@ class _ProductionSupervisor:
                         raise receipt_observer._read_error(
                             "READ_HTTP_429", "BOOTSTRAP", retryable=True,
                             http_status=429, retry_after=int(values[0]))
-                    generation, cursor = _parse_highwater(read)
+                    generation, cursor, highwater_records = (
+                        _parse_highwater_details(read))
                     break
                 except receipt_observer.ReceiptObserverError as error:
                     if stop_event.is_set():
@@ -360,6 +373,32 @@ class _ProductionSupervisor:
                     if self._waiter(stop_event, delay):
                         raise receipt_observer.ReceiptObserverError(
                             "SUPERVISOR_STOPPED") from None
+            if self._bootstrap_inventory_guard is not None:
+                pacing = max(
+                    0.0, receipt_observer.SUPERVISOR_MIN_POLL_SECONDS
+                    - (self._monotonic() - (last_request_started
+                                             or started_monotonic)))
+                remaining = (started_monotonic
+                             + receipt_observer.SUPERVISOR_MAX_WALL_SECONDS
+                             - self._monotonic())
+                if remaining <= pacing + receipt_observer.HTTP_TIMEOUT_SECONDS:
+                    raise receipt_observer._read_error(
+                        "READ_NETWORK_TIMEOUT", "BOOTSTRAP")
+                if pacing and self._waiter(stop_event, pacing):
+                    raise receipt_observer.ReceiptObserverError(
+                        "SUPERVISOR_STOPPED") from None
+                if stop_event.is_set():
+                    raise receipt_observer.ReceiptObserverError(
+                        "SUPERVISOR_STOPPED")
+                last_request_started = self._monotonic()
+                exported = receipt_observer._parse_export(
+                    transport.read_export(),
+                    expected_url=receipt_observer.FixedReadonlyTransport.export_url(),
+                    expected_generation=generation)
+                # Check both the authoritative high-water record and the full
+                # retained export before a READY-capable observer is built.
+                self._bootstrap_inventory_guard(highwater_records, generation)
+                self._bootstrap_inventory_guard(exported, generation)
         except BaseException as error:
             primary_error = error
             restart_capability.close()
