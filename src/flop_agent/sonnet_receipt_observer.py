@@ -380,6 +380,64 @@ def _config_lineage_binding_sha256(config: _Config) -> str:
         manifest_sha256=config.manifest_sha256)
 
 
+def _validate_restart_payloads(
+    checkpoint_raw: bytes, progress_raw: bytes | None, *,
+    request_reference_sha256: str, lineage_binding_sha256: str,
+) -> dict[str, Any]:
+    """Apply the shared P0.5 semantic checks to already bounded payloads."""
+    checkpoint = _json_object(
+        checkpoint_raw, code="EVIDENCE_CHECKPOINT_INVALID")
+    if checkpoint.get("schema") == "sonnet-registration-receipt-checkpoint.v1":
+        raise ReceiptObserverError("LEGACY_CHECKPOINT_LINEAGE_UNVERIFIED")
+    if (set(checkpoint) != _CHECKPOINT_FIELDS
+            or checkpoint.get("schema")
+            != "sonnet-registration-receipt-checkpoint.v2"
+            or checkpoint.get("contest_id") != CONTEST_ID
+            or checkpoint.get("room") != ROOM
+            or checkpoint.get("request_reference_sha256")
+            != request_reference_sha256
+            or checkpoint.get("lineage_binding_sha256")
+            != lineage_binding_sha256
+            or type(checkpoint.get("generation")) is not int
+            or not 1 <= checkpoint["generation"] <= SAFE_INTEGER_MAX
+            or type(checkpoint.get("cursor")) is not int
+            or not 0 <= checkpoint["cursor"] <= SAFE_INTEGER_MAX
+            or type(checkpoint.get("observation_started_at")) is not str):
+        raise ReceiptObserverError("CHECKPOINT_RESTART_BINDING_INVALID")
+    try:
+        started = datetime.fromisoformat(
+            checkpoint["observation_started_at"].replace("Z", "+00:00"))
+        _utc(started)
+    except (ValueError, ReceiptObserverError):
+        raise ReceiptObserverError(
+            "CHECKPOINT_RESTART_BINDING_INVALID") from None
+    if progress_raw is not None:
+        progress = _json_object(
+            progress_raw, code="CHECKPOINT_RESTART_BINDING_INVALID")
+        if progress.get("schema") == "sonnet-registration-receipt-progress.v1":
+            raise ReceiptObserverError("LEGACY_CHECKPOINT_LINEAGE_UNVERIFIED")
+        if (set(progress) != _PROGRESS_FIELDS
+                or progress.get("schema")
+                != "sonnet-registration-receipt-progress.v2"
+                or progress.get("request_reference_sha256")
+                != checkpoint["request_reference_sha256"]
+                or progress.get("lineage_binding_sha256")
+                != checkpoint["lineage_binding_sha256"]
+                or progress.get("contest_id") != checkpoint["contest_id"]
+                or progress.get("room") != checkpoint["room"]
+                or type(progress.get("generation")) is not int
+                or progress["generation"] != checkpoint["generation"]
+                or type(progress.get("cursor")) is not int
+                or not checkpoint["cursor"] <= progress["cursor"]
+                <= SAFE_INTEGER_MAX
+                or progress.get("observation_started_at")
+                != checkpoint["observation_started_at"]):
+            raise ReceiptObserverError("CHECKPOINT_RESTART_BINDING_INVALID")
+        checkpoint = dict(checkpoint)
+        checkpoint["cursor"] = progress["cursor"]
+    return checkpoint
+
+
 _PRODUCTION_LINEAGE_BINDING_SHA256 = _lineage_binding_sha256(
     contest_id=CONTEST_ID, origin=OFFICIAL_ORIGIN, room=ROOM,
     request_id=registration.REQUEST_ID,
@@ -1389,59 +1447,13 @@ class PrivateReceiptStore:
         raw = self._read(name, MAX_PAGE_BYTES)
         if hashlib.sha256(raw).hexdigest() != digest:
             raise ReceiptObserverError("EVIDENCE_DIGEST_MISMATCH")
-        checkpoint = _json_object(raw, code="EVIDENCE_CHECKPOINT_INVALID")
-        if checkpoint.get("schema") == "sonnet-registration-receipt-checkpoint.v1":
-            raise ReceiptObserverError("LEGACY_CHECKPOINT_LINEAGE_UNVERIFIED")
-        if (set(checkpoint) != _CHECKPOINT_FIELDS
-                or checkpoint.get("schema")
-                != "sonnet-registration-receipt-checkpoint.v2"
-                or checkpoint.get("contest_id") != CONTEST_ID
-                or checkpoint.get("room") != ROOM
-                or checkpoint.get("request_reference_sha256")
-                != request_reference_sha256
-                or checkpoint.get("lineage_binding_sha256")
-                != lineage_binding_sha256
-                or type(checkpoint.get("generation")) is not int
-                or not 1 <= checkpoint["generation"] <= SAFE_INTEGER_MAX
-                or type(checkpoint.get("cursor")) is not int
-                or not 0 <= checkpoint["cursor"] <= SAFE_INTEGER_MAX
-                or type(checkpoint.get("observation_started_at")) is not str):
-            raise ReceiptObserverError(
-                "CHECKPOINT_RESTART_BINDING_INVALID")
-        try:
-            started = datetime.fromisoformat(
-                checkpoint["observation_started_at"].replace("Z", "+00:00"))
-            _utc(started)
-        except (ValueError, ReceiptObserverError):
-            raise ReceiptObserverError(
-                "CHECKPOINT_RESTART_BINDING_INVALID") from None
+        progress_raw = None
         if progress_present:
             progress_raw = self._read(CURSOR_PROGRESS_BASENAME, MAX_PAGE_BYTES)
-            progress = _json_object(
-                progress_raw, code="CHECKPOINT_RESTART_BINDING_INVALID")
-            if progress.get("schema") == "sonnet-registration-receipt-progress.v1":
-                raise ReceiptObserverError("LEGACY_CHECKPOINT_LINEAGE_UNVERIFIED")
-            if (set(progress) != _PROGRESS_FIELDS
-                    or progress.get("schema")
-                    != "sonnet-registration-receipt-progress.v2"
-                    or progress.get("request_reference_sha256")
-                    != checkpoint["request_reference_sha256"]
-                    or progress.get("lineage_binding_sha256")
-                    != checkpoint["lineage_binding_sha256"]
-                    or progress.get("contest_id") != checkpoint["contest_id"]
-                    or progress.get("room") != checkpoint["room"]
-                    or type(progress.get("generation")) is not int
-                    or progress["generation"] != checkpoint["generation"]
-                    or type(progress.get("cursor")) is not int
-                    or not checkpoint["cursor"] <= progress["cursor"]
-                    <= SAFE_INTEGER_MAX
-                    or progress.get("observation_started_at")
-                    != checkpoint["observation_started_at"]):
-                raise ReceiptObserverError(
-                    "CHECKPOINT_RESTART_BINDING_INVALID")
-            checkpoint = dict(checkpoint)
-            checkpoint["cursor"] = progress["cursor"]
-        return checkpoint
+        return _validate_restart_payloads(
+            raw, progress_raw,
+            request_reference_sha256=request_reference_sha256,
+            lineage_binding_sha256=lineage_binding_sha256)
 
     def load(self) -> list[tuple[dict[str, Any], dict[str, Any], bytes]]:
         root_fd = self._check_root()

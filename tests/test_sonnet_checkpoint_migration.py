@@ -89,6 +89,18 @@ class MigrationTests(unittest.TestCase):
             _worktrees=lambda _root: (observer.REPOSITORY_ROOT,),
             _filesystem_validator=lambda _path: True, _fault=fault)
 
+    def seal(self, plan):
+        return migration._seal_migration_review_core(
+            plan,
+            _worktrees=lambda _root: (observer.REPOSITORY_ROOT,),
+            _filesystem_validator=lambda _path: True)
+
+    def load_sealed(self):
+        return migration._load_sealed_migration_core(
+            self.root,
+            _worktrees=lambda _root: (observer.REPOSITORY_ROOT,),
+            _filesystem_validator=lambda _path: True)
+
     def verify_v2(self, expected_cursor):
         store = observer.PrivateReceiptStore(self.child)
         try:
@@ -238,14 +250,26 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse((self.child / migration.TRANSACTION_MARKER).exists())
 
     def test_every_precommit_fault_boundary_is_fail_closed_and_unlocks(self):
-        stages = (
-            "before_archive_checkpoint", "after_archive_checkpoint",
-            "before_archive_progress", "after_archive_progress",
-            "before_archive_manifest", "after_archive_manifest",
-            "before_transaction_marker", "after_transaction_marker",
-            "before_stage_checkpoint", "after_stage_checkpoint",
-            "before_stage_progress", "after_stage_progress",
+        write_stages = (
+            "archive_checkpoint", "archive_progress", "archive_manifest",
+            "transaction_marker", "stage_checkpoint", "stage_progress",
+        )
+        stages = tuple(
+            item
+            for stage in write_stages
+            for item in (
+                f"before_{stage}", f"after_{stage}_write",
+                f"before_{stage}_file_fsync", f"after_{stage}_file_fsync",
+                f"after_{stage}_reread",
+                f"before_{stage}_directory_fsync", f"after_{stage}",
+            )
+        ) + (
             "before_switch_checkpoint", "after_switch_checkpoint",
+            "before_checkpoint_unlink", "after_checkpoint_unlink",
+            "before_checkpoint_rename", "after_checkpoint_rename",
+            "before_progress_rename", "after_progress_rename",
+            "before_switch_directory_fsync",
+            "after_switch_directory_fsync",
             "before_marker_remove",
         )
         for stage in stages:
@@ -340,6 +364,81 @@ class MigrationTests(unittest.TestCase):
             {item.name: item.read_bytes() for item in self.archive.iterdir()},
             archive_before)
 
+    def test_review_seal_binds_cross_process_target_and_apply_removes_guard(self):
+        self.assertEqual(
+            dict(self.seal(self.prepare())),
+            {"status": "LEGACY_MIGRATION_REVIEW_SEALED"})
+        self.assertTrue((self.child / migration.REVIEW_RECORD).exists())
+        verifier = observer.PrivateReceiptStore(self.child)
+        try:
+            with self.assertRaisesRegex(
+                    observer.ReceiptObserverError,
+                    "EVIDENCE_UNKNOWN_ARTIFACT"):
+                verifier.load_restart_checkpoint(
+                    request_reference_sha256=self.reference(),
+                    lineage_binding_sha256=
+                        observer._PRODUCTION_LINEAGE_BINDING_SHA256)
+        finally:
+            verifier.close()
+        self.apply(self.load_sealed())
+        self.assertFalse((self.child / migration.REVIEW_RECORD).exists())
+        self.verify_v2(10)
+
+    def test_sealed_target_change_and_unsealed_production_apply_are_rejected(self):
+        with self.assertRaisesRegex(
+                migration.MigrationError,
+                "LEGACY_MIGRATION_REVIEW_REQUIRED"):
+            migration._apply_prepared_migration(self.prepare())
+        self.seal(self.prepare())
+        path = next(self.child.glob("*.checkpoint"))
+        path.write_bytes(path.read_bytes() + b"x")
+        os.chmod(path, 0o600)
+        with self.assertRaisesRegex(
+                migration.MigrationError, "LEGACY_MIGRATION_TARGET_CHANGED"):
+            self.load_sealed()
+        self.assertEqual(list(self.archive.iterdir()), [])
+
+    def test_semantic_failure_keeps_commit_guard(self):
+        plan = self.prepare()
+        with mock.patch.object(
+                observer, "_validate_restart_payloads",
+                side_effect=observer.ReceiptObserverError(
+                    "CHECKPOINT_RESTART_BINDING_INVALID")):
+            with self.assertRaisesRegex(
+                    migration.MigrationError, "LEGACY_MIGRATION_FINAL_INVALID"):
+                self.apply(plan)
+        self.assertTrue((self.child / migration.TRANSACTION_MARKER).exists())
+
+    def test_fault_after_transaction_marker_removal_keeps_review_guard(self):
+        self.seal(self.prepare())
+        plan = self.load_sealed()
+        def fault(stage):
+            if stage == "after_marker_remove":
+                raise RuntimeError("fixture fault")
+        with self.assertRaises(RuntimeError):
+            self.apply(plan, fault=fault)
+        self.assertTrue((self.child / migration.REVIEW_RECORD).exists())
+        verifier = observer.PrivateReceiptStore(self.child)
+        try:
+            with self.assertRaises(observer.ReceiptObserverError):
+                verifier.load_restart_checkpoint(
+                    request_reference_sha256=self.reference(),
+                    lineage_binding_sha256=
+                        observer._PRODUCTION_LINEAGE_BINDING_SHA256)
+        finally:
+            verifier.close()
+
+    def test_fault_after_review_guard_removal_leaves_valid_v2(self):
+        self.seal(self.prepare())
+        plan = self.load_sealed()
+        def fault(stage):
+            if stage == "after_review_remove":
+                raise RuntimeError("fixture fault")
+        with self.assertRaises(RuntimeError):
+            self.apply(plan, fault=fault)
+        self.assertFalse((self.child / migration.REVIEW_RECORD).exists())
+        self.verify_v2(10)
+
     def test_owner_mismatch_is_rejected_without_writes(self):
         before_child = sorted(item.name for item in self.child.iterdir())
         before_archive = sorted(item.name for item in self.archive.iterdir())
@@ -397,6 +496,9 @@ class MigrationTests(unittest.TestCase):
             json.loads(output.getvalue()),
             {"status": "LEGACY_MIGRATION_INTERNAL_FAILURE"})
         self.assertNotIn("private fixture detail", output.getvalue())
+        with mock.patch.object(sys, "argv", [str(script), "--invalid"]):
+            with mock.patch("builtins.print", side_effect=BrokenPipeError):
+                self.assertEqual(module.main(), 2)
 
 
 if __name__ == "__main__":

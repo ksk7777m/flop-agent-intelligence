@@ -25,6 +25,7 @@ ARCHIVE_CHECKPOINT = "legacy.checkpoint"
 ARCHIVE_PROGRESS = "legacy.progress"
 ARCHIVE_MANIFEST = "migration.archive.json"
 TRANSACTION_MARKER = ".checkpoint-migration.transaction"
+REVIEW_RECORD = ".checkpoint-migration.review"
 STAGED_CHECKPOINT = ".tmp-checkpoint-migration-v2"
 STAGED_PROGRESS = ".tmp-progress-migration-v2"
 MAX_ARTIFACT_BYTES = observer.MAX_PAGE_BYTES
@@ -35,6 +36,7 @@ CHECKPOINT_V2_SCHEMA = "sonnet-registration-receipt-checkpoint.v2"
 PROGRESS_V2_SCHEMA = "sonnet-registration-receipt-progress.v2"
 MARKER_SCHEMA = "sonnet-registration-checkpoint-migration.v1"
 ARCHIVE_SCHEMA = "sonnet-registration-checkpoint-archive.v1"
+REVIEW_SCHEMA = "sonnet-registration-checkpoint-review.v1"
 
 _LEGACY_FIELDS = frozenset({
     "schema", "request_reference_sha256", "contest_id", "room",
@@ -134,7 +136,7 @@ def _validate_legacy(
 
 
 def _read_legacy_inventory(
-    store: observer.PrivateReceiptStore,
+    store: observer.PrivateReceiptStore, *, allow_review: bool = False,
 ) -> tuple[str, bytes, dict[str, Any], bytes | None, dict[str, Any] | None]:
     root_fd = store._check_root()
     try:
@@ -145,6 +147,8 @@ def _read_legacy_inventory(
     progress_present = False
     for name in names:
         if name == observer.SESSION_LOCK_BASENAME:
+            continue
+        if allow_review and name == REVIEW_RECORD:
             continue
         if name == observer.CURSOR_PROGRESS_BASENAME:
             progress_present = True
@@ -194,6 +198,49 @@ def _read_legacy_inventory(
         raise
     except observer.ReceiptObserverError:
         raise MigrationError("LEGACY_MIGRATION_STORAGE_INVALID") from None
+
+
+def _review_bytes(checkpoint_digest: str, progress_digest: str | None) -> bytes:
+    return _canonical({
+        "schema": REVIEW_SCHEMA,
+        "checkpoint_sha256": checkpoint_digest,
+        "progress_sha256": progress_digest,
+        "lineage_binding_sha256":
+            observer._PRODUCTION_LINEAGE_BINDING_SHA256,
+    })
+
+
+def _read_review(
+    store: observer.PrivateReceiptStore,
+) -> tuple[str, str | None]:
+    try:
+        store._validate_artifact_file(REVIEW_RECORD, MAX_ARTIFACT_BYTES)
+        raw = store._read(REVIEW_RECORD, MAX_ARTIFACT_BYTES)
+        value = observer._json_object(
+            raw, code="LEGACY_MIGRATION_REVIEW_INVALID")
+    except observer.ReceiptObserverError:
+        raise MigrationError("LEGACY_MIGRATION_REVIEW_INVALID") from None
+    expected_fields = {
+        "schema", "checkpoint_sha256", "progress_sha256",
+        "lineage_binding_sha256",
+    }
+    checkpoint_digest = value.get("checkpoint_sha256")
+    progress_digest = value.get("progress_sha256")
+    if (set(value) != expected_fields or value.get("schema") != REVIEW_SCHEMA
+            or type(checkpoint_digest) is not str
+            or len(checkpoint_digest) != 64
+            or any(item not in "0123456789abcdef"
+                   for item in checkpoint_digest)
+            or (progress_digest is not None
+                and (type(progress_digest) is not str
+                     or len(progress_digest) != 64
+                     or any(item not in "0123456789abcdef"
+                            for item in progress_digest)))
+            or value.get("lineage_binding_sha256")
+            != observer._PRODUCTION_LINEAGE_BINDING_SHA256
+            or raw != _review_bytes(checkpoint_digest, progress_digest)):
+        raise MigrationError("LEGACY_MIGRATION_REVIEW_INVALID")
+    return checkpoint_digest, progress_digest
 
 
 def _open_stores(
@@ -287,6 +334,82 @@ def _prepare_migration_core(
         _close_stores(active, archive, primary=primary)
 
 
+def _seal_migration_review_core(
+    plan: _MigrationPlan, *,
+    _worktrees: Callable[[Path], tuple[Path, ...]] = observer._known_worktree_roots,
+    _repository_root: Path = observer.REPOSITORY_ROOT,
+    _filesystem_validator: Callable[[Path], bool] = observer._filesystem_is_local,
+) -> Mapping[str, str]:
+    if not isinstance(plan, _MigrationPlan):
+        raise MigrationError("LEGACY_MIGRATION_PLAN_INVALID")
+    root, expected_checkpoint, expected_progress, status = plan._consume()
+    if status != "LEGACY_MIGRATION_PREPARED" or expected_checkpoint is None:
+        raise MigrationError("LEGACY_MIGRATION_PLAN_INVALID")
+    active = archive = None
+    primary = None
+    try:
+        active, archive = _open_stores(
+            root, worktrees=_worktrees, repository_root=_repository_root,
+            filesystem_validator=_filesystem_validator)
+        active.acquire_session_lock(create=False)
+        if _archive_inventory(archive):
+            raise MigrationError("LEGACY_MIGRATION_ARCHIVE_NOT_EMPTY")
+        _name, checkpoint_raw, _checkpoint, progress_raw, _progress = (
+            _read_legacy_inventory(active))
+        if (hashlib.sha256(checkpoint_raw).hexdigest() != expected_checkpoint
+                or (None if progress_raw is None
+                    else hashlib.sha256(progress_raw).hexdigest())
+                != expected_progress):
+            raise MigrationError("LEGACY_MIGRATION_TARGET_CHANGED")
+        _write_exclusive(
+            active, REVIEW_RECORD,
+            _review_bytes(expected_checkpoint, expected_progress),
+            lambda _stage: None, "review_record")
+        return MappingProxyType({"status": "LEGACY_MIGRATION_REVIEW_SEALED"})
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        _close_stores(active, archive, primary=primary)
+
+
+def _load_sealed_migration_core(
+    root: Path, *,
+    _worktrees: Callable[[Path], tuple[Path, ...]] = observer._known_worktree_roots,
+    _repository_root: Path = observer.REPOSITORY_ROOT,
+    _filesystem_validator: Callable[[Path], bool] = observer._filesystem_is_local,
+) -> _MigrationPlan:
+    active = archive = None
+    primary = None
+    try:
+        active, archive = _open_stores(
+            root, worktrees=_worktrees, repository_root=_repository_root,
+            filesystem_validator=_filesystem_validator)
+        active.acquire_session_lock(create=False)
+        if _archive_inventory(archive):
+            raise MigrationError("LEGACY_MIGRATION_ARCHIVE_NOT_EMPTY")
+        expected_checkpoint, expected_progress = _read_review(active)
+        try:
+            _name, checkpoint_raw, _checkpoint, progress_raw, _progress = (
+                _read_legacy_inventory(active, allow_review=True))
+        except MigrationError:
+            raise MigrationError("LEGACY_MIGRATION_TARGET_CHANGED") from None
+        if (hashlib.sha256(checkpoint_raw).hexdigest() != expected_checkpoint
+                or (None if progress_raw is None
+                    else hashlib.sha256(progress_raw).hexdigest())
+                != expected_progress):
+            raise MigrationError("LEGACY_MIGRATION_TARGET_CHANGED")
+        return _MigrationPlan(
+            root, checkpoint_digest=expected_checkpoint,
+            progress_digest=expected_progress,
+            status="LEGACY_MIGRATION_REVIEW_SEALED")
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        _close_stores(active, archive, primary=primary)
+
+
 def _write_exclusive(
     store: observer.PrivateReceiptStore, name: str, raw: bytes,
     fault: Callable[[str], None], stage: str,
@@ -304,7 +427,10 @@ def _write_exclusive(
             if written <= 0:
                 raise OSError
             view = view[written:]
+        fault(f"after_{stage}_write")
+        fault(f"before_{stage}_file_fsync")
         os.fsync(descriptor)
+        fault(f"after_{stage}_file_fsync")
         info = os.fstat(descriptor)
         if (not stat.S_ISREG(info.st_mode)
                 or stat.S_IMODE(info.st_mode) != 0o600
@@ -317,6 +443,8 @@ def _write_exclusive(
             os.close(descriptor)
     if store._read(name, len(raw)) != raw:
         raise MigrationError("LEGACY_MIGRATION_WRITE_FAILED")
+    fault(f"after_{stage}_reread")
+    fault(f"before_{stage}_directory_fsync")
     os.fsync(root_fd)
     fault(f"after_{stage}")
 
@@ -347,7 +475,10 @@ def _apply_migration_core(
     if not isinstance(plan, _MigrationPlan):
         raise MigrationError("LEGACY_MIGRATION_PLAN_INVALID")
     root, expected_checkpoint, expected_progress, status = plan._consume()
-    if status != "LEGACY_MIGRATION_PREPARED":
+    sealed = status == "LEGACY_MIGRATION_REVIEW_SEALED"
+    if status not in {
+            "LEGACY_MIGRATION_PREPARED",
+            "LEGACY_MIGRATION_REVIEW_SEALED"}:
         raise MigrationError("LEGACY_MIGRATION_PLAN_INVALID")
     active = archive = None
     primary = None
@@ -358,8 +489,16 @@ def _apply_migration_core(
         active.acquire_session_lock(create=False)
         if _archive_inventory(archive):
             raise MigrationError("LEGACY_MIGRATION_ARCHIVE_NOT_EMPTY")
-        checkpoint_name, checkpoint_raw, checkpoint, progress_raw, progress = (
-            _read_legacy_inventory(active))
+        if sealed and _read_review(active) != (
+                expected_checkpoint, expected_progress):
+            raise MigrationError("LEGACY_MIGRATION_REVIEW_INVALID")
+        try:
+            checkpoint_name, checkpoint_raw, checkpoint, progress_raw, progress = (
+                _read_legacy_inventory(active, allow_review=sealed))
+        except MigrationError:
+            if sealed:
+                raise MigrationError("LEGACY_MIGRATION_TARGET_CHANGED") from None
+            raise
         if (hashlib.sha256(checkpoint_raw).hexdigest() != expected_checkpoint
                 or (None if progress_raw is None
                     else hashlib.sha256(progress_raw).hexdigest())
@@ -418,15 +557,23 @@ def _apply_migration_core(
                 raise MigrationError("LEGACY_MIGRATION_TARGET_CHANGED")
         _fault("before_switch_checkpoint")
         try:
+            _fault("before_checkpoint_unlink")
             os.unlink(checkpoint_name, dir_fd=active_fd)
+            _fault("after_checkpoint_unlink")
+            _fault("before_checkpoint_rename")
             os.rename(
                 STAGED_CHECKPOINT, checkpoint_v2_name,
                 src_dir_fd=active_fd, dst_dir_fd=active_fd)
+            _fault("after_checkpoint_rename")
             if progress_v2 is not None:
+                _fault("before_progress_rename")
                 os.rename(
                     STAGED_PROGRESS, observer.CURSOR_PROGRESS_BASENAME,
                     src_dir_fd=active_fd, dst_dir_fd=active_fd)
+                _fault("after_progress_rename")
+            _fault("before_switch_directory_fsync")
             os.fsync(active_fd)
+            _fault("after_switch_directory_fsync")
         except OSError:
             raise MigrationError("LEGACY_MIGRATION_SWITCH_FAILED") from None
         _fault("after_switch_checkpoint")
@@ -437,6 +584,21 @@ def _apply_migration_core(
                 and active._read(observer.CURSOR_PROGRESS_BASENAME,
                                  len(progress_v2)) != progress_v2):
             raise MigrationError("LEGACY_MIGRATION_FINAL_INVALID")
+        try:
+            verified = observer._validate_restart_payloads(
+                checkpoint_v2, progress_v2,
+                request_reference_sha256=_request_reference(),
+                lineage_binding_sha256=
+                    observer._PRODUCTION_LINEAGE_BINDING_SHA256)
+        except observer.ReceiptObserverError:
+            raise MigrationError("LEGACY_MIGRATION_FINAL_INVALID") from None
+        if (verified["generation"] != checkpoint["generation"]
+                or verified["observation_started_at"]
+                != checkpoint["observation_started_at"]
+                or verified["cursor"]
+                != (checkpoint["cursor"] if progress is None
+                    else progress["cursor"])):
+            raise MigrationError("LEGACY_MIGRATION_FINAL_INVALID")
         _fault("before_marker_remove")
         try:
             os.unlink(TRANSACTION_MARKER, dir_fd=active_fd)
@@ -444,6 +606,15 @@ def _apply_migration_core(
         except OSError:
             raise MigrationError("LEGACY_MIGRATION_COMMIT_FAILED") from None
         _fault("after_marker_remove")
+
+        if sealed:
+            _fault("before_review_remove")
+            try:
+                os.unlink(REVIEW_RECORD, dir_fd=active_fd)
+                os.fsync(active_fd)
+            except OSError:
+                raise MigrationError("LEGACY_MIGRATION_COMMIT_FAILED") from None
+            _fault("after_review_remove")
 
         loaded = active.load_restart_checkpoint(
             request_reference_sha256=_request_reference(),
@@ -469,8 +640,20 @@ def _prepare_migration_at_fixed_root(root: Path) -> _MigrationPlan:
     return _prepare_migration_core(root)
 
 
+def _seal_migration_review(plan: _MigrationPlan) -> Mapping[str, str]:
+    """Durably bind a separately authorized review to one private target."""
+    return _seal_migration_review_core(plan)
+
+
+def _load_sealed_migration_at_fixed_root(root: Path) -> _MigrationPlan:
+    """Load only the exact target fixed by the private review record."""
+    return _load_sealed_migration_core(root)
+
+
 def _apply_prepared_migration(plan: _MigrationPlan) -> Mapping[str, str]:
-    """Consume only a plan minted by the fixed read-only preparation."""
+    """Consume only a target fixed by the separate review-seal mode."""
+    if plan.status != "LEGACY_MIGRATION_REVIEW_SEALED":
+        raise MigrationError("LEGACY_MIGRATION_REVIEW_REQUIRED")
     return _apply_migration_core(plan)
 
 

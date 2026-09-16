@@ -3,7 +3,8 @@
 This package implements a separately invoked, one-shot migration from the
 legacy v1 observation checkpoint to the P0.5 v2 full-lineage format.  Import,
 normal observer startup, and the default command do not migrate anything.
-Production execution remains separately authorized.
+Production execution remains separately authorized.  The read-only prepare,
+private review sealing, and apply operations are three distinct modes.
 
 ## Evidence boundary
 
@@ -39,6 +40,33 @@ Request reference, contest, room, generation, checkpoint cursor, latest
 durable progress cursor, and persistent observation identity remain exact.
 No value is guessed, normalized, reset, or regenerated.
 
+## Prepare and target fixation
+
+The default entry point is read-only.  It validates the current legacy target
+and reports only a fixed status; its in-memory plan intentionally expires with
+the process.  A later apply must not treat a newly selected valid target as the
+one a human reviewed.  Therefore a separately authorized `--seal-review` mode
+revalidates the target under the session lock and exclusively writes one fixed
+private review record in the active child.  The record contains only internal
+digests and the sealed lineage digest, is mode `0600`, and is never printed or
+accepted through argv or environment values.
+
+The review record is an unknown artifact to the normal observer, so observation
+remains fail-closed between review sealing and apply.  `--apply` loads that
+record, requires the exact checkpoint bytes, progress presence and bytes,
+lineage, empty archive, and inventory to match, and then revalidates once more
+immediately before switching.  Apply cannot consume an ordinary read-only
+prepare plan.  The review record is an owner-managed local correlation record,
+not a signature or cryptographic execution attestation.
+
+Generated v2 checkpoint and progress payloads pass the same P0.5 semantic
+validation core before either commit guard is removed.  The transaction marker
+is removed first; the review record continues to block normal observation.
+Only after semantic validation and durable switching is the review record
+removed and its directory fsynced.  A crash between guard removals therefore
+remains fail-closed, while a crash after the final guard removal leaves the
+already validated v2 state.
+
 ## Crash behavior
 
 There is no automatic rollback or recovery.  A failure before the transaction
@@ -51,7 +79,7 @@ rejected because the archive is no longer empty or the active inventory is not
 exactly one v1 checkpoint plus optional v1 progress.
 
 The fixed archive child must be provisioned in a future, separately authorized
-operation before production preparation.  A later authorization must cover
-read-only preparation first, exact target review, and only then the dedicated
-`--apply` mode.  Successful migration does not start an observer, contact
-Technocore, sign, register, or create a new request identifier.
+operation before production preparation.  Later authorizations must separately
+cover read-only preparation, `--seal-review`, and only then `--apply`.
+Successful migration does not start an observer, contact Technocore, sign,
+register, or create a new request identifier.
