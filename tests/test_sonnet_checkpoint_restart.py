@@ -546,6 +546,15 @@ class RestartBindingTests(unittest.TestCase):
             verifier.acquire_session_lock(create=False)
         finally:
             verifier.close()
+        (self.child / observer.SESSION_LOCK_BASENAME).unlink()
+        without_lock = dict(observer.validate_production_restart(
+            private_runtime_root=self.root))
+        self.assertEqual(
+            without_lock["status"],
+            "LEGACY_CHECKPOINT_LINEAGE_UNVERIFIED")
+        self.assertEqual((self.child / name).read_bytes(), before)
+        self.assertFalse(
+            (self.child / observer.SESSION_LOCK_BASENAME).exists())
 
     def test_v2_checkpoint_duplicate_and_unexpected_fields_fail_closed(self):
         capability = self.prepare()

@@ -1659,6 +1659,15 @@ def validate_production_restart(
                         "status": "NEW_OBSERVATION_AVAILABLE",
                         "mode": NEW_OBSERVATION,
                     })
+            except ReceiptObserverError as validation_error:
+                status = {
+                    "CHECKPOINT_RESTART_AMBIGUOUS":
+                        "CHECKPOINT_RESTART_AMBIGUOUS",
+                    "LEGACY_CHECKPOINT_LINEAGE_UNVERIFIED":
+                        "LEGACY_CHECKPOINT_LINEAGE_UNVERIFIED",
+                }.get(validation_error.code)
+                if status is not None:
+                    return MappingProxyType({"status": status})
             except Exception:
                 pass
             finally:
