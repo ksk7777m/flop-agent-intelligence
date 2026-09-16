@@ -35,6 +35,10 @@ The fixed categories are:
   checkpoint operation failed; no retry.
 - `READ_CLEANUP_FAILURE`: resource cleanup failed when there was no earlier
   result. Cleanup never overwrites an earlier failure or verified receipt.
+- `READ_STOPPED`, `READ_WALL_TIMEOUT`, `READ_BOUND_EXHAUSTED`, and
+  `READ_CONTEST_DEADLINE`: fixed lifecycle terminals after readiness.
+- `READ_RECEIPT_CONFLICT`: mutually conflicting valid referee receipts; review
+  is required and neither disposition wins.
 - `READ_INTERNAL_FAILURE`: every otherwise unclassified exception.
 
 Phases are limited to `BOOTSTRAP`, `POLL`, `EXPORT`, `CHECKPOINT`, and
@@ -76,3 +80,6 @@ read-only revalidation of the external root, fixed child, checkpoint, and lock
 state. The production supervisor remains GET-only and has no signer, identity
 loader, private-key loader, nonce allocator, request-ID generator, registration
 adapter, approval/permit issuer, wallet, claim, or X-posting capability.
+Terminal-output failure is not retried and never prints an exception or
+traceback to stderr. A stop signal during bootstrap or retry backoff is emitted
+as `OBSERVER_STOPPED`, while cleanup failure cannot replace its earlier cause.

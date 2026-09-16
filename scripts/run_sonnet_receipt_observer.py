@@ -7,6 +7,7 @@ import json
 import signal
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -20,9 +21,25 @@ CODE_ROOT = Path(__file__).resolve().parents[1]
 POLL_SECONDS = 0.2
 
 
-def _emit(value: str | Mapping[str, Any]) -> None:
-    payload = {"status": value} if type(value) is str else dict(value)
-    print(json.dumps(payload, separators=(",", ":")), flush=True)
+def _internal_bootstrap_projection(_error: BaseException) -> Mapping[str, Any]:
+    return {
+        "status": "OBSERVER_REVIEW_REQUIRED",
+        "failure_category": "READ_INTERNAL_FAILURE",
+        "failure_phase": "BOOTSTRAP",
+        "retryable": False,
+        "observed_at": datetime.now(timezone.utc).isoformat().replace(
+            "+00:00", "Z"),
+        "read_attempt_count": 0,
+    }
+
+
+def _emit(value: str | Mapping[str, Any]) -> bool:
+    try:
+        payload = {"status": value} if type(value) is str else dict(value)
+        print(json.dumps(payload, separators=(",", ":")), flush=True)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def _run_foreground(handle: object, stop_requested: threading.Event,
@@ -35,12 +52,16 @@ def _run_foreground(handle: object, stop_requested: threading.Event,
             stop_forwarded = True
         if not ready_emitted and handle.wait_until_ready(POLL_SECONDS):
             if handle.is_running():
-                emit("OBSERVER_READY")
+                if emit("OBSERVER_READY") is False:
+                    handle.stop()
+                    handle.wait_for_terminal(21)
+                    return 1
                 ready_emitted = True
         terminal = handle.wait_for_terminal(0)
         if terminal is not None:
             projection = getattr(handle, "terminal_projection", lambda: None)()
-            emit(projection or terminal)
+            if emit(projection or terminal) is False:
+                return 1
             return 0 if terminal in {
                 "OBSERVER_ACCEPTED", "OBSERVER_REJECTED",
                 "OBSERVER_STOPPED", "OBSERVER_TIMEOUT",
@@ -55,6 +76,7 @@ def main() -> int:
     stop_requested = threading.Event()
     previous: dict[int, object] = {}
     handle = None
+    failure_projector = _internal_bootstrap_projection
 
     def request_stop(_signum: int, _frame: object) -> None:
         stop_requested.set()
@@ -68,11 +90,13 @@ def main() -> int:
             build_production_receipt_supervisor,
             safe_start_failure_projection,
         )
+        failure_projector = safe_start_failure_projection
         root = trusted_production_runtime_root()
         if root is None:
             _emit("OBSERVER_REVIEW_REQUIRED")
             return 1
-        _emit("OBSERVER_STARTING")
+        if not _emit("OBSERVER_STARTING"):
+            return 1
         handle = build_production_receipt_supervisor(
             private_runtime_root=root).start(stop_requested=stop_requested)
         return _run_foreground(handle, stop_requested, _emit)
@@ -80,18 +104,9 @@ def main() -> int:
         if handle is not None:
             handle.stop()
             handle.wait_for_terminal(2)
-        try:
-            _emit(safe_start_failure_projection(error))
-        except Exception:
-            _emit({
-                "status": "OBSERVER_REVIEW_REQUIRED",
-                "failure_category": "READ_INTERNAL_FAILURE",
-                "failure_phase": "BOOTSTRAP",
-                "retryable": False,
-                "observed_at": None,
-                "read_attempt_count": 0,
-            })
-        return 1
+        projection = failure_projector(error)
+        _emit(projection)
+        return 0 if projection["status"] == "OBSERVER_STOPPED" else 1
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)

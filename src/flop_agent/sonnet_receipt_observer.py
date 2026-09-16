@@ -22,7 +22,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
@@ -83,6 +82,8 @@ FAILURE_CATEGORIES = frozenset({
     "READ_CURSOR_REGRESSION", "READ_CURSOR_GAP", "READ_EXPORT_FAILURE",
     "READ_STORAGE_FAILURE", "READ_CHECKPOINT_FAILURE",
     "READ_CLEANUP_FAILURE", "READ_INTERNAL_FAILURE",
+    "READ_STOPPED", "READ_WALL_TIMEOUT", "READ_BOUND_EXHAUSTED",
+    "READ_CONTEST_DEADLINE", "READ_RECEIPT_CONFLICT",
 })
 FAILURE_PHASES = frozenset({"BOOTSTRAP", "POLL", "EXPORT", "CHECKPOINT", "CLEANUP"})
 
@@ -149,6 +150,9 @@ class _PrivateDirectoryCapability:
     def __repr__(self) -> str:
         return "<private directory capability>"
 
+    def __reduce_ex__(self, _protocol: int) -> Any:
+        raise TypeError("private directory capability is not serializable")
+
 
 class HttpRead:
     """Immutable transport result whose raw fields never enter repr/asdict."""
@@ -184,26 +188,46 @@ class HttpRead:
         values: list[str] = []
         for key, value in self.headers.items():
             if key.casefold() == "retry-after" and type(value) is str:
-                values.extend(part.strip() for part in value.split(","))
+                values.extend(value.split(","))
         return tuple(values)
 
+    def __reduce_ex__(self, _protocol: int) -> Any:
+        raise TypeError("HTTP read is not serializable")
 
-@dataclass(frozen=True)
+
 class ObserverResult:
-    status: str
-    observer_ready: bool
-    review_required: bool
-    read_count: int
-    cursor: int
-    gap_detected: bool
-    export_fallback_used: bool
-    receipt_sha256: str | None = None
-    error_category: str | None = None
-    failure_category: str | None = None
-    failure_phase: str | None = None
-    retryable: bool = False
-    http_status: int | None = None
-    observed_at: str | None = None
+    """Immutable result whose repr and ordinary serializers reveal no state."""
+
+    __slots__ = (
+        "status", "observer_ready", "review_required", "read_count", "cursor",
+        "gap_detected", "export_fallback_used", "receipt_sha256",
+        "error_category", "failure_category", "failure_phase", "retryable",
+        "http_status", "observed_at", "_sealed",
+    )
+
+    def __init__(
+        self, status: str, observer_ready: bool, review_required: bool,
+        read_count: int, cursor: int, gap_detected: bool,
+        export_fallback_used: bool, receipt_sha256: str | None = None,
+        error_category: str | None = None,
+        failure_category: str | None = None,
+        failure_phase: str | None = None, retryable: bool = False,
+        http_status: int | None = None, observed_at: str | None = None,
+    ) -> None:
+        values = locals()
+        for name in self.__slots__:
+            if name != "_sealed":
+                object.__setattr__(self, name, values[name])
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, _name: str, _value: Any) -> None:
+        raise AttributeError("observer result is immutable")
+
+    def __repr__(self) -> str:
+        return "<redacted Sonnet observer result>"
+
+    def __reduce_ex__(self, _protocol: int) -> Any:
+        raise TypeError("observer result is not serializable")
 
     def journal_projection(self) -> Mapping[str, Any]:
         """Return only values safe for an ordinary/public journal."""
@@ -252,6 +276,9 @@ class _Config:
 
     def __repr__(self) -> str:
         return "<sealed receipt observer config>"
+
+    def __reduce_ex__(self, _protocol: int) -> Any:
+        raise TypeError("receipt observer config is not serializable")
 
 
 def _utc(value: datetime) -> datetime:
@@ -1147,6 +1174,20 @@ class ReceiptObserver:
               exported: bool = False, review: bool = False) -> ObserverResult:
         self._ready = False
         failure = error if isinstance(error, ReceiptObserverError) else None
+        if failure is None and type(error) is str and error != "AWAITING_RECEIPT":
+            fixed = {
+                "SUPERVISOR_STOPPED": ("READ_STOPPED", "POLL"),
+                "SUPERVISOR_TIMEOUT": ("READ_WALL_TIMEOUT", "POLL"),
+                "SUPERVISOR_READ_LIMIT": ("READ_BOUND_EXHAUSTED", "POLL"),
+                "BOUNDED_OBSERVATION_COMPLETE": (
+                    "READ_BOUND_EXHAUSTED", "POLL"),
+                "DEADLINE_REACHED": ("READ_CONTEST_DEADLINE", "POLL"),
+                "CONFLICTING_VALID_RECEIPTS": (
+                    "READ_RECEIPT_CONFLICT", "POLL"),
+            }
+            category, phase = fixed.get(
+                error, ("READ_INTERNAL_FAILURE", "POLL"))
+            failure = _read_error(category, phase, code=error)
         if failure is not None and failure.category is None:
             if (failure.code.startswith("EVIDENCE_")
                     or failure.code.startswith("SAVED_")
@@ -1588,7 +1629,20 @@ class _ProductionReceiptObserver:
         if self._started:
             raise ReceiptObserverError("OBSERVER_ALREADY_STARTED")
         self._started = True
-        return self._session_factory(self._observer)
+        try:
+            return self._session_factory(self._observer)
+        except BaseException:
+            close_transport = getattr(self._observer._transport, "close", None)
+            if close_transport is not None:
+                try:
+                    close_transport()
+                except Exception:
+                    pass
+            try:
+                self._observer._store.close()
+            except Exception:
+                pass
+            raise
 
     def reconcile_saved(self) -> ObserverResult:
         if self._started:

@@ -1,5 +1,7 @@
 import importlib
+import dataclasses
 import json
+import pickle
 import ssl
 import socket
 import sys
@@ -95,7 +97,10 @@ class DiagnosticTests(unittest.TestCase):
         self.assertIn(3, clock.waits)
 
     def test_invalid_retry_after_is_terminal(self):
-        for raw in ("-1", "Wed, 21 Oct 2015 07:28:00 GMT", "31", "1,2"):
+        for raw in (
+            "", "-1", "+3", " 3 ", "3e0",
+            "Wed, 21 Oct 2015 07:28:00 GMT", "31", "1,2",
+        ):
             with self.subTest(raw=raw):
                 fixture = self.fixture([
                     page(10), observer.HttpRead(
@@ -173,6 +178,14 @@ class DiagnosticTests(unittest.TestCase):
             result = self.session(fixture, FakeMonotonic()).wait_for_result(2)
         self.assertEqual(result.failure_category, "READ_HTTP_400")
 
+        accepted = self.fixture([page(10), page(10, receipt())])
+        with mock.patch.object(
+                observer.PrivateReceiptStore, "close",
+                side_effect=RuntimeError("secret path")):
+            result = self.session(accepted, FakeMonotonic()).wait_for_result(2)
+        self.assertEqual(result.status, "ACCEPTED")
+        self.assertIsNotNone(result.receipt_sha256)
+
     def test_unknown_failure_closes_to_internal_and_projection_is_redacted(self):
         secret = "did:key:z6MkSecret /private/path request-secret signature-secret"
         fixture = self.fixture([page(10)])
@@ -193,6 +206,23 @@ class DiagnosticTests(unittest.TestCase):
             "status", "failure_category", "failure_phase", "retryable",
             "observed_at", "read_attempt_count",
         })
+        self.assertFalse(dataclasses.is_dataclass(result))
+        with self.assertRaises(TypeError):
+            dataclasses.asdict(result)
+        with self.assertRaises(TypeError):
+            vars(result)
+        with self.assertRaises(TypeError):
+            pickle.dumps(result)
+        self.assertEqual(repr(result), "<redacted Sonnet observer result>")
+
+        raw = observer.HttpRead(
+            200, "https://private.invalid/path", "private/type",
+            b"private body", {"Private": "header"})
+        with self.assertRaises(TypeError):
+            pickle.dumps(raw)
+        self.assertNotIn("private", repr(raw).casefold())
+        with self.assertRaises(TypeError):
+            pickle.dumps(config())
 
     def test_terminal_projection_is_finite_and_emitted_once(self):
         result = observer.ObserverResult(
@@ -274,6 +304,115 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(caught.exception.read_attempt_count, 3)
         self.assertEqual(clock.value, 4)
         self.assertEqual(transport.close_calls, 1)
+
+    def test_bootstrap_stop_and_cleanup_preserve_safe_terminal_cause(self):
+        stopped = observer.ReceiptObserverError("SUPERVISOR_STOPPED")
+        projection = dict(supervisor.safe_start_failure_projection(stopped))
+        self.assertEqual(projection["status"], supervisor.STOPPED)
+        self.assertEqual(projection["failure_category"], "READ_STOPPED")
+
+        class Transport:
+            def read_highwater(self):
+                raise observer._read_error("READ_TLS_FAILURE", "POLL")
+            def close(self):
+                raise RuntimeError("private cleanup detail")
+
+        unit = supervisor._build_receipt_supervisor_for_test(
+            private_runtime_root=Path("/fixture/private"),
+            transport_factory=Transport,
+            observer_factory=lambda **_kwargs: None,
+            clock=lambda: NOW)
+        with self.assertRaises(observer.ReceiptObserverError) as caught:
+            unit.start()
+        self.assertEqual(caught.exception.category, "READ_TLS_FAILURE")
+        self.assertNotIn("private cleanup", repr(caught.exception))
+
+        throttled = observer.HttpRead(
+            429, observer.FixedReadonlyTransport.highwater_url(), "", b"",
+            {"Retry-After": "2"})
+
+        class ThrottledTransport:
+            def read_highwater(self):
+                return throttled
+            def close(self):
+                pass
+
+        class StopDuringWait:
+            stopped = False
+            def is_set(self):
+                return self.stopped
+            def wait(self, _seconds):
+                self.stopped = True
+                return True
+
+        unit = supervisor._build_receipt_supervisor_for_test(
+            private_runtime_root=Path("/fixture/private"),
+            transport_factory=ThrottledTransport,
+            observer_factory=lambda **_kwargs: None,
+            clock=lambda: NOW)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "SUPERVISOR_STOPPED"):
+            unit.start(stop_requested=StopDuringWait())
+
+    def test_runner_output_failure_is_single_and_never_reemitted(self):
+        result = observer.ObserverResult(
+            "UNCONFIRMED", False, False, 1, 1, False, False,
+            error_category="SUPERVISOR_TIMEOUT",
+            failure_category="READ_WALL_TIMEOUT", failure_phase="POLL",
+            observed_at="2026-09-15T04:00:00Z")
+
+        class Completed:
+            def wait_until_ready(self, _timeout=None):
+                return False
+            def wait_for_result(self, _timeout=None):
+                return result
+            def stop(self):
+                pass
+            def is_running(self):
+                return False
+
+        handle = supervisor.SupervisorHandle(
+            Completed(), monotonic=lambda: 1.0, started_at=1.0)
+        calls = []
+
+        def failed_emit(value):
+            calls.append(value)
+            return False
+
+        scripts = Path(__file__).resolve().parents[1] / "scripts"
+        sys.path.insert(0, str(scripts))
+        self.addCleanup(lambda: sys.path.remove(str(scripts)))
+        runner = importlib.import_module("run_sonnet_receipt_observer")
+        with mock.patch("builtins.print", side_effect=BrokenPipeError("detail")):
+            self.assertFalse(runner._emit("OBSERVER_UNCONFIRMED"))
+        self.assertEqual(
+            runner._run_foreground(handle, threading.Event(), failed_emit), 1)
+        self.assertEqual(len(calls), 1)
+
+    def test_ready_terminal_paths_have_fixed_categories_and_phases(self):
+        fixture = self.fixture([page(10)], cfg=config(max_reads=1))
+        result = self.session(fixture, FakeMonotonic()).wait_for_result(2)
+        self.assertEqual(
+            (result.failure_category, result.failure_phase),
+            ("READ_BOUND_EXHAUSTED", "POLL"))
+
+    def test_session_constructor_failure_closes_transport_and_store(self):
+        class Resource:
+            def __init__(self):
+                self.closed = 0
+            def close(self):
+                self.closed += 1
+
+        core = type("Core", (), {})()
+        core._transport = Resource()
+        core._store = Resource()
+        service = observer._ProductionReceiptObserver(
+            core, lambda _core: (_ for _ in ()).throw(
+                RuntimeError("private constructor detail")))
+        with self.assertRaises(RuntimeError):
+            service.start()
+        self.assertEqual(core._transport.closed, 1)
+        self.assertEqual(core._store.closed, 1)
 
     def test_transport_exception_repr_never_contains_underlying_message(self):
         transport = observer.FixedReadonlyTransport()

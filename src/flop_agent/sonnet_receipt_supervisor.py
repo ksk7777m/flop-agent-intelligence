@@ -125,8 +125,11 @@ def _terminal_projection(
 
 def safe_start_failure_projection(error: BaseException) -> Mapping[str, Any]:
     """Collapse all bootstrap exceptions to a fixed, path-free projection."""
+    stopped = (isinstance(error, receipt_observer.ReceiptObserverError)
+               and error.code == "SUPERVISOR_STOPPED")
     if isinstance(error, receipt_observer.ReceiptObserverError):
-        category = error.category or "READ_INTERNAL_FAILURE"
+        category = ("READ_STOPPED" if stopped
+                    else error.category or "READ_INTERNAL_FAILURE")
         phase = "BOOTSTRAP"
         retryable = False
         status = error.http_status
@@ -134,7 +137,7 @@ def safe_start_failure_projection(error: BaseException) -> Mapping[str, Any]:
         category, phase, retryable, status = (
             "READ_INTERNAL_FAILURE", "BOOTSTRAP", False, None)
     value: dict[str, Any] = {
-        "status": REVIEW_REQUIRED,
+        "status": STOPPED if stopped else REVIEW_REQUIRED,
         "failure_category": category,
         "failure_phase": phase,
         "retryable": retryable,
@@ -250,6 +253,7 @@ class _ProductionSupervisor:
         object.__setattr__(self, "_started", True)
         started_monotonic = self._monotonic()
         transport = self._transport_factory()
+        primary_error: BaseException | None = None
         try:
             retries = 0
             retry_wait_total = 0
@@ -280,6 +284,9 @@ class _ProductionSupervisor:
                     generation, cursor = _parse_highwater(read)
                     break
                 except receipt_observer.ReceiptObserverError as error:
+                    if stop_requested is not None and stop_requested.is_set():
+                        raise receipt_observer.ReceiptObserverError(
+                            "SUPERVISOR_STOPPED") from None
                     error = receipt_observer._read_error(
                         error.category or "READ_INTERNAL_FAILURE", "BOOTSTRAP",
                         retryable=error.retryable,
@@ -313,8 +320,16 @@ class _ProductionSupervisor:
                                 "SUPERVISOR_STOPPED") from None
                     else:
                         time.sleep(delay)
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            transport.close()
+            try:
+                transport.close()
+            except Exception:
+                if primary_error is None:
+                    raise receipt_observer._read_error(
+                        "READ_CLEANUP_FAILURE", "CLEANUP") from None
         started_at = self._clock()
         service = self._observer_factory(
             private_runtime_root=self._private_runtime_root,
