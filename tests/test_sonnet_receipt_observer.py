@@ -235,7 +235,9 @@ class ReceiptObserverTests(unittest.TestCase):
         checkpoint = fixture.store.load_checkpoint(
             generation=1, initial_since=10, observation_started_at=NOW,
             request_reference_sha256=hashlib.sha256(
-                REQUEST_ID.encode("utf-8")).hexdigest())
+                REQUEST_ID.encode("utf-8")).hexdigest(),
+            lineage_binding_sha256=
+                observer._config_lineage_binding_sha256(config()))
         self.assertIsNotNone(checkpoint)
         self.assertEqual(checkpoint["cursor"], 11)
         checkpoint_path = next(fixture.root.glob("*.checkpoint"))
@@ -259,7 +261,9 @@ class ReceiptObserverTests(unittest.TestCase):
         checkpoint = fixture.store.load_checkpoint(
             generation=1, initial_since=10, observation_started_at=NOW,
             request_reference_sha256=hashlib.sha256(
-                REQUEST_ID.encode("utf-8")).hexdigest())
+                REQUEST_ID.encode("utf-8")).hexdigest(),
+            lineage_binding_sha256=
+                observer._config_lineage_binding_sha256(config()))
         self.assertEqual(checkpoint["cursor"], 12)
         restarted_transport = FakeTransport([page(12, receipt(seq=13))])
         restarted = observer._build_receipt_observer_for_test(
@@ -300,7 +304,9 @@ class ReceiptObserverTests(unittest.TestCase):
         checkpoint = fixture.store.load_checkpoint(
             generation=1, initial_since=10, observation_started_at=NOW,
             request_reference_sha256=hashlib.sha256(
-                REQUEST_ID.encode("utf-8")).hexdigest())
+                REQUEST_ID.encode("utf-8")).hexdigest(),
+            lineage_binding_sha256=
+                observer._config_lineage_binding_sha256(config()))
         self.assertEqual(checkpoint["cursor"], 10)
         self.assertFalse(
             (fixture.root / observer.CURSOR_PROGRESS_BASENAME).exists())
@@ -529,7 +535,9 @@ class ReceiptObserverTests(unittest.TestCase):
         checkpoint = fixture.store.load_checkpoint(
             generation=1, initial_since=10, observation_started_at=NOW,
             request_reference_sha256=hashlib.sha256(
-                REQUEST_ID.encode("utf-8")).hexdigest())
+                REQUEST_ID.encode("utf-8")).hexdigest(),
+            lineage_binding_sha256=
+                observer._config_lineage_binding_sha256(config()))
         self.assertEqual(checkpoint["cursor"], 12)
 
     def test_partial_receipt_pair_replays_old_cursor_and_completes_idempotently(self):

@@ -18,6 +18,23 @@ START_A = datetime(2026, 9, 15, 4, 0, tzinfo=timezone.utc)
 START_B = START_A + timedelta(hours=3)
 
 
+def lineage(**updates):
+    values = {
+        "contest_id": observer.CONTEST_ID,
+        "origin": observer.OFFICIAL_ORIGIN,
+        "room": observer.ROOM,
+        "request_id": observer.registration.REQUEST_ID,
+        "participant_did": observer.registration.PARTICIPANT_DID,
+        "role": observer.ROLE,
+        "x_account_url": observer.registration.X_ACCOUNT_URL,
+        "referee_did": observer.REFEREE_DID,
+        "manifest_commit": observer.MANIFEST_COMMIT,
+        "manifest_sha256": observer.MANIFEST_SHA256,
+    }
+    values.update(updates)
+    return observer._lineage_binding_sha256(**values)
+
+
 class RestartBindingTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -42,7 +59,8 @@ class RestartBindingTests(unittest.TestCase):
             generation=generation, cursor=cursor,
             observation_started_at=identity,
             request_reference_sha256=hashlib.sha256(
-                observer.registration.REQUEST_ID.encode()).hexdigest())
+                observer.registration.REQUEST_ID.encode()).hexdigest(),
+            lineage_binding_sha256=lineage())
         store.close()
         return next(self.child.glob("*.checkpoint")).read_bytes()
 
@@ -83,7 +101,8 @@ class RestartBindingTests(unittest.TestCase):
             store.save_checkpoint(
                 generation=1, cursor=11, observation_started_at=identity,
                 request_reference_sha256=hashlib.sha256(
-                    observer.registration.REQUEST_ID.encode()).hexdigest())
+                    observer.registration.REQUEST_ID.encode()).hexdigest(),
+                lineage_binding_sha256=lineage())
         finally:
             store.close()
         checkpoints = list(self.child.glob("*.checkpoint"))
@@ -107,12 +126,14 @@ class RestartBindingTests(unittest.TestCase):
         try:
             store.save_checkpoint(
                 generation=1, cursor=12, observation_started_at=identity,
-                request_reference_sha256=reference)
+                request_reference_sha256=reference,
+                lineage_binding_sha256=lineage())
             progress = self.child / observer.CURSOR_PROGRESS_BASENAME
             original = progress.read_bytes()
             store.save_checkpoint(
                 generation=1, cursor=12, observation_started_at=identity,
-                request_reference_sha256=reference)
+                request_reference_sha256=reference,
+                lineage_binding_sha256=lineage())
             self.assertEqual(progress.read_bytes(), original)
             with self.assertRaisesRegex(
                     observer.ReceiptObserverError,
@@ -120,15 +141,17 @@ class RestartBindingTests(unittest.TestCase):
                 store.save_checkpoint(
                     generation=1, cursor=11,
                     observation_started_at=identity,
-                    request_reference_sha256=reference)
+                    request_reference_sha256=reference,
+                    lineage_binding_sha256=lineage())
         finally:
             store.close()
 
     def test_progress_without_lineage_and_temporary_artifact_fail_closed(self):
         progress = {
-            "schema": "sonnet-registration-receipt-progress.v1",
+            "schema": "sonnet-registration-receipt-progress.v2",
             "request_reference_sha256": hashlib.sha256(
                 observer.registration.REQUEST_ID.encode()).hexdigest(),
+            "lineage_binding_sha256": lineage(),
             "contest_id": observer.CONTEST_ID,
             "room": observer.ROOM,
             "generation": 1,
@@ -161,7 +184,8 @@ class RestartBindingTests(unittest.TestCase):
         try:
             store.save_checkpoint(
                 generation=1, cursor=11, observation_started_at=identity,
-                request_reference_sha256=reference)
+                request_reference_sha256=reference,
+                lineage_binding_sha256=lineage())
             with mock.patch.object(
                     observer.os, "rename", side_effect=OSError("fixture")):
                 with self.assertRaisesRegex(
@@ -170,7 +194,8 @@ class RestartBindingTests(unittest.TestCase):
                     store.save_checkpoint(
                         generation=1, cursor=12,
                         observation_started_at=identity,
-                        request_reference_sha256=reference)
+                        request_reference_sha256=reference,
+                        lineage_binding_sha256=lineage())
         finally:
             store.close()
         resumed = self.prepare(lambda: START_B)
@@ -256,6 +281,9 @@ class RestartBindingTests(unittest.TestCase):
 
     def test_read_only_validation_changes_no_bytes_and_uses_sanitized_result(self):
         original = self.seed_checkpoint()
+        before = {
+            path.name: path.read_bytes() for path in self.child.iterdir()
+            if path.is_file()}
         result = dict(observer.validate_production_restart(
             private_runtime_root=self.root))
         self.assertEqual(result, {
@@ -263,6 +291,9 @@ class RestartBindingTests(unittest.TestCase):
             "mode": observer.RESUMING_OBSERVATION,
         })
         self.assertEqual(next(self.child.glob("*.checkpoint")).read_bytes(), original)
+        self.assertEqual({
+            path.name: path.read_bytes() for path in self.child.iterdir()
+            if path.is_file()}, before)
         rendered = json.dumps(result)
         self.assertNotIn(str(self.root), rendered)
         self.assertNotIn(START_A.isoformat(), rendered)
@@ -406,6 +437,213 @@ class RestartBindingTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
         self.assertEqual(info.st_uid, os.getuid())
         self.assertEqual(info.st_nlink, 1)
+
+    def test_lineage_digest_is_deterministic_and_every_binding_is_exact(self):
+        baseline = lineage()
+        self.assertEqual(baseline, lineage())
+        changes = {
+            "contest_id": "sonnet-other",
+            "origin": "https://example.invalid",
+            "room": "other-room",
+            "request_id": "other-request",
+            "participant_did": "did:key:other",
+            "role": "voter",
+            "x_account_url": "https://x.com/other",
+            "referee_did": "did:key:referee-other",
+            "manifest_commit": "0" * 40,
+            "manifest_sha256": "0" * 64,
+        }
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                self.assertNotEqual(baseline, lineage(**{field: value}))
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "LINEAGE_BINDING_INVALID"):
+            lineage(role=True)
+
+    def test_same_request_id_with_changed_full_lineage_fails_before_network(self):
+        self.seed_checkpoint()
+        for field, value in {
+            "contest_id": "sonnet-other",
+            "origin": "https://example.invalid",
+            "room": "other-room",
+            "participant_did": "did:key:other",
+            "role": "voter",
+            "x_account_url": "https://x.com/other",
+            "referee_did": "did:key:referee-other",
+            "manifest_commit": "0" * 40,
+            "manifest_sha256": "0" * 64,
+        }.items():
+            with self.subTest(field=field), self.assertRaisesRegex(
+                    observer.ReceiptObserverError,
+                    "CHECKPOINT_RESTART_BINDING_INVALID"):
+                observer._prepare_restart_core(
+                    self.root, clock=lambda: START_B, create_lock=True,
+                    _worktrees=lambda _root: (observer.REPOSITORY_ROOT,),
+                    _filesystem_validator=lambda _path: True,
+                    _lineage_binding_sha256=lineage(**{field: value}))
+
+    def test_changed_request_id_or_progress_lineage_fails_closed(self):
+        self.seed_checkpoint(cursor=10)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError,
+                "CHECKPOINT_RESTART_BINDING_INVALID"):
+            observer._prepare_restart_core(
+                self.root, clock=lambda: START_B, create_lock=True,
+                _worktrees=lambda _root: (observer.REPOSITORY_ROOT,),
+                _filesystem_validator=lambda _path: True,
+                _request_id="other-request",
+                _lineage_binding_sha256=lineage(request_id="other-request"))
+        capability = self.prepare(lambda: START_B)
+        store, _mode, _checkpoint, identity = capability._consume()
+        try:
+            store.save_checkpoint(
+                generation=1, cursor=11, observation_started_at=identity,
+                request_reference_sha256=hashlib.sha256(
+                    observer.registration.REQUEST_ID.encode()).hexdigest(),
+                lineage_binding_sha256=lineage())
+        finally:
+            store.close()
+        progress = self.child / observer.CURSOR_PROGRESS_BASENAME
+        value = json.loads(progress.read_text())
+        value["lineage_binding_sha256"] = lineage(role="voter")
+        progress.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")))
+        os.chmod(progress, 0o600)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError,
+                "CHECKPOINT_RESTART_BINDING_INVALID"):
+            self.prepare(lambda: START_B)
+
+    def test_legacy_checkpoint_has_fixed_category_and_is_not_rewritten(self):
+        capability = self.prepare()
+        store, _mode, _checkpoint, identity = capability._consume()
+        reference = hashlib.sha256(
+            observer.registration.REQUEST_ID.encode()).hexdigest()
+        value = {
+            "schema": "sonnet-registration-receipt-checkpoint.v1",
+            "request_reference_sha256": reference,
+            "contest_id": observer.CONTEST_ID,
+            "room": observer.ROOM,
+            "generation": 1,
+            "cursor": 10,
+            "observation_started_at": identity.isoformat().replace("+00:00", "Z"),
+        }
+        raw = json.dumps(
+            value, sort_keys=True, separators=(",", ":")).encode()
+        name = f"{hashlib.sha256(raw).hexdigest()}.checkpoint"
+        store._atomic_write(name, raw)
+        store.close()
+        before = (self.child / name).read_bytes()
+        result = dict(observer.validate_production_restart(
+            private_runtime_root=self.root))
+        self.assertEqual(
+            result["status"], "LEGACY_CHECKPOINT_LINEAGE_UNVERIFIED")
+        self.assertEqual((self.child / name).read_bytes(), before)
+        self.assertFalse(any(
+            path.name == observer.CURSOR_PROGRESS_BASENAME
+            for path in self.child.iterdir()))
+        verifier = observer.PrivateReceiptStore(self.child)
+        try:
+            verifier.acquire_session_lock(create=False)
+        finally:
+            verifier.close()
+
+    def test_v2_checkpoint_duplicate_and_unexpected_fields_fail_closed(self):
+        capability = self.prepare()
+        store, _mode, _checkpoint, identity = capability._consume()
+        store.close()
+        base = {
+            "schema": "sonnet-registration-receipt-checkpoint.v2",
+            "request_reference_sha256": hashlib.sha256(
+                observer.registration.REQUEST_ID.encode()).hexdigest(),
+            "lineage_binding_sha256": lineage(),
+            "contest_id": observer.CONTEST_ID,
+            "room": observer.ROOM,
+            "generation": 1,
+            "cursor": 10,
+            "observation_started_at": identity.isoformat().replace("+00:00", "Z"),
+        }
+        canonical = json.dumps(
+            base, sort_keys=True, separators=(",", ":")).encode()
+        variants = (
+            b'{"schema":"duplicate",' + canonical[1:],
+            json.dumps(
+                {**base, "unexpected": "field"}, sort_keys=True,
+                separators=(",", ":")).encode(),
+        )
+        for index, raw in enumerate(variants):
+            with self.subTest(variant=index):
+                name = f"{hashlib.sha256(raw).hexdigest()}.checkpoint"
+                writer = observer.PrivateReceiptStore(self.child)
+                try:
+                    writer._atomic_write(name, raw)
+                finally:
+                    writer.close()
+                with self.assertRaises(observer.ReceiptObserverError):
+                    self.prepare(lambda: START_B)
+                (self.child / name).unlink()
+
+    def test_partial_artifact_rejects_nonregular_and_unsafe_files(self):
+        self.seed_checkpoint()
+        digest = "a" * 64
+        target = self.child / f"{digest}.receipt"
+        target.mkdir()
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "EVIDENCE_FILE_UNSAFE"):
+            self.prepare(lambda: START_B)
+        target.rmdir()
+        target.symlink_to(self.child)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "EVIDENCE_FILE_UNSAFE"):
+            self.prepare(lambda: START_B)
+
+    def test_partial_artifact_rejects_owner_and_size_mismatch(self):
+        self.seed_checkpoint()
+        target = self.child / f"{'d' * 64}.json"
+        target.write_bytes(b"partial")
+        os.chmod(target, 0o600)
+        store = observer.PrivateReceiptStore(self.child)
+        try:
+            with mock.patch.object(
+                    observer.PrivateReceiptStore, "_check_root",
+                    return_value=store._fd), mock.patch.object(
+                        observer.os, "getuid", return_value=os.getuid() + 1):
+                with self.assertRaisesRegex(
+                        observer.ReceiptObserverError, "EVIDENCE_FILE_UNSAFE"):
+                    store._validate_artifact_file(target.name, observer.MAX_PAGE_BYTES)
+        finally:
+            store.close()
+        target.write_bytes(b"x" * (observer.MAX_PAGE_BYTES + 1))
+        os.chmod(target, 0o600)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "EVIDENCE_FILE_UNSAFE"):
+            self.prepare(lambda: START_B)
+        target.unlink()
+        os.mkfifo(target, 0o600)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "EVIDENCE_FILE_UNSAFE"):
+            self.prepare(lambda: START_B)
+        target.unlink()
+        target.write_bytes(b"partial")
+        os.chmod(target, 0o644)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "EVIDENCE_FILE_UNSAFE"):
+            self.prepare(lambda: START_B)
+        os.chmod(target, 0o600)
+        hardlink = self.child / f"{'b' * 64}.receipt"
+        os.link(target, hardlink)
+        with self.assertRaisesRegex(
+                observer.ReceiptObserverError, "EVIDENCE_FILE_UNSAFE"):
+            self.prepare(lambda: START_B)
+
+    def test_safe_partial_regular_file_replays_without_mutation(self):
+        self.seed_checkpoint()
+        target = self.child / f"{'c' * 64}.receipt"
+        target.write_bytes(b"partial")
+        os.chmod(target, 0o600)
+        before = target.read_bytes()
+        capability = self.prepare(lambda: START_B)
+        capability.close()
+        self.assertEqual(target.read_bytes(), before)
 
 
 if __name__ == "__main__":

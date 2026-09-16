@@ -7,13 +7,13 @@ existing production checkpoint.
 
 ## Two independent time boundaries
 
-The existing checkpoint field `observation_started_at` is the persistent
+The checkpoint field `observation_started_at` is the persistent
 observation identity. It is generated once for `NEW_OBSERVATION`, durably
 stored before readiness, and recovered unchanged for
 `RESUMING_OBSERVATION`. A restart does not compare it with a fresh wall-clock
-timestamp. It continues to bind the fixed registration request, contest,
-room, generation, cursor, and the production closure's participant, role,
-account, referee, and manifest constants.
+timestamp. P0.5 checkpoints separately bind the complete fixed observation
+condition through the versioned full-lineage digest documented in
+`SONNET2_FULL_LINEAGE_BINDING.md`.
 
 Each supervisor invocation separately starts a fresh monotonic deadline of at
 most 1,800 seconds. Storage validation, lock acquisition, checkpoint recovery,
@@ -34,8 +34,9 @@ does not extend it, and the monotonic value is never serialized.
   checkpoint sets fail as `CHECKPOINT_RESTART_AMBIGUOUS`. Neither falls back
   to a fresh scan or a new request identifier.
 
-The existing content-addressed checkpoint bytes and schema remain unchanged
-and form an immutable lineage anchor. Verified progress after that anchor is
+The content-addressed checkpoint forms an immutable lineage anchor. P0.5 uses
+the v2 schema; a legacy v1 checkpoint stops for separate migration review.
+Verified progress after that anchor is
 stored separately in one fixed, private cursor-progress file bound to the
 same request reference, contest, room, generation, and observation identity.
 The cursor may only advance. An unchanged cursor causes no rewrite, and a
