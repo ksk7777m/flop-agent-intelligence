@@ -1,0 +1,387 @@
+{
+  "schema": "official-baseline-evidence-v1",
+  "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+  "baseline_main": "a799b1f79f192fed0a7e7093ad46e3e9df5c50a2",
+  "source_policy": "HTTPS_FIXED_OFFICIAL_SOURCES_NO_REDIRECTS",
+  "documents": [
+    {
+      "path": "vendor/official_sources/2026-10-02/technocore/config.json",
+      "url": "https://technocore.chat/config",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "0412b3ddfc10ee5343902fb94256beb7616b09ca60e39b658425263791ffc311",
+      "bytes": 4567,
+      "authority": "OFFICIAL_RUNTIME_OBSERVED",
+      "spec_commit": null,
+      "http_status": 200,
+      "redirect_followed": false,
+      "cache_evidence": {
+        "date": "Fri, 02 Oct 2026 09:11:00 GMT",
+        "content-type": "application/json",
+        "age": "269",
+        "cache-control": "public, max-age=0, s-maxage=300, stale-while-revalidate=60"
+      },
+      "freshness": "POTENTIALLY_STALE"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/technocore/agent.json",
+      "url": "https://technocore.chat/.well-known/agent.json",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "7c0cade5226b41b0833006755b66d4d2dd2ff2091e4b6acab66f7479a06507d6",
+      "bytes": 6413,
+      "authority": "OFFICIAL_RUNTIME_OBSERVED",
+      "spec_commit": null,
+      "http_status": 200,
+      "redirect_followed": false,
+      "cache_evidence": {
+        "date": "Fri, 02 Oct 2026 09:10:59 GMT",
+        "content-type": "application/json",
+        "age": "269",
+        "cache-control": "public, max-age=0, s-maxage=300, stale-while-revalidate=60"
+      },
+      "freshness": "POTENTIALLY_STALE"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/technocore/openapi.json",
+      "url": "https://technocore.chat/openapi.json",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "874e680e0fcbc10eb095f5a132567b866d414ff5d88651e8d5bf51f3ec0824d9",
+      "bytes": 77534,
+      "authority": "OFFICIAL_RUNTIME_OBSERVED",
+      "spec_commit": null,
+      "http_status": 200,
+      "redirect_followed": false,
+      "cache_evidence": {
+        "date": "Fri, 02 Oct 2026 09:10:58 GMT",
+        "content-type": "application/json",
+        "age": "267",
+        "cache-control": "public, max-age=0, s-maxage=300, stale-while-revalidate=60"
+      },
+      "freshness": "POTENTIALLY_STALE"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/yellowpaper.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/yellowpaper.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "b09a36d8eca75324152f2084c0cb7b9d21987e12d857445933907a12b0b0c03b",
+      "bytes": 313714,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/CHANGELOG.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/CHANGELOG.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "1ae684a7a36ef395a3aa26f0850e651b73e4348cb7f5b0187e76de5bb4f8b879",
+      "bytes": 4539,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/decisions/v0.4.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/decisions/v0.4.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "ae8e7a449d5a652b885a279c867c60556578c15a9dace9506cee676869a53d4a",
+      "bytes": 202564,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/decisions/v0.5.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/decisions/v0.5.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "d677cda689195de74b5ce14c429bc97387bb4e93f33194d0ca4ccf01a1ca5428",
+      "bytes": 44749,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/evidence/wire-format-v1.json",
+      "url": "https://raw.githubusercontent.com/flop-labs/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/evidence/wire-format-v1.json",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "cdc2c4143de790a5aa71195dbce19fb520c9c26a4c9f4a399dd23fa9946f6948",
+      "bytes": 26596,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/evidence/wire-format-v1.schema.json",
+      "url": "https://raw.githubusercontent.com/flop-labs/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/evidence/wire-format-v1.schema.json",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "9b3850293d65333cf2a26077cd364fecc7491986a83fddef9d546a010717f743",
+      "bytes": 1875,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/LICENSE",
+      "url": "https://raw.githubusercontent.com/flop-labs/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/LICENSE",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "1438987293e3254a523d533501d7e240ba54d21359fc6b34b230c9ebe1033d7f",
+      "bytes": 1149,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/README.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/README.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "1296008c9b20bf2432bef503c4394d2105c651a2a147a803ad50b42200490af1",
+      "bytes": 3600,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/contest.json",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/contest.json",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "f2c08c1388fe7f29b13be01cf4655dcf2f2178aa2df92edac5841d5a021da831",
+      "bytes": 1282,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/manifest.json",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/manifest.json",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "bae09812e25eb6f1369c611f24964f7ea0acafddfc45301a16f33f941296dafa",
+      "bytes": 2789,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/close-call-game.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/close-call-game.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "3dc13bfc482707d44a1a26db080364a96b38f0ae16516e345ccd314e183d5a7f",
+      "bytes": 26668,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/docs/close-1-referee.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/docs/close-1-referee.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "f373ea7c0e70d1de4ce4d8ab101b4e2c0575f08e2df7807b8bdf4d999d507482",
+      "bytes": 3224,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/examples/sample-season.jsonl",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/examples/sample-season.jsonl",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "54c830076d3ee6da71a0093f626be20d97be3fd3784c362b6d4d7e5070911b7b",
+      "bytes": 3388,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/examples/sample-season.expected.json",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/examples/sample-season.expected.json",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "cb8eccda648f56cad0337d17dbcc0cf4ab1c9e3af38bec830506f759b038a7d8",
+      "bytes": 3836,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/LICENSE",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/LICENSE",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "9a199b2f98908456e0714c49a9d0ae7b01d43eb85c0005a040a974db5faa982a",
+      "bytes": 11340,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/technocore-chat/CHANGELOG.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-chat/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/CHANGELOG.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "54f5e0b853e94198f6b23d6d43effc43b282ab23866422feee5d97398d6e7347",
+      "bytes": 87862,
+      "authority": "OFFICIAL_PROPOSED",
+      "spec_commit": "0e47f770b13cc27e1e2e199d4cdf70a4778c97cc"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/technocore-chat/src/config.py",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-chat/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/src/config.py",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "0927bf331b631db488a542f16542bde0195ac7fc22dca01d1ebf9f070c2181e3",
+      "bytes": 25068,
+      "authority": "OFFICIAL_PROPOSED",
+      "spec_commit": "0e47f770b13cc27e1e2e199d4cdf70a4778c97cc"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/tclk/CHANGELOG.md",
+      "url": "https://raw.githubusercontent.com/flop-labs/tclk/5cc4ab93efbc8999a3a7e1471b639deca25998ea/CHANGELOG.md",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "09d36504a4fc0026b982470a3e7bf2699ce862c7c7b3f160757d0574a0774110",
+      "bytes": 13713,
+      "authority": "OFFICIAL_PROPOSED",
+      "spec_commit": "5cc4ab93efbc8999a3a7e1471b639deca25998ea"
+    },
+    {
+      "path": "vendor/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/compute_channel.py",
+      "url": "https://raw.githubusercontent.com/flop-labs/yellowpaper/3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e/evidence/compute-channel.py",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "fbe09cd2ba88b0e2f82ace7775c10e1642002c2030fa5b344d4d4f8ac10666c5",
+      "bytes": 12803,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+    },
+    {
+      "path": "vendor/close_call/0ae6b063107b77e3a6cb794186fdd341a947e5e1/close_call_fold.py",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/close_call_fold.py",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "19e13cd15dd4e9078b608a94776947bb52bba86367446d0a405c0b05c85173d4",
+      "bytes": 11754,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/technocore/head.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/main",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "48a2f6a23858cb256180cf454eb0bbe53e93313cd0e7d1936066dce19d524570",
+      "bytes": 17991,
+      "authority": "OFFICIAL_PROPOSED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/technocore/tags.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/tags",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "57dcdc2e8a6d366ddeaa1537465968feb6660b2071cbdf841814d2fc1b3e51d9",
+      "bytes": 14718,
+      "authority": "OFFICIAL_RELEASED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/tclk/head.json",
+      "url": "https://api.github.com/repos/flop-labs/tclk/commits/main",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "8d7f249dddff72cbb959f63841008768330971fc7e70d1c9517ab941743ef865",
+      "bytes": 25979,
+      "authority": "OFFICIAL_PROPOSED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/head.json",
+      "url": "https://api.github.com/repos/flop-labs/yellowpaper/commits/main",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "f036e66e3015232b5d2709a52573e11888591daa43818a6d82067134020bb0eb",
+      "bytes": 425679,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/head.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/commits/main",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "ae3259c9bf7ca4ab76d648ea4bef685fe4cca5b8e599593eacc048ac3abc25b4",
+      "bytes": 10030,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/tree.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/trees/0ae6b063107b77e3a6cb794186fdd341a947e5e1?recursive=1",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "a66849636ab0137379474105643499cc41589a62f2922a2f22a4b7ff1251cf27",
+      "bytes": 7144,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/site.html",
+      "url": "https://flop.finance/intro/yellowpaper/",
+      "retrieved_at": "2026-10-02T09:14:22.998677+00:00",
+      "sha256": "67cee59db45c72f7dce991e18333c319d60890f5b48503125c3d4aa42251b01f",
+      "bytes": 549040,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/yellowpaper/tags.json",
+      "url": "https://api.github.com/repos/flop-labs/yellowpaper/tags",
+      "retrieved_at": "2026-10-02T09:23:37.454606+00:00",
+      "sha256": "2ba33ca0557f1bb5b7ba88d67f9d0093c7185a36ec51fe2b7bd9372d3e001d6d",
+      "bytes": 5,
+      "authority": "OFFICIAL_RELEASED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/tclk/package.json",
+      "url": "https://raw.githubusercontent.com/flop-labs/tclk/5cc4ab93efbc8999a3a7e1471b639deca25998ea/package.json",
+      "retrieved_at": "2026-10-02T09:23:37.455386+00:00",
+      "sha256": "57e46a54c9568be501883d7d271d23c3b79f21cb23dda9e3b4fab4c0c3adcda7",
+      "bytes": 1605,
+      "authority": "OFFICIAL_PROPOSED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/archive-README.txt",
+      "url": "https://challenges.technocore.chat/close-1/README.txt",
+      "retrieved_at": "2026-10-02T09:23:37.455787+00:00",
+      "sha256": "988d0d4a03de9fc8d405afaf449be7f318b9be51092e779786f8a46e2104f9f5",
+      "bytes": 1326,
+      "authority": "OFFICIAL_RUNTIME_OBSERVED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/NOTICE",
+      "url": "https://raw.githubusercontent.com/flop-labs/technocore-close-call-challenge/0ae6b063107b77e3a6cb794186fdd341a947e5e1/NOTICE",
+      "retrieved_at": "2026-10-02T09:23:37.455997+00:00",
+      "sha256": "59c76dd28996dbebb79504d77332d12c468eaa4fe0c4e6babc29e8c4197d4563",
+      "bytes": 462,
+      "authority": "OFFICIAL_NORMATIVE_DRAFT",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/tags.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/tags",
+      "retrieved_at": "2026-10-02T09:29:22.495119+00:00",
+      "sha256": "b2dd2978038898aa4075c99f17633bc4ae193501722e0f8abd78d3345ddabf9a",
+      "bytes": 544,
+      "authority": "OFFICIAL_RELEASED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/releases.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/releases",
+      "retrieved_at": "2026-10-02T09:29:22.495715+00:00",
+      "sha256": "2ba33ca0557f1bb5b7ba88d67f9d0093c7185a36ec51fe2b7bd9372d3e001d6d",
+      "bytes": 5,
+      "authority": "OFFICIAL_RELEASED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/tag-ref.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/ref/tags/close-1",
+      "retrieved_at": "2026-10-02T09:29:22.495994+00:00",
+      "sha256": "fea50f50a742e3b9d164bff4db40537eb5acbd2ee3d443ba168e10d7341bae86",
+      "bytes": 420,
+      "authority": "OFFICIAL_RELEASED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/close-call/tag.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/tags/debe011b0683f9b11ac12498440398937d305ba8",
+      "retrieved_at": "2026-10-02T09:29:22.496254+00:00",
+      "sha256": "eb0ab9f18b3cb131d229bcc28cf4a656ca23fe1d02b70affbd35784478ea1491",
+      "bytes": 1054,
+      "authority": "OFFICIAL_RELEASED",
+      "spec_commit": null
+    },
+    {
+      "path": "vendor/official_sources/2026-10-02/technocore/releases.json",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/releases?per_page=1",
+      "retrieved_at": "2026-10-02T09:29:22.496530+00:00",
+      "sha256": "d3458092876c7fc01f2b9c779d5ef8065d9e78e8d2683e2a0b7291d49135f7a1",
+      "bytes": 2683,
+      "authority": "OFFICIAL_RELEASED",
+      "spec_commit": null
+    }
+  ],
+  "live_action_enabled": false
+}

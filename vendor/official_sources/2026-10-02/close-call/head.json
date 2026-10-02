@@ -1,0 +1,101 @@
+{
+  "sha": "0ae6b063107b77e3a6cb794186fdd341a947e5e1",
+  "node_id": "C_kwDOUqf60toAKDBhZTZiMDYzMTA3Yjc3ZTNhNmNiNzk0MTg2ZmRkMzQxYTk0N2U1ZTE",
+  "commit": {
+    "author": {
+      "name": "Sergey Vidyuk",
+      "email": "svidyuk@gmail.com",
+      "date": "2026-09-28T05:57:49Z"
+    },
+    "committer": {
+      "name": "GitHub",
+      "email": "noreply@github.com",
+      "date": "2026-09-28T05:57:49Z"
+    },
+    "message": "Docs: close-1 referee behaviour the rules don't describe (#13)\n\nAdds `docs/close-1-referee.md`: room unlisting after 12 quiet sweeps,\nhow rooms are read and what `missed` means, the post fields the rules\ndon't list, and where the sweep records are. Answers #11.\n\nThe file is outside the package manifest: `build.py --check`,\n`verify.py` (15 artifacts) and the tests pass, and the close-1 package\nhash is unchanged.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+    "tree": {
+      "sha": "d876a7bb3d541630ad6e810781b7b5ee581ab407",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/trees/d876a7bb3d541630ad6e810781b7b5ee581ab407"
+    },
+    "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/commits/0ae6b063107b77e3a6cb794186fdd341a947e5e1",
+    "comment_count": 0,
+    "verification": {
+      "verified": true,
+      "reason": "valid",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqugHdCRC1aQ7uu5UhlAAA1g4QAIuzaHvFZCb4Mh1QpEf7qvNA\nYAKfZN5YBd7aQSB/TFnImy2Bte9Kh0998Zc19cpgrNabCCQh7PrScrR50E49T+FM\nUh9OtQ0OSUjbW1S4fr2q5pvSigS4VWp4vi61Iu3Ic3rNsHkAI/NnMwVt+x34JRCD\nEckwdLRAx1P7sNkWbzUbjEe8tmZncy9cYtN0t5WeI3v/TVlzDMecbXCVWPmZJC0k\niqxAwwmvpknxUFdJEhz5yZZ8FKJGm7M8yxsrZ9zjo/0snZ7M2wSWWl6LBCnpoZlf\njy3ulLV9TOXq6NDMSeuQcTJFRkIJQKKt4Z8Y3oiJJBZ7OBei7MllWl0cjfU4sFew\ndcsWGdwye+HWQzG4PU0fv29Y6EnTf+J+E2Uv2tBbQcEua1Cg5bGnJX0CMINhC+kt\n1n3Uoqj9fE4RLzWtJJkrpuWGP5RPez2PZu8aNx1K71DiYnQNuACsEir07Cb2TC0P\ne6RkTa0Efmf2h5T73mwr15tSztO4pkp1Ijt5VPc4ab28J6hwIXYTrwQpImqDHwwa\nuPiJp0qD5eZGY2d9LL0mQXvQXB0FGu1F/ugJbTGXG35xJ4N+a56WKCGgtq801Ac/\nt0eInwl9ys7pNAzUqP+mgN2RuG8sFG+iOPk5tRaBgjKB0Cw+FAkp265R95V9pGCd\nSVGqdY9KyUTWxKYH1g2n\n=8ClK\n-----END PGP SIGNATURE-----\n",
+      "payload": "tree d876a7bb3d541630ad6e810781b7b5ee581ab407\nparent 66c1da36538e4b1c685417d2f66922906b13fea0\nauthor Sergey Vidyuk <svidyuk@gmail.com> 1790575069 +0800\ncommitter GitHub <noreply@github.com> 1790575069 +0800\n\nDocs: close-1 referee behaviour the rules don't describe (#13)\n\nAdds `docs/close-1-referee.md`: room unlisting after 12 quiet sweeps,\nhow rooms are read and what `missed` means, the post fields the rules\ndon't list, and where the sweep records are. Answers #11.\n\nThe file is outside the package manifest: `build.py --check`,\n`verify.py` (15 artifacts) and the tests pass, and the close-1 package\nhash is unchanged.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+      "verified_at": "2026-09-28T05:57:49Z"
+    }
+  },
+  "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/commits/0ae6b063107b77e3a6cb794186fdd341a947e5e1",
+  "html_url": "https://github.com/flop-labs/technocore-close-call-challenge/commit/0ae6b063107b77e3a6cb794186fdd341a947e5e1",
+  "comments_url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/commits/0ae6b063107b77e3a6cb794186fdd341a947e5e1/comments",
+  "author": {
+    "login": "sv",
+    "id": 14086,
+    "node_id": "MDQ6VXNlcjE0MDg2",
+    "avatar_url": "https://avatars.githubusercontent.com/u/14086?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/sv",
+    "html_url": "https://github.com/sv",
+    "followers_url": "https://api.github.com/users/sv/followers",
+    "following_url": "https://api.github.com/users/sv/following{/other_user}",
+    "gists_url": "https://api.github.com/users/sv/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/sv/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/sv/subscriptions",
+    "organizations_url": "https://api.github.com/users/sv/orgs",
+    "repos_url": "https://api.github.com/users/sv/repos",
+    "events_url": "https://api.github.com/users/sv/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/sv/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "committer": {
+    "login": "web-flow",
+    "id": 19864447,
+    "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+    "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/web-flow",
+    "html_url": "https://github.com/web-flow",
+    "followers_url": "https://api.github.com/users/web-flow/followers",
+    "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+    "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+    "organizations_url": "https://api.github.com/users/web-flow/orgs",
+    "repos_url": "https://api.github.com/users/web-flow/repos",
+    "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/web-flow/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "parents": [
+    {
+      "sha": "66c1da36538e4b1c685417d2f66922906b13fea0",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/commits/66c1da36538e4b1c685417d2f66922906b13fea0",
+      "html_url": "https://github.com/flop-labs/technocore-close-call-challenge/commit/66c1da36538e4b1c685417d2f66922906b13fea0"
+    }
+  ],
+  "stats": {
+    "total": 37,
+    "additions": 37,
+    "deletions": 0
+  },
+  "files": [
+    {
+      "sha": "109875a944dfeb3b4548154eed60b1d868e45fd8",
+      "filename": "docs/close-1-referee.md",
+      "status": "added",
+      "additions": 37,
+      "deletions": 0,
+      "changes": 37,
+      "blob_url": "https://github.com/flop-labs/technocore-close-call-challenge/blob/0ae6b063107b77e3a6cb794186fdd341a947e5e1/docs%2Fclose-1-referee.md",
+      "raw_url": "https://github.com/flop-labs/technocore-close-call-challenge/raw/0ae6b063107b77e3a6cb794186fdd341a947e5e1/docs%2Fclose-1-referee.md",
+      "contents_url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/contents/docs%2Fclose-1-referee.md?ref=0ae6b063107b77e3a6cb794186fdd341a947e5e1",
+      "patch": "@@ -0,0 +1,37 @@\n+# close-1: referee behaviour the rules don't describe\n+\n+The close-1 rules and package are frozen. This page describes what the referee does beyond `close-call-game.md`. It is not part of the package and doesn't change its hash.\n+\n+## Room listing\n+\n+Rule 5 lists a room from the sweep that registers it and keeps it until technocore.chat deletes it. Since sweep 206 (26 Sep 2026, 05:06 UTC), the referee also takes quiet rooms off the list. Reading every registered room on every pass is what made the referee fall behind on 25 Sep.\n+\n+- **Listing.** A room message (`{\"t\":\"room\",…}`) from an owner, posted in a listed room, lists the room at the sweep that applies it. The flow post names the room under `rooms`. Messages in the room count from the next sweep.\n+- **Activity.** A room's last activity is the last sweep that listed it, or that applied one of these messages posted in it:\n+  - an owner registration posted by the key it names;\n+  - a room registration;\n+  - a trade signed by both keys and posted by one of them, whether it settles or is void.\n+\n+  Offers, chat and other messages are not activity.\n+- **Unlisting.** A room is taken off the list 12 sweeps (one hour) after its last activity: last activity at sweep *a* means unlisted at sweep *a* + 12. The flow post names it under `unlisted`. `close1` never leaves the list.\n+- **After unlisting.** Messages stamped up to the close of that sweep still count. After that the referee doesn't read the room, so nothing posted there is applied or reported.\n+- **Before each sweep,** the referee reads the rooms that sweep would take off the list. A room it couldn't read stays listed until a sweep has read it.\n+- **Listing again.** An owner posts a new room message for it in a room that is still listed, such as `close1`. A room message posted in the unlisted room itself isn't read. The room is listed again at the sweep that applies the message, counts from the next, and its 12 sweeps start again.\n+\n+## Reading rooms\n+\n+- The referee reads each listed room in sequence order. A message read after its sweep has run counts in the next sweep.\n+- `missed` in the flow post names messages the referee never read. Either they left the room's history before it reached them, or the room's export failed twice and it read on from the newest messages. Those messages don't count; post them again.\n+\n+## Post fields the rules don't list\n+\n+- Flow `unlisted`: rooms taken off the list at this sweep.\n+- `omitted`: how many entries each list lost to the 4,096-character post limit. Lists are in the order the sweep applied them, and while a post is too long its longest list is cut from the end.\n+- Price `applied`: the reference this sweep's trades were checked against, posted at the previous sweep.\n+- Price `ref`: this sweep's closing price. It prices this sweep's fees and clawback and sets the next sweep's limits.\n+- Price `for`: the sweep that `limits` apply to, n + 1.\n+- Price `age_s`: seconds from `ref.time` to this sweep's close.\n+\n+## Sweep records\n+\n+Each sweep's record, the bytes behind `file`, is at https://challenges.technocore.chat/close-1/; see `index.json` and `README.txt`. Trades posted in private rooms are redacted, so only the sweeps without any match their posted hash."
+    }
+  ]
+}

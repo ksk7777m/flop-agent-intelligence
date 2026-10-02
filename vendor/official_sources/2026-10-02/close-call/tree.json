@@ -1,0 +1,186 @@
+{
+  "sha": "0ae6b063107b77e3a6cb794186fdd341a947e5e1",
+  "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/trees/0ae6b063107b77e3a6cb794186fdd341a947e5e1",
+  "tree": [
+    {
+      "path": ".gitattributes",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fe4f0fc377bd31b2d49d1818f43f5552dc1210d6",
+      "size": 38,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/fe4f0fc377bd31b2d49d1818f43f5552dc1210d6"
+    },
+    {
+      "path": ".gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "316673dc290f8ab628bc9f71d099f717b1ee538d",
+      "size": 137,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/316673dc290f8ab628bc9f71d099f717b1ee538d"
+    },
+    {
+      "path": "AGENTS.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bc6a44104b5213aa778ab19c4492593b288e70c4",
+      "size": 1146,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/bc6a44104b5213aa778ab19c4492593b288e70c4"
+    },
+    {
+      "path": "LICENSE",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a33f6f27c9ee1b1b31cb02a29c45adcebbf5ab33",
+      "size": 11340,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/a33f6f27c9ee1b1b31cb02a29c45adcebbf5ab33"
+    },
+    {
+      "path": "NOTICE",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a7c3e477161676f6b5b3828bf00f45e66fd00f45",
+      "size": 462,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/a7c3e477161676f6b5b3828bf00f45e66fd00f45"
+    },
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4f7813ed8bc1c9a55aa9f68b4ba37c6154055894",
+      "size": 3600,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/4f7813ed8bc1c9a55aa9f68b4ba37c6154055894"
+    },
+    {
+      "path": "close-call-game.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4e3ed2e7a4efaf47b8e8fbfa43b2955fd2964145",
+      "size": 26668,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/4e3ed2e7a4efaf47b8e8fbfa43b2955fd2964145"
+    },
+    {
+      "path": "close_call_fold.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "80452917f66c2fece0f60044fc3d974f4d9374f6",
+      "size": 11754,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/80452917f66c2fece0f60044fc3d974f4d9374f6"
+    },
+    {
+      "path": "contest.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4a520638168e41764630dd19112decf9fe4bfa0c",
+      "size": 1282,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/4a520638168e41764630dd19112decf9fe4bfa0c"
+    },
+    {
+      "path": "docs",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "8d7e518d9511015c2ccaac3b671d0bb4b22df41a",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/trees/8d7e518d9511015c2ccaac3b671d0bb4b22df41a"
+    },
+    {
+      "path": "docs/close-1-referee.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "109875a944dfeb3b4548154eed60b1d868e45fd8",
+      "size": 3224,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/109875a944dfeb3b4548154eed60b1d868e45fd8"
+    },
+    {
+      "path": "examples",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "d8ccd4e15e3615c4e497bae281d80226f7bd18e6",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/trees/d8ccd4e15e3615c4e497bae281d80226f7bd18e6"
+    },
+    {
+      "path": "examples/sample-season.expected.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "604d6b0c8115ad1010feec69eafe681bd3bffde7",
+      "size": 3836,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/604d6b0c8115ad1010feec69eafe681bd3bffde7"
+    },
+    {
+      "path": "examples/sample-season.jsonl",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9253b9ca5cd0071e31091d345d2a0d8a71ca8a84",
+      "size": 3388,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/9253b9ca5cd0071e31091d345d2a0d8a71ca8a84"
+    },
+    {
+      "path": "manifest.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a525102f645d8b3bb30c666bbaf694914228d437",
+      "size": 2789,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/a525102f645d8b3bb30c666bbaf694914228d437"
+    },
+    {
+      "path": "scripts",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "c96f1787382a110cd23d83e3245649bea36bcc92",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/trees/c96f1787382a110cd23d83e3245649bea36bcc92"
+    },
+    {
+      "path": "scripts/build.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "789239d81a8057d00c4e857d7cccd0e10e2b2462",
+      "size": 3931,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/789239d81a8057d00c4e857d7cccd0e10e2b2462"
+    },
+    {
+      "path": "scripts/verify.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7e10414eef58559afd9d3d923694473c97784ccc",
+      "size": 2523,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/7e10414eef58559afd9d3d923694473c97784ccc"
+    },
+    {
+      "path": "sim",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "52c554c296804911f09fb480929e161826f8ba96",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/trees/52c554c296804911f09fb480929e161826f8ba96"
+    },
+    {
+      "path": "sim/close_call_sim.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d3f2c3f40aa6027dddd1a027cddecf7cdb4d8c80",
+      "size": 33495,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/d3f2c3f40aa6027dddd1a027cddecf7cdb4d8c80"
+    },
+    {
+      "path": "tests",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "5448ddfcee3f3ebba86fb9caf8d1e0e7aa577130",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/trees/5448ddfcee3f3ebba86fb9caf8d1e0e7aa577130"
+    },
+    {
+      "path": "tests/test_fold.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fecdb795c8e28ade858034025e0eb36efadfad56",
+      "size": 7475,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/fecdb795c8e28ade858034025e0eb36efadfad56"
+    },
+    {
+      "path": "tests/test_package.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1c277a86f1bf813482ddb0cfedf91a2f3bba2a03",
+      "size": 2443,
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/blobs/1c277a86f1bf813482ddb0cfedf91a2f3bba2a03"
+    }
+  ],
+  "truncated": false
+}

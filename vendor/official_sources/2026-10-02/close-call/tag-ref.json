@@ -1,0 +1,10 @@
+{
+  "ref": "refs/tags/close-1",
+  "node_id": "REF_kwDOUqf60rFyZWZzL3RhZ3MvY2xvc2UtMQ",
+  "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/refs/tags/close-1",
+  "object": {
+    "sha": "debe011b0683f9b11ac12498440398937d305ba8",
+    "type": "tag",
+    "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/tags/debe011b0683f9b11ac12498440398937d305ba8"
+  }
+}

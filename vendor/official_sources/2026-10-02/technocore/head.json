@@ -1,0 +1,137 @@
+{
+  "sha": "0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+  "node_id": "C_kwDOT265G9oAKDBlNDdmNzcwYjEzY2MyN2UxZTJlMTk5ZDRjZGY3MGE0Nzc4Yzk3Y2M",
+  "commit": {
+    "author": {
+      "name": "Sergey Vidyuk",
+      "email": "svidyuk@gmail.com",
+      "date": "2026-09-25T04:48:56Z"
+    },
+    "committer": {
+      "name": "GitHub",
+      "email": "noreply@github.com",
+      "date": "2026-09-25T04:48:56Z"
+    },
+    "message": "fix(store): keep the counters when .counters cannot be read (#914)\n\n## What\n\nA `.counters` file that exists but can't be read (EMFILE, EIO) no longer\nreads as zeros for\nthe callers that pass those zeros on. `_bump` keeps its batch for the\nnext bump instead of\nwriting it over zeros. `service_stats` raises, so `/stats` errors and\nthe snapshot is skipped\ninstead of recording zeros. The cache stamps in `app.py` and the room\nlisting pass\n`strict=False` and behave as before. A missing or corrupt file still\nreads as zeros, as\nbefore.\n\n## Why\n\nOn 2026-09-21 every lifetime counter in production reset at once:\n`messages` went from\n135,523,320 to 461,203, with no deploy and no restart. Room data was\nuntouched. `counters()`\ntreated any `OSError` as zeros, and `_bump` writes back what it read\nplus its batch, so a\nsingle failed read is a permanent reset. This is the likeliest cause;\nthe logs from that day\nare gone. The corrupt-file policy\n(`test_a_corrupt_counter_file_is_still_ignored_rather_than_trusted`)\nis deliberately left alone.\n\n`store.py` now sits at its cap (1030/1030): naming the `except` tuple\ncost the one line of\nheadroom, because B030 rejects the inline conditional.\n\n## Checks\n\n- [x] `uv run coverage run -m pytest tests -q && uv run coverage report`\n(860 passed)\n- [x] `uv run ruff check . && uv run ruff format --check .` and `uv run\nty check`\n- [x] Docs that would now be wrong are updated: `docs/store.md`\nregenerated\n- [x] New surface on a world-writable service: nothing new",
+    "tree": {
+      "sha": "54bae8622f9b1c67dbe7c5859a28efda55e233c4",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/git/trees/54bae8622f9b1c67dbe7c5859a28efda55e233c4"
+    },
+    "url": "https://api.github.com/repos/flop-labs/technocore-chat/git/commits/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+    "comment_count": 0,
+    "verification": {
+      "verified": true,
+      "reason": "valid",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqtf04CRC1aQ7uu5UhlAAAbwwQACTmZUEnnOs8kC2f2kEIZWFV\na5mLa9Zao+jl5tuGoVkM1Mh4ka4LNnGgT42H43NRX5ngMdw0yIBqWU/cwjyPY2oJ\n11iX0r+yIMPmkD67FVote0A+rcij5/qR1UHlggnfTC5eStoiICeZbpe46j5iY6nd\nPGd+suuwbURcO0yuoKI1Uv75PIQyhjRTmIlDofadHIQxK9+fdsJp9xjKpxTRYtli\nNa/FGUHYxnLpHzpiFrSJw/ugmjHLWaYaW8vcfzByLfNR9h0LCpr42SZQxP1FkZOK\n9qR+mrXS8BkpfJR4tVswWuB1lEZ7Ys5yzuccxUSF9Ih0zy9ipM8MOAYXT1NerSX7\nxXmTkMeOlMGlojuVBJfp/hb3Ecfrhleqwp6gfDIdXyYE5c0OCHc3ITkV+nYuTf23\nSxhDx6+Pn5VcH2BMnI/2pvFfCHyv7I0bV7LkL8VqBdtRAzdJ73MrbErHAblBised\n8H4SGVp+OCFP8f95iHQBMeaGoPYxel/AF4W1EXghmpKhOPvT4UhsUX+Ve6z8iAyz\nPwszccCwfnH2W7TnfsLBxVp+SNpBe/V8VYEIDq0QNjgQCQH2uJY1EdBoAY9nNBbl\nbjpsPwas3QONFsHWANsvV7ADY1TS3feiyXKzdBEwPvtPvuIBexh0+oFMA93qy6ND\noVsnjwUSQEOSCaVKvAWp\n=IUeH\n-----END PGP SIGNATURE-----\n",
+      "payload": "tree 54bae8622f9b1c67dbe7c5859a28efda55e233c4\nparent c3fcf06ac6b47a652a27b62ee72f24592180bcdf\nauthor Sergey Vidyuk <svidyuk@gmail.com> 1790311736 +0800\ncommitter GitHub <noreply@github.com> 1790311736 +0800\n\nfix(store): keep the counters when .counters cannot be read (#914)\n\n## What\n\nA `.counters` file that exists but can't be read (EMFILE, EIO) no longer\nreads as zeros for\nthe callers that pass those zeros on. `_bump` keeps its batch for the\nnext bump instead of\nwriting it over zeros. `service_stats` raises, so `/stats` errors and\nthe snapshot is skipped\ninstead of recording zeros. The cache stamps in `app.py` and the room\nlisting pass\n`strict=False` and behave as before. A missing or corrupt file still\nreads as zeros, as\nbefore.\n\n## Why\n\nOn 2026-09-21 every lifetime counter in production reset at once:\n`messages` went from\n135,523,320 to 461,203, with no deploy and no restart. Room data was\nuntouched. `counters()`\ntreated any `OSError` as zeros, and `_bump` writes back what it read\nplus its batch, so a\nsingle failed read is a permanent reset. This is the likeliest cause;\nthe logs from that day\nare gone. The corrupt-file policy\n(`test_a_corrupt_counter_file_is_still_ignored_rather_than_trusted`)\nis deliberately left alone.\n\n`store.py` now sits at its cap (1030/1030): naming the `except` tuple\ncost the one line of\nheadroom, because B030 rejects the inline conditional.\n\n## Checks\n\n- [x] `uv run coverage run -m pytest tests -q && uv run coverage report`\n(860 passed)\n- [x] `uv run ruff check . && uv run ruff format --check .` and `uv run\nty check`\n- [x] Docs that would now be wrong are updated: `docs/store.md`\nregenerated\n- [x] New surface on a world-writable service: nothing new",
+      "verified_at": "2026-09-25T04:48:57Z"
+    }
+  },
+  "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+  "html_url": "https://github.com/flop-labs/technocore-chat/commit/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+  "comments_url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/comments",
+  "author": {
+    "login": "sv",
+    "id": 14086,
+    "node_id": "MDQ6VXNlcjE0MDg2",
+    "avatar_url": "https://avatars.githubusercontent.com/u/14086?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/sv",
+    "html_url": "https://github.com/sv",
+    "followers_url": "https://api.github.com/users/sv/followers",
+    "following_url": "https://api.github.com/users/sv/following{/other_user}",
+    "gists_url": "https://api.github.com/users/sv/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/sv/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/sv/subscriptions",
+    "organizations_url": "https://api.github.com/users/sv/orgs",
+    "repos_url": "https://api.github.com/users/sv/repos",
+    "events_url": "https://api.github.com/users/sv/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/sv/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "committer": {
+    "login": "web-flow",
+    "id": 19864447,
+    "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+    "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/web-flow",
+    "html_url": "https://github.com/web-flow",
+    "followers_url": "https://api.github.com/users/web-flow/followers",
+    "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+    "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+    "organizations_url": "https://api.github.com/users/web-flow/orgs",
+    "repos_url": "https://api.github.com/users/web-flow/repos",
+    "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/web-flow/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "parents": [
+    {
+      "sha": "c3fcf06ac6b47a652a27b62ee72f24592180bcdf",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/c3fcf06ac6b47a652a27b62ee72f24592180bcdf",
+      "html_url": "https://github.com/flop-labs/technocore-chat/commit/c3fcf06ac6b47a652a27b62ee72f24592180bcdf"
+    }
+  ],
+  "stats": {
+    "total": 80,
+    "additions": 72,
+    "deletions": 8
+  },
+  "files": [
+    {
+      "sha": "6239ba7aef9c1da6dc93e841334d2c26b3d8a759",
+      "filename": "docs/store.md",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "changes": 2,
+      "blob_url": "https://github.com/flop-labs/technocore-chat/blob/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/docs%2Fstore.md",
+      "raw_url": "https://github.com/flop-labs/technocore-chat/raw/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/docs%2Fstore.md",
+      "contents_url": "https://api.github.com/repos/flop-labs/technocore-chat/contents/docs%2Fstore.md?ref=0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+      "patch": "@@ -5,7 +5,7 @@ via stdlib `inspect` — never edited by hand; a test regenerates and diffs this\n \n - `append(root: pathlib.Path, room: str, nick: str, text: str, did: str | None = None, nonce: int | None = None, sig: str | None = None) -> dict` — Append a message, and announce the room the first time it appears.\n - `clean_text(text: str, limit: int = 4096) -> str` — Replace every character in INVISIBLE_CATEGORIES with a space, then trim.\n-- `counters(root: pathlib.Path) -> dict` — The lifetime counters, with every key present. Read without the lock: the file is\n+- `counters(root: pathlib.Path, strict: bool = True) -> dict` — The lifetime counters, with every key present. Read without the lock: the file is\n - `export_room(root: pathlib.Path, room: str) -> tuple[int, collections.abc.Iterator[bytes]]` — The room's stored JSONL, bytes as written, snapshotted at open — and the room\n - `is_ephemeral(name: str) -> bool` — (undocumented)\n - `is_mailbox(name: str) -> bool` — `mb-` rooms take signed writes only, so spam is attributable and ignorable by key."
+    },
+    {
+      "sha": "d60fe0e5dabaa355f66f8b9eea46f15d90b6d98c",
+      "filename": "src/app.py",
+      "status": "modified",
+      "additions": 2,
+      "deletions": 2,
+      "changes": 4,
+      "blob_url": "https://github.com/flop-labs/technocore-chat/blob/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/src%2Fapp.py",
+      "raw_url": "https://github.com/flop-labs/technocore-chat/raw/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/src%2Fapp.py",
+      "contents_url": "https://api.github.com/repos/flop-labs/technocore-chat/contents/src%2Fapp.py?ref=0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+      "patch": "@@ -845,7 +845,7 @@ def _rooms_stamp() -> tuple:\n     window on a boundary can only expire an entry sooner than its own insertion would have,\n     which is the direction that keeps this docstring's promise rather than weakening it.\n     \"\"\"\n-    counted = store.counters(config.ROOT)\n+    counted = store.counters(config.ROOT, strict=False)\n     # ROOT rides along for the reason _note_stats_cache stamps it: the entries are keyed by\n     # `limit` alone, so nothing else would stop a view walked under one root being served\n     # under another. Production never moves it; a test fixture and a reconfigured reload do.\n@@ -868,7 +868,7 @@ def _note_stats() -> dict:\n     saves a file read. Keep it anyway — the stamp is what makes a second worker's write\n     visible here — but it is no longer the thing standing between /rooms and the store.\"\"\"\n     global _note_stats_cache\n-    stamp = (store.counters(config.ROOT)[\"notes_written\"], config.ROOT)\n+    stamp = (store.counters(config.ROOT, strict=False)[\"notes_written\"], config.ROOT)\n     now = time.monotonic()\n     hit = _note_stats_cache\n     if config.NOTE_STATS_CACHE_SECONDS > 0 and hit and hit[0] == stamp and now < hit[1]:"
+    },
+    {
+      "sha": "67cd17b9d0563e2224f8d3c5129d12194c37c99c",
+      "filename": "src/store.py",
+      "status": "modified",
+      "additions": 15,
+      "deletions": 5,
+      "changes": 20,
+      "blob_url": "https://github.com/flop-labs/technocore-chat/blob/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/src%2Fstore.py",
+      "raw_url": "https://github.com/flop-labs/technocore-chat/raw/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/src%2Fstore.py",
+      "contents_url": "https://api.github.com/repos/flop-labs/technocore-chat/contents/src%2Fstore.py?ref=0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+      "patch": "@@ -721,12 +721,21 @@ def _now() -> str:\n     return datetime.now(UTC).strftime(\"%Y-%m-%dT%H:%M:%S.%fZ\")\n \n \n-def counters(root: Path) -> dict:\n+def counters(root: Path, strict: bool = True) -> dict:\n     \"\"\"The lifetime counters, with every key present. Read without the lock: the file is\n-    replaced atomically, so a reader either sees the old bytes or the new ones.\"\"\"\n+    replaced atomically, so a reader either sees the old bytes or the new ones.\n+\n+    A missing file has counted nothing yet and a corrupt one is a diagnostic, never authority:\n+    both read as zeros. A file that exists but could not be *read* (EMFILE, EIO) is neither,\n+    and raises. `_bump` writes back what it read plus its batch, so zeros there are a permanent\n+    reset, the likeliest way production went 135,523,320 -> 461,203 on 2026-09-21 with no\n+    deploy and no restart; `service_stats` publishes and snapshots it, where zeros read as a\n+    reset downstream. Only a cache stamp, where a wrong read costs one miss, passes\n+    `strict=False`.\"\"\"\n+    zeros = (ValueError, FileNotFoundError) if strict else (OSError, ValueError)\n     try:\n         data = orjson.loads((root / COUNTERS_FILE).read_bytes())\n-    except (OSError, ValueError):\n+    except zeros:\n         data = {}\n     if not isinstance(data, dict):\n         data = {}\n@@ -814,7 +823,8 @@ def _bump(root: Path, **deltas: int) -> None:\n     except OSError:\n         # BlockingIOError — EAGAIN, the lock being busy — is a subclass of OSError and is\n         # the ordinary path here rather than a failure; a real IO error lands here too and\n-        # is swallowed exactly as it was before. Either way the deltas go back: `batch` is\n+        # is swallowed exactly as it was before. So does a `.counters` that `counters()`\n+        # could not read: the batch goes back rather than being written over zeros. Either way the deltas go back: `batch` is\n         # empty unless the flock was held and the replace then failed, which is the one\n         # case that has taken deltas out of the bucket and must return them.\n         with _PENDING_LOCK:\n@@ -1398,7 +1408,7 @@ def room_stats(root: Path, limit: int = DEFAULT_LIMIT) -> dict:\n     shown = []\n     windows = []\n     root_key = str(root)  # hoisted: it is the first element of both memo keys, per room\n-    topics_stamp = (counters(root)[\"topics_written\"], root_key)\n+    topics_stamp = (counters(root, strict=False)[\"topics_written\"], root_key)\n     mono = time.monotonic()\n     for mtime, size, name, mtime_ns in entries[: max(1, min(int(limit), MAX_LIMIT))]:\n         top, nicks = _cached_window(root_key, name, (mtime_ns, size))"
+    },
+    {
+      "sha": "f878d17da6c03cea999d25418214742faf589a08",
+      "filename": "tests/unit/test_counter_batching.py",
+      "status": "modified",
+      "additions": 54,
+      "deletions": 0,
+      "changes": 54,
+      "blob_url": "https://github.com/flop-labs/technocore-chat/blob/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/tests%2Funit%2Ftest_counter_batching.py",
+      "raw_url": "https://github.com/flop-labs/technocore-chat/raw/0e47f770b13cc27e1e2e199d4cdf70a4778c97cc/tests%2Funit%2Ftest_counter_batching.py",
+      "contents_url": "https://api.github.com/repos/flop-labs/technocore-chat/contents/tests%2Funit%2Ftest_counter_batching.py?ref=0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+      "patch": "@@ -428,3 +428,57 @@ def test_a_corrupt_counter_file_is_still_ignored_rather_than_trusted(tmp_path) -\n         \"messages\": 1,\n         \"rooms_created\": 1,\n     }\n+\n+\n+def _unreadable(monkeypatch, root: Path) -> None:\n+    \"\"\"`.counters` exists but every read of it fails the way a worker at its file limit sees\n+    it (EMFILE), while every other file in the store still reads normally.\"\"\"\n+    import errno\n+\n+    import store\n+\n+    real = Path.read_bytes\n+\n+    def read_bytes(self: Path) -> bytes:\n+        if self == root / store.COUNTERS_FILE:\n+            raise OSError(errno.EMFILE, \"Too many open files\")\n+        return real(self)\n+\n+    monkeypatch.setattr(Path, \"read_bytes\", read_bytes)\n+\n+\n+def test_an_unreadable_counter_file_keeps_its_totals_and_the_batch(tmp_path, monkeypatch) -> None:\n+    \"\"\"A read that fails is not a store that has counted nothing. Written back as zero plus\n+    the batch it is a permanent reset — 135,523,320 -> 461,203 in production, 2026-09-21, with\n+    no deploy and no restart — so the bump leaves the file alone and keeps its batch instead.\n+    \"\"\"\n+    import store\n+\n+    store._bump(tmp_path, rooms_created=5)\n+    with monkeypatch.context() as m:\n+        _unreadable(m, tmp_path)\n+        store._bump(tmp_path, rooms_created=1)\n+        with pytest.raises(OSError):\n+            store.counters(tmp_path)\n+        assert store.counters(tmp_path, strict=False)[\"rooms_created\"] == 0  # a stamp's read\n+\n+    assert _persisted(tmp_path)[\"rooms_created\"] == 5, \"a failed read was written back as zero\"\n+    store._bump(tmp_path)\n+    assert _persisted(tmp_path)[\"rooms_created\"] == 6, \"the batch did not survive the failure\"\n+\n+\n+def test_stats_and_snapshots_refuse_a_counter_read_that_failed(tmp_path, monkeypatch) -> None:\n+    \"\"\"`/stats` and the snapshot ring are where a zero leaves the process, and a reader\n+    differencing them sees a reset. A failed read costs that answer — an error, one missing\n+    sample — rather than publishing zeros nobody counted.\"\"\"\n+    import store\n+\n+    store._bump(tmp_path, rooms_created=5)\n+    with monkeypatch.context() as m:\n+        _unreadable(m, tmp_path)\n+        with pytest.raises(OSError):\n+            store.service_stats(tmp_path)\n+        store._snapshot(tmp_path)  # best effort: nothing escapes into the write that called it\n+\n+    assert store.snapshots(tmp_path) == []\n+    assert store.service_stats(tmp_path)[\"counters\"][\"rooms_created\"] == 5"
+    }
+  ]
+}

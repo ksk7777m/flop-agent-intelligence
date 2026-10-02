@@ -29,10 +29,14 @@ from .remote_content_policy import (
     resolve_reviewed_source,
 )
 from .wire_evidence import (
+    ReadBackStage,
+    advance_readback,
     _capture_signing_policy,
     build_signing_context,
     signing_capability_material,
 )
+from .message_verification import verify_message
+from .write_effect import WriteEffectError, attempt_keys, record_write_attempt
 
 BASE_URL = "https://technocore.chat"
 OFFICIAL_READ_SOURCES = frozenset({
@@ -93,6 +97,8 @@ def _authorized_local_request(url: str, payload: Dict[str, Any] | None, *, opene
 def _build_technocore_client(
     source_resolver: Any, capability_validator: Any,
     identity_loader: Any, message_signer: Any, response_decoder: Any,
+    *, signature_verifier: Any = verify_message,
+    attempt_recorder: Any = record_write_attempt,
 ) -> tuple[Any, Any, Any, Any, Any]:
     """Capture all trust and effect dependencies in one production client."""
     reviewed_reads = frozenset(OFFICIAL_READ_SOURCES)
@@ -103,6 +109,8 @@ def _build_technocore_client(
     text_sweeper = _capture_text_sweeper()
     context_builder, capability_material_builder = _capture_signing_policy()
     safe_error = SafeRemoteError
+    effect_error, stages, make_keys = WriteEffectError, ReadBackStage, attempt_keys
+    advance = advance_readback
     read_action = LocalActionClass.PRESENCE_NOTE_READ
     cas_action = LocalActionClass.DID_NOTE_CAS
     post_action = LocalActionClass.SIGNED_ROOM_POST
@@ -150,7 +158,22 @@ def _build_technocore_client(
             intent, cas_action, subject, target=did_note_path,
             payload=value, context=context, revision=revision,
             config_version=config_version)
-        return transport(base_url + did_note_path, {"value": value, "if": current})
+        attempt_recorder(*make_keys("DID_NOTE_CAS", did_note_path, current, value))
+        try:
+            transport(base_url + did_note_path, {"value": value, "if": current})
+            transport(base_url + did_note_path, None)
+        except safe_error as error:
+            redirect = (error.status in {301, 302, 303, 307, 308}
+                        or error.error_class == "FINAL_ORIGIN_MISMATCH")
+            raise effect_error(stages.REDIRECT_REJECTED if redirect
+                               else stages.EFFECT_UNKNOWN) from None
+        except Exception:
+            raise effect_error(stages.EFFECT_UNKNOWN) from None
+        # The documented read is banner-wrapped, mutable and unsigned. No
+        # substring match or 200 response may become a DID authority assertion.
+        return {"transport": stages.WRITE_ACCEPTED.value,
+                "write_effect": stages.EFFECT_UNKNOWN.value,
+                "readback": "UNSIGNED_NOTE_AUTHORITY_UNVERIFIED", "retry_allowed": False}
 
     def post(identity_path: Path, room: str, text: str, *, intent: ReviewedLocalIntent,
              revision: str, config_version: str, context: str,
@@ -173,20 +196,47 @@ def _build_technocore_client(
             raise RuntimeError("local signer canonicalization mismatch")
         payload = {"did": did, "sig": signature,
                    "nonce": signing_context.nonce.decimal, "text": clean}
-        transport(f"{base_url}/r/{quote_path(room, safe='')}", payload)
-        view = transport(
-            f"{base_url}/r/{quote_path(room, safe='')}?limit=200&format=json",
-            None)
+        attempt_recorder(*make_keys(did, room, nonce, clean))
+        stage = advance(stages.NOT_STARTED, "attempt_recorded")
+        try:
+            transport(f"{base_url}/r/{quote_path(room, safe='')}", payload)
+            stage = advance(stage, "write_accepted")
+            view = transport(
+                f"{base_url}/r/{quote_path(room, safe='')}?limit=200&format=json",
+                None)
+        except safe_error as error:
+            redirect = (error.status in {301, 302, 303, 307, 308}
+                        or error.error_class in {"FINAL_ORIGIN_MISMATCH", "REDIRECT_REJECTED"})
+            raise effect_error(stages.REDIRECT_REJECTED if redirect
+                               else stages.EFFECT_UNKNOWN) from None
+        except Exception:
+            raise effect_error(stages.EFFECT_UNKNOWN) from None
+        stage = advance(stage, "read_back_observed")
         if not isinstance(view, dict):
-            raise RuntimeError("Technocore JSON verification read returned an unexpected shape")
-        matches = [message for message in view.get("messages", [])
-                   if message.get("from") == did
+            raise effect_error(stages.READBACK_MISMATCH)
+        messages = view.get("messages")
+        if not isinstance(messages, list):
+            raise effect_error(stages.READBACK_MISMATCH)
+        matches = [message for message in messages
+                   if isinstance(message, dict) and message.get("from") == did
                    and message.get("nonce") == signing_context.nonce.decimal
                    and message.get("text") == clean]
         if len(matches) != 1:
-            raise RuntimeError(
-                f"could not uniquely verify signed post in JSON view (matches={len(matches)})")
-        return {**matches[0], "signature": signature,
+            raise effect_error(stages.READBACK_MISMATCH)
+        record = matches[0]
+        stage = advance(stage, "decode_valid")
+        try:
+            if type(record.get("sig")) is not str or record["sig"] != signature:
+                raise ValueError("signature binding")
+            signature_verifier(did, record["sig"], room, nonce, clean)
+        except Exception:
+            raise effect_error(stages.SIGNATURE_INVALID) from None
+        stage = advance(stage, "signature_valid")
+        stage = advance(stage, "state_replay_valid")
+        stage = advance(stage, "evidence_confirmed")
+        return {**record, "signature": record["sig"],
+                "write_effect": stage.value,
+                "effect_scope": "SIGNED_ROOM_RECORD_ONLY",
                 "input_text": text, "swept_text": clean}
 
     def find(identity_path: Path, room: str, text: str, *, intent: ReviewedLocalIntent,

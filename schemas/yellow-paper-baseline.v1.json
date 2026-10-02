@@ -10,19 +10,92 @@
     "artifact_generated_at": {"type": "string", "format": "date-time"},
     "reviewed_at": {"type": "string", "format": "date-time"},
     "source": {
-      "type": "object", "additionalProperties": false,
-      "required": ["source_id", "url", "authority", "version", "document_status", "updated", "raw_sha256_at_review", "normalized_text_sha256", "semantic_commitment_sha256", "discovered_url_navigation"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "url",
+        "authority",
+        "version",
+        "document_status",
+        "updated",
+        "raw_sha256_at_review",
+        "normalized_text_sha256",
+        "semantic_commitment_sha256",
+        "discovered_url_navigation",
+        "provenance"
+      ],
       "properties": {
-        "source_id": {"const": "FLOP_YELLOW_PAPER"},
-        "url": {"const": "https://flop.finance/intro/yellowpaper/"},
-        "authority": {"const": "OFFICIAL_PARAMETER_VALUES"},
-        "version": {"const": "0.5.0 (draft)"},
-        "document_status": {"const": "Implementation spec — iterating"},
-        "updated": {"const": "2026-09-05"},
-        "raw_sha256_at_review": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "normalized_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "semantic_commitment_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "discovered_url_navigation": {"const": "INERT"}
+        "source_id": {
+          "const": "FLOP_YELLOW_PAPER"
+        },
+        "url": {
+          "const": "https://flop.finance/intro/yellowpaper/"
+        },
+        "authority": {
+          "const": "OFFICIAL_PARAMETER_VALUES"
+        },
+        "version": {
+          "const": "0.5.0 (draft)"
+        },
+        "document_status": {
+          "const": "Implementation spec — iterating"
+        },
+        "updated": {
+          "const": "2026-09-24"
+        },
+        "raw_sha256_at_review": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "normalized_text_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "semantic_commitment_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "discovered_url_navigation": {
+          "const": "INERT"
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority_state",
+            "spec_commit",
+            "repository_url",
+            "retrieved_at",
+            "repository_content_sha256",
+            "evidence_manifest",
+            "semantic_diff"
+          ],
+          "properties": {
+            "authority_state": {
+              "const": "OFFICIAL_NORMATIVE_DRAFT"
+            },
+            "spec_commit": {
+              "const": "3c97bbc8d6ba68cf2ea003ab88bc154aafdf105e"
+            },
+            "repository_url": {
+              "const": "https://github.com/flop-labs/yellowpaper"
+            },
+            "retrieved_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "repository_content_sha256": {
+              "const": "b09a36d8eca75324152f2084c0cb7b9d21987e12d857445933907a12b0b0c03b"
+            },
+            "evidence_manifest": {
+              "const": "data/official_baseline/2026-10-02/manifest.json"
+            },
+            "semantic_diff": {
+              "const": "PARAMETERS_UNCHANGED_WIRE_SPEC_UPDATED"
+            }
+          }
+        }
       }
     },
     "status": {"const": "OFFICIAL_DRAFT_REVIEWED"},

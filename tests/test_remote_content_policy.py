@@ -571,7 +571,7 @@ class RemoteContentPolicyTests(unittest.TestCase):
         schema = json.loads((ROOT / "schemas/technocore-compatibility.v1.json").read_text())
         jsonschema.Draft202012Validator(schema).validate(manifest)
         self.assertEqual(manifest["status"], "COMPATIBILITY_REVIEW_REQUIRED")
-        self.assertEqual(manifest["reviewed_technocore_agent_version"], "0.13.0")
+        self.assertEqual(manifest["reviewed_technocore_agent_version"], "0.14.5")
         self.assertEqual(
             manifest["capability_evidence"]["runtime_observed"]["status"],
             "ONE_SHOT_PARTIAL_SEMANTIC_OBSERVATION")

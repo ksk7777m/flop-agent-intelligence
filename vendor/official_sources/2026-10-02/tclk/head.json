@@ -1,0 +1,209 @@
+{
+  "sha": "5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+  "node_id": "C_kwDOUKfg4doAKDVjYzRhYjkzZWZiYzg5OTlhM2E3ZTE0NzFiNjM5ZGVjYTI1OTk4ZWE",
+  "commit": {
+    "author": {
+      "name": "Asad Lee",
+      "email": "asadaly416@gmail.com",
+      "date": "2026-09-03T17:43:54Z"
+    },
+    "committer": {
+      "name": "GitHub",
+      "email": "noreply@github.com",
+      "date": "2026-09-03T17:43:54Z"
+    },
+    "message": "fix(mcp): preserve exact string nonces in tclk_post_frame (#55)\n\n* fix(mcp): preserve exact string nonces in tclk_post_frame\n\n* fix(worker): enforce post-frame nonce constraints\n\n---------\n\nCo-authored-by: Asadlee24 <asadlee24@gmail.com>",
+    "tree": {
+      "sha": "8fd4336898e1479fb4e031faa18e1707182d7ef7",
+      "url": "https://api.github.com/repos/flop-labs/tclk/git/trees/8fd4336898e1479fb4e031faa18e1707182d7ef7"
+    },
+    "url": "https://api.github.com/repos/flop-labs/tclk/git/commits/5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+    "comment_count": 0,
+    "verification": {
+      "verified": true,
+      "reason": "valid",
+      "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqmbHaCRC1aQ7uu5UhlAAAu20QAHt9yFVmBKYSj1nkC59Krnoo\nEtgEjHgq108gwAaxbWySFSyj6siG0KRRK7SAFdhXyU1W/renBXHKr5EoZoOTpTBK\nSVmNffuLTH5yE+74NXeLm8dXtqy78PO42D/JNaW6MgX7kYwLauDPcG6pfl2hzV+a\npPASS5eqTl/0nOnXvBLQTYD/ZtZ1dJZvTdNOGjnWJvo5Szd1jzyuFG9bg+85F5t1\n+UiYeDbGf1HRZvxlzosfSz88XRaCdrdT8qnH4mXi4V4q+W9gqMwEVI18uNKpa9FP\nkxJ+FMi14ICWLz4Ld12LX5NhK9qG2YiNFiLfxcjKcCTCKZDNFtaoMRy8V/K6Tnx5\nglpFRS38AJKJtQbL0xjNr/SQ7oZKVjT9GmQ9fLFi+9SZgxVAjmGw1NhuyLKgtieq\nlFEJS4QlbtejGvVMlaxJ9PnMxN7XsRPD2G0jYqo2Js2yDSDs6OxhNrF2ItT13qnY\nKVu9iPyH1SI1etzFIFolUtjXm2XFDO21fj8hPmRehGoTEZcV4RN3ThZlA20IHg0G\nDxNC0Coyo8Zus7fv+jri1x4Fb7ZESmJSl1NFRHsZ8o9gwmttJDfAZaPtGViMLp6A\nG8/etQ9vnT/O4NfMwL6k9EOGgtpETWuXjMnl7WcaiLHIIN2iSqf1NQuLRAx4Jeio\nRg+xCXppT+3pJMK7y7gG\n=SNxe\n-----END PGP SIGNATURE-----\n",
+      "payload": "tree 8fd4336898e1479fb4e031faa18e1707182d7ef7\nparent d48e87343200e3115e243df39e8f295f5ce2e645\nauthor Asad Lee <asadaly416@gmail.com> 1788457434 +0500\ncommitter GitHub <noreply@github.com> 1788457434 +0800\n\nfix(mcp): preserve exact string nonces in tclk_post_frame (#55)\n\n* fix(mcp): preserve exact string nonces in tclk_post_frame\n\n* fix(worker): enforce post-frame nonce constraints\n\n---------\n\nCo-authored-by: Asadlee24 <asadlee24@gmail.com>",
+      "verified_at": "2026-09-03T17:43:54Z"
+    }
+  },
+  "url": "https://api.github.com/repos/flop-labs/tclk/commits/5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+  "html_url": "https://github.com/flop-labs/tclk/commit/5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+  "comments_url": "https://api.github.com/repos/flop-labs/tclk/commits/5cc4ab93efbc8999a3a7e1471b639deca25998ea/comments",
+  "author": {
+    "login": "Asadlee24",
+    "id": 176794791,
+    "node_id": "U_kgDOComspw",
+    "avatar_url": "https://avatars.githubusercontent.com/u/176794791?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/Asadlee24",
+    "html_url": "https://github.com/Asadlee24",
+    "followers_url": "https://api.github.com/users/Asadlee24/followers",
+    "following_url": "https://api.github.com/users/Asadlee24/following{/other_user}",
+    "gists_url": "https://api.github.com/users/Asadlee24/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/Asadlee24/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/Asadlee24/subscriptions",
+    "organizations_url": "https://api.github.com/users/Asadlee24/orgs",
+    "repos_url": "https://api.github.com/users/Asadlee24/repos",
+    "events_url": "https://api.github.com/users/Asadlee24/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/Asadlee24/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "committer": {
+    "login": "web-flow",
+    "id": 19864447,
+    "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+    "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/web-flow",
+    "html_url": "https://github.com/web-flow",
+    "followers_url": "https://api.github.com/users/web-flow/followers",
+    "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+    "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+    "organizations_url": "https://api.github.com/users/web-flow/orgs",
+    "repos_url": "https://api.github.com/users/web-flow/repos",
+    "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/web-flow/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "parents": [
+    {
+      "sha": "d48e87343200e3115e243df39e8f295f5ce2e645",
+      "url": "https://api.github.com/repos/flop-labs/tclk/commits/d48e87343200e3115e243df39e8f295f5ce2e645",
+      "html_url": "https://github.com/flop-labs/tclk/commit/d48e87343200e3115e243df39e8f295f5ce2e645"
+    }
+  ],
+  "stats": {
+    "total": 230,
+    "additions": 219,
+    "deletions": 11
+  },
+  "files": [
+    {
+      "sha": "c9d235e91b9dc3b600b5943cdc492698f141482b",
+      "filename": "CHANGELOG.md",
+      "status": "modified",
+      "additions": 7,
+      "deletions": 0,
+      "changes": 7,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/CHANGELOG.md",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/CHANGELOG.md",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/CHANGELOG.md?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format follows\n \n ## [Unreleased]\n \n+### Fixed\n+\n+- `tclk_post_frame` now accepts exact decimal-string nonces in addition to safe integer\n+  numbers, so signed Technocore nonces above JavaScript's safe-integer range are preserved\n+  without precision loss. Unsafe numeric nonces (> 2^53 - 1) are rejected at the MCP schema\n+  boundary rather than silently rounded.\n+\n ### Added\n \n - A schema-owned tclk/1 frame field contract, canonical settlement-rail registry and"
+    },
+    {
+      "sha": "fa638d92c5269475ad9232b450cca53e6c816e4f",
+      "filename": "mcp/src/server.ts",
+      "status": "modified",
+      "additions": 7,
+      "deletions": 1,
+      "changes": 8,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fsrc%2Fserver.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fsrc%2Fserver.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Fsrc%2Fserver.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -332,7 +332,13 @@ export function createServer(options: HandlerOptions = {}): McpServer {\n         line,\n         did: did.optional(),\n         sig: z.string().optional().describe(\"86 unpadded base64url characters.\"),\n-        nonce: z.number().int().optional(),\n+        nonce: z\n+          .union([\n+            z.number().int().safe().nonnegative(),\n+            z.string().regex(/^[0-9]{1,19}$/, \"1 to 19 decimal digits\"),\n+          ])\n+          .optional()\n+          .describe(\"Signed-lane nonce; safe integer or 1-19 decimal digit string.\"),\n       },\n     },\n     (args) => run(() => h.tclk_post_frame(args)),"
+    },
+    {
+      "sha": "8fca7e5f3ace8e1a0c2e6eecfa04c34777f6f643",
+      "filename": "mcp/src/signing.ts",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 1,
+      "changes": 2,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fsrc%2Fsigning.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fsrc%2Fsigning.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Fsrc%2Fsigning.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -43,7 +43,7 @@ export function sweep(text: string): string {\n }\n \n /** The string an Ed25519 room-message signature covers, UTF-8. */\n-export function canonicalMessage(room: string, nonce: number, sweptText: string): string {\n+export function canonicalMessage(room: string, nonce: number | string, sweptText: string): string {\n   return `${room}|${nonce}|${sweptText}`;\n }\n "
+    },
+    {
+      "sha": "cee7287d5509ee289c77fac608465c13ba9569ad",
+      "filename": "mcp/src/tools.ts",
+      "status": "modified",
+      "additions": 9,
+      "deletions": 1,
+      "changes": 10,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fsrc%2Ftools.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fsrc%2Ftools.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Fsrc%2Ftools.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -113,7 +113,7 @@ export interface PostFrameInput {\n   line: string;\n   did?: string;\n   sig?: string;\n-  nonce?: number;\n+  nonce?: number | string;\n }\n \n // ── Handlers ─────────────────────────────────────────────────────────────────\n@@ -377,6 +377,14 @@ export function createHandlers(options: HandlerOptions = {}) {\n         fail(\"pass all three of `did`, `sig` and `nonce`, or none of them\");\n       }\n \n+      if (input.nonce !== undefined) {\n+        const isSafe = typeof input.nonce === \"number\" && Number.isSafeInteger(input.nonce) && input.nonce >= 0;\n+        const isDecimal = typeof input.nonce === \"string\" && /^[0-9]{1,19}$/.test(input.nonce);\n+        if (!isSafe && !isDecimal) {\n+          fail(\"`nonce` must be a non-negative safe integer or a 1-19 decimal digit string\");\n+        }\n+      }\n+\n       if (supplied === 3) {\n         const response = await client.postSigned(input.room, {\n           did: input.did!,"
+    },
+    {
+      "sha": "c3abad1d3efcc9a74c2628b75878d320df568241",
+      "filename": "mcp/tests/server.test.ts",
+      "status": "modified",
+      "additions": 46,
+      "deletions": 0,
+      "changes": 46,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Ftests%2Fserver.test.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Ftests%2Fserver.test.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Ftests%2Fserver.test.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -65,4 +65,50 @@ describe(\"createServer\", () => {\n \n     await client.close();\n   });\n+\n+  it(\"validates tclk_post_frame nonce: accepts safe int or 1-19 digit string, rejects unsafe numbers and malformed strings\", async () => {\n+    const client = await connect();\n+\n+    // 1. Safe integer is accepted (schema validation passes; error comes from frame validation)\n+    const safeInt = await client.callTool({\n+      name: \"tclk_post_frame\",\n+      arguments: { room: \"lobby\", line: \"gm\", did: \"did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX\", sig: \"x\".repeat(86), nonce: 7 },\n+    });\n+    expect(safeInt.isError).toBe(true);\n+    expect((safeInt.content as { text: string }[])[0].text).toMatch(/not a tclk\\/1 line/);\n+\n+    // 2. Unsafe number > MAX_SAFE_INTEGER is rejected at schema level\n+    const unsafeNum = await client.callTool({\n+      name: \"tclk_post_frame\",\n+      arguments: { room: \"lobby\", line: \"gm\", did: \"did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX\", sig: \"x\".repeat(86), nonce: 9007199254740992 },\n+    });\n+    expect(unsafeNum.isError).toBe(true);\n+    expect((unsafeNum.content as { text: string }[])[0].text).toMatch(/Number must be less than or equal to 9007199254740991/);\n+\n+    // 3. Malformed string (non-decimal) is rejected\n+    const badStr = await client.callTool({\n+      name: \"tclk_post_frame\",\n+      arguments: { room: \"lobby\", line: \"gm\", did: \"did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX\", sig: \"x\".repeat(86), nonce: \"123bad\" },\n+    });\n+    expect(badStr.isError).toBe(true);\n+    expect((badStr.content as { text: string }[])[0].text).toMatch(/Invalid arguments/);\n+\n+    // 4. String exceeding 19 digits is rejected\n+    const tooLongStr = await client.callTool({\n+      name: \"tclk_post_frame\",\n+      arguments: { room: \"lobby\", line: \"gm\", did: \"did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX\", sig: \"x\".repeat(86), nonce: \"12345678901234567890\" },\n+    });\n+    expect(tooLongStr.isError).toBe(true);\n+    expect((tooLongStr.content as { text: string }[])[0].text).toMatch(/Invalid arguments/);\n+\n+    // 5. Valid 19-digit string passes schema validation (fails later on frame decoding)\n+    const validStr = await client.callTool({\n+      name: \"tclk_post_frame\",\n+      arguments: { room: \"lobby\", line: \"gm\", did: \"did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX\", sig: \"x\".repeat(86), nonce: \"1730000000000000001\" },\n+    });\n+    expect(validStr.isError).toBe(true);\n+    expect((validStr.content as { text: string }[])[0].text).toMatch(/not a tclk\\/1 line/);\n+\n+    await client.close();\n+  });\n });"
+    },
+    {
+      "sha": "f02059438f41457d0b4f2dfcc965f37c582d668d",
+      "filename": "mcp/tests/signing.test.ts",
+      "status": "modified",
+      "additions": 4,
+      "deletions": 0,
+      "changes": 4,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Ftests%2Fsigning.test.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Ftests%2Fsigning.test.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Ftests%2Fsigning.test.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -89,6 +89,10 @@ describe(\"canonical string and signature\", () => {\n     const canonical = canonicalMessage(\"lobby\", 1730000000000, \"tclk1 {}\");\n     expect(canonical).toBe(\"lobby|1730000000000|tclk1 {}\");\n \n+    const nonce19 = \"1730000000000000001\";\n+    const canonical19 = canonicalMessage(\"lobby\", nonce19, \"tclk1 {}\");\n+    expect(canonical19).toBe(\"lobby|1730000000000000001|tclk1 {}\");\n+\n     const sig = signer.sign(canonical);\n     // 86 characters, unpadded, and canonical: sixteen strings decode to the same 64\n     // bytes, so the final character must be the one the encoder produces."
+    },
+    {
+      "sha": "501103b03ba6aa8d0971d692d7053c7a62f8c972",
+      "filename": "mcp/tests/transport.test.ts",
+      "status": "modified",
+      "additions": 46,
+      "deletions": 0,
+      "changes": 46,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Ftests%2Ftransport.test.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Ftests%2Ftransport.test.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Ftests%2Ftransport.test.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -91,6 +91,52 @@ describe(\"tclk_post_frame — tier 2, server-signed\", () => {\n     expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({ did: signer.did, nonce: \"7\", text: line });\n   });\n \n+  it(\"passes a caller's legal 19-digit string nonce straight through without precision loss\", async () => {\n+    const { calls, fetchLike } = fakeFetch([{ body: \"ok 14\" }]);\n+    const h = createHandlers({ env: {}, fetch: fetchLike });\n+    const line = offerLine();\n+    const nonce19 = \"1730000000000000001\";\n+\n+    const result = await h.tclk_post_frame({\n+      room: ROOM,\n+      line,\n+      did: signer.did,\n+      sig: signer.sign(canonicalMessage(ROOM, nonce19, line)),\n+      nonce: nonce19,\n+    });\n+    expect(result.posted && result.tier).toBe(\"caller-signed\");\n+    if (result.posted && result.tier === \"caller-signed\") {\n+      expect(result.nonce).toBe(nonce19);\n+    }\n+    const body = JSON.parse(String(calls[0].init?.body));\n+    expect(body.nonce).toBe(nonce19);\n+    // Prove no numeric precision loss occurred\n+    expect(String(Number(nonce19))).not.toBe(nonce19);\n+    expect(body.nonce).not.toBe(String(Number(nonce19)));\n+  });\n+\n+  it(\"rejects an unsafe numeric nonce or malformed string in the shared handler\", async () => {\n+    const { fetchLike } = fakeFetch([{ body: \"ok 14\" }]);\n+    const h = createHandlers({ env: {}, fetch: fetchLike });\n+    const line = offerLine();\n+\n+    await expect(h.tclk_post_frame({\n+      room: ROOM,\n+      line,\n+      did: signer.did,\n+      sig: \"x\".repeat(86),\n+      nonce: 9007199254740992,\n+    })).rejects.toThrow(/must be a non-negative safe integer or a 1-19 decimal digit string/);\n+\n+    await expect(h.tclk_post_frame({\n+      room: ROOM,\n+      line,\n+      did: signer.did,\n+      sig: \"x\".repeat(86),\n+      nonce: \"123bad\",\n+    })).rejects.toThrow(/must be a non-negative safe integer or a 1-19 decimal digit string/);\n+  });\n+\n   it(\"surfaces the venue's refusal instead of swallowing it\", async () => {\n     const { fetchLike } = fakeFetch([{ status: 403, body: \"403 bad sig\\n\" }]);\n     const h = createHandlers({ env: { TECHNOCORE_SIGNING_KEY: PAYER_SEED }, fetch: fetchLike });"
+    },
+    {
+      "sha": "6ed5e183b37fef1e275712c73e41cd2c7c0865f7",
+      "filename": "mcp/worker/src/tool-manifest.generated.ts",
+      "status": "modified",
+      "additions": 12,
+      "deletions": 1,
+      "changes": 13,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fworker%2Fsrc%2Ftool-manifest.generated.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fworker%2Fsrc%2Ftool-manifest.generated.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Fworker%2Fsrc%2Ftool-manifest.generated.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -730,7 +730,18 @@ export const TOOLS: readonly ManifestTool[] = [\n           \"description\": \"86 unpadded base64url characters.\"\n         },\n         \"nonce\": {\n-          \"type\": \"integer\"\n+          \"anyOf\": [\n+            {\n+              \"type\": \"integer\",\n+              \"minimum\": 0,\n+              \"maximum\": 9007199254740991\n+            },\n+            {\n+              \"type\": \"string\",\n+              \"pattern\": \"^[0-9]{1,19}$\"\n+            }\n+          ],\n+          \"description\": \"Signed-lane nonce; safe integer or 1-19 decimal digit string.\"\n         }\n       },\n       \"required\": ["
+    },
+    {
+      "sha": "bdd08aab60e58e157e54e1df834282f98b64f17e",
+      "filename": "mcp/worker/src/worker.ts",
+      "status": "modified",
+      "additions": 36,
+      "deletions": 7,
+      "changes": 43,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fworker%2Fsrc%2Fworker.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fworker%2Fsrc%2Fworker.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Fworker%2Fsrc%2Fworker.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -240,6 +240,40 @@ function typeMatches(expected: string, actual: string): boolean {\n  * reimplementation of the stdio server's zod schemas and does not try to be one; the\n  * schemas it checks against ARE those schemas, compiled to JSON Schema.\n  */\n+function checkProperty(key: string, property: Record<string, unknown>, value: unknown): string | null {\n+  if (Array.isArray(property.anyOf)) {\n+    const matches = property.anyOf.some(\n+      (branch) => isPlainObject(branch) && checkProperty(key, branch, value) === null,\n+    );\n+    if (!matches) {\n+      return `argument \\`${key}\\` does not match allowed schema`;\n+    }\n+    return null;\n+  }\n+\n+  const actual = jsonTypeOf(value);\n+  if (typeof property.type === \"string\" && !typeMatches(property.type, actual)) {\n+    return `argument \\`${key}\\` must be a ${property.type}, got ${actual}`;\n+  }\n+  if (Array.isArray(property.enum) && !property.enum.includes(value as never)) {\n+    return `argument \\`${key}\\` must be one of ${JSON.stringify(property.enum)}`;\n+  }\n+  if (typeof value === \"number\") {\n+    if (typeof property.minimum === \"number\" && value < property.minimum) {\n+      return `argument \\`${key}\\` must be >= ${property.minimum}, got ${value}`;\n+    }\n+    if (typeof property.maximum === \"number\" && value > property.maximum) {\n+      return `argument \\`${key}\\` must be <= ${property.maximum}, got ${value}`;\n+    }\n+  }\n+  if (typeof value === \"string\" && typeof property.pattern === \"string\") {\n+    if (!new RegExp(property.pattern).test(value)) {\n+      return `argument \\`${key}\\` must match pattern /${property.pattern}/`;\n+    }\n+  }\n+  return null;\n+}\n+\n function checkArguments(tool: ManifestTool, args: Record<string, unknown>): string | null {\n   const schema = tool.inputSchema;\n   const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];\n@@ -251,13 +285,8 @@ function checkArguments(tool: ManifestTool, args: Record<string, unknown>): stri\n     if (value === undefined) continue;\n     const property = properties[key];\n     if (!isPlainObject(property)) continue;\n-    const actual = jsonTypeOf(value);\n-    if (typeof property.type === \"string\" && !typeMatches(property.type, actual)) {\n-      return `argument \\`${key}\\` must be a ${property.type}, got ${actual}`;\n-    }\n-    if (Array.isArray(property.enum) && !property.enum.includes(value as never)) {\n-      return `argument \\`${key}\\` must be one of ${JSON.stringify(property.enum)}`;\n-    }\n+    const reason = checkProperty(key, property, value);\n+    if (reason !== null) return reason;\n   }\n   return null;\n }"
+    },
+    {
+      "sha": "0f540751aa8626d50d84bf744997bb404b9144d4",
+      "filename": "mcp/worker/tests/worker.test.ts",
+      "status": "modified",
+      "additions": 51,
+      "deletions": 0,
+      "changes": 51,
+      "blob_url": "https://github.com/flop-labs/tclk/blob/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fworker%2Ftests%2Fworker.test.ts",
+      "raw_url": "https://github.com/flop-labs/tclk/raw/5cc4ab93efbc8999a3a7e1471b639deca25998ea/mcp%2Fworker%2Ftests%2Fworker.test.ts",
+      "contents_url": "https://api.github.com/repos/flop-labs/tclk/contents/mcp%2Fworker%2Ftests%2Fworker.test.ts?ref=5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+      "patch": "@@ -248,6 +248,57 @@ describe(\"no custody\", () => {\n     expect(calls[0].url).toBe(`https://technocore.chat/r/${ROOM}`);\n   });\n \n+  it(\"tclk_post_frame passes a caller's 19-digit string nonce through to the wire\", async () => {\n+    const { calls, fetchLike } = fakeFetch([{ body: \"ok 14\" }]);\n+    const line = (await callTool(\"tclk_make_offer\", HASH_OFFER)).value.line;\n+    const nonce19 = \"1730000000000000001\";\n+\n+    const posted = await callTool(\n+      \"tclk_post_frame\",\n+      { room: ROOM, line, did: PAYER_DID, sig: \"x\".repeat(86), nonce: nonce19 },\n+      fetchLike,\n+    );\n+    expect(posted.value.posted).toBe(true);\n+    expect(posted.value.tier).toBe(\"caller-signed\");\n+    expect(posted.value.nonce).toBe(nonce19);\n+    expect(JSON.parse(String(calls[0].init?.body)).nonce).toBe(nonce19);\n+  });\n+\n+  it(\"tclk_post_frame rejects unsafe numeric nonces and malformed strings at Worker boundary before network\", async () => {\n+    const { calls, fetchLike } = fakeFetch([{ body: \"ok 14\" }]);\n+    const line = (await callTool(\"tclk_make_offer\", HASH_OFFER)).value.line;\n+\n+    // Unsafe number > MAX_SAFE_INTEGER must return RPC error -32602 and never call network\n+    const unsafeRes = await rpc(\n+      \"tools/call\",\n+      { name: \"tclk_post_frame\", arguments: { room: ROOM, line, did: PAYER_DID, sig: \"x\".repeat(86), nonce: 9007199254740992 } },\n+      fetchLike,\n+    );\n+    expect(unsafeRes.body.error).toBeDefined();\n+    expect(unsafeRes.body.error.code).toBe(-32602);\n+    expect(calls).toHaveLength(0);\n+\n+    // Malformed string must return RPC error -32602 and never call network\n+    const malformedRes = await rpc(\n+      \"tools/call\",\n+      { name: \"tclk_post_frame\", arguments: { room: ROOM, line, did: PAYER_DID, sig: \"x\".repeat(86), nonce: \"123bad\" } },\n+      fetchLike,\n+    );\n+    expect(malformedRes.body.error).toBeDefined();\n+    expect(malformedRes.body.error.code).toBe(-32602);\n+    expect(calls).toHaveLength(0);\n+\n+    // >19 digit string must return RPC error -32602 and never call network\n+    const tooLongRes = await rpc(\n+      \"tools/call\",\n+      { name: \"tclk_post_frame\", arguments: { room: ROOM, line, did: PAYER_DID, sig: \"x\".repeat(86), nonce: \"12345678901234567890\" } },\n+      fetchLike,\n+    );\n+    expect(tooLongRes.body.error).toBeDefined();\n+    expect(tooLongRes.body.error.code).toBe(-32602);\n+    expect(calls).toHaveLength(0);\n+  });\n+\n   it(\"tclk_adaptor_presign refuses structurally, naming where pre-signing belongs\", async () => {\n     const refused = await callTool(\"tclk_adaptor_presign\", {\n       msg: `0x${\"11\".repeat(32)}`,"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "node_id": "TA_kwDOUqf60toAKGRlYmUwMTFiMDY4M2Y5YjExYWMxMjQ5ODQ0MDM5ODkzN2QzMDViYTg",
+  "sha": "debe011b0683f9b11ac12498440398937d305ba8",
+  "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/tags/debe011b0683f9b11ac12498440398937d305ba8",
+  "tagger": {
+    "name": "Sergey Vidyuk",
+    "email": "svidyuk@gmail.com",
+    "date": "2026-09-25T09:12:14Z"
+  },
+  "object": {
+    "sha": "66c1da36538e4b1c685417d2f66922906b13fea0",
+    "type": "commit",
+    "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/git/commits/66c1da36538e4b1c685417d2f66922906b13fea0"
+  },
+  "tag": "close-1",
+  "message": "close-1: the package the referee runs\n\nmanifest.json sha256 bae09812e25eb6f1369c611f24964f7ea0acafddfc45301a16f33f941296dafa\nOpening 2026-09-25T12:00:00Z; lock 2026-10-04T09:00:00Z; S is the last xyz:NVDA trade before 10:00:00 UTC on 4 October.\n",
+  "verification": {
+    "verified": false,
+    "reason": "unsigned",
+    "signature": null,
+    "payload": null,
+    "verified_at": null
+  }
+}

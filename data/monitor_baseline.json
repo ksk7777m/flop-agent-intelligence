@@ -10,7 +10,9 @@
     "skill.md": "f2616b7195eeacbbba21ca493211866f0768ea2bea7e0d4059d7045da7bcffe3"
   },
   "flop_site_sha256": "2aaa29fb62125b3c97534b6145d254300932da6c247578a50d475c618cd1dc27",
-  "flop_site_terms": ["eligibility"],
+  "flop_site_terms": [
+    "eligibility"
+  ],
   "teaser": {
     "source": "https://flop.finance/teaser/",
     "source_tier": "TIER_1_OFFICIAL",
@@ -56,11 +58,14 @@
     "source": "https://flop.finance/intro/yellowpaper/",
     "source_tier": "TIER_1_OFFICIAL_PARAMETER_AUTHORITY",
     "content_label": "UNTRUSTED_OFFICIAL_CONTENT",
-    "captured_at": "2026-09-11T03:29:35Z",
-    "raw_sha256": "9dc8119501809ada89af093386a1432bd3e06472a68e992c5afc0fd778ce42ed",
-    "normalized_text_sha256": "679331d4c9984b21aeb8e30a2e6599251d2ced54d5f8cc28557901a402010738",
-    "semantic_commitment_sha256": "d6bfe08d6578f48347734fb247cc82c97a999c92fe7f2e636518deefaeae6151",
-    "metadata": {"version": "0.5.0 (draft)", "status": "Implementation spec — iterating", "updated": "2026-09-05"},
+    "raw_sha256": "67cee59db45c72f7dce991e18333c319d60890f5b48503125c3d4aa42251b01f",
+    "normalized_text_sha256": "ac642abefeccd294e139256d2927234e35bb95efcf4431b59743c273207d6837",
+    "semantic_commitment_sha256": "d09c703e19cd66ef1c7fbb3444e2a832e5820e193fb109c7c166d9fd6c7f1a49",
+    "metadata": {
+      "version": "0.5.0 (draft)",
+      "status": "Implementation spec — iterating",
+      "updated": "2026-09-24"
+    },
     "parameters": {
       "genesis_supply": 4400000000,
       "genesis_miner_airdrop": 1200000000,
@@ -92,18 +97,30 @@
       "subsidy_per_block_per_recipient": "FLOP"
     },
     "unresolved": [
-      "TESTNET_ENDPOINT", "FAUCET_ENDPOINT", "CLAIM_ENDPOINT",
-      "REGISTRATION_OR_PROVISIONING_ENDPOINT", "TOKEN_OR_CONTRACT_ENDPOINT",
-      "AGENT_SCORING_FORMULA", "TESTNET_TO_MAINNET_CONVERSION",
-      "MINIMUM_ACTIVITY", "SNAPSHOT_DATE", "CLAIM_WINDOW",
-      "AIRDROP_CAP_FORMULA", "SPEND_TO_UNLOCK_FINAL_RULE",
-      "VESTING_RELEASE_RECONCILIATION", "UNALLOCATED_REMAINDER_DISPOSITION",
+      "TESTNET_ENDPOINT",
+      "FAUCET_ENDPOINT",
+      "CLAIM_ENDPOINT",
+      "REGISTRATION_OR_PROVISIONING_ENDPOINT",
+      "TOKEN_OR_CONTRACT_ENDPOINT",
+      "AGENT_SCORING_FORMULA",
+      "TESTNET_TO_MAINNET_CONVERSION",
+      "MINIMUM_ACTIVITY",
+      "SNAPSHOT_DATE",
+      "CLAIM_WINDOW",
+      "AIRDROP_CAP_FORMULA",
+      "SPEND_TO_UNLOCK_FINAL_RULE",
+      "VESTING_RELEASE_RECONCILIATION",
+      "UNALLOCATED_REMAINDER_DISPOSITION",
       "AGENT_STAKER_REWARD_DISTRIBUTION"
     ],
-    "discovered_links": {"count": 910, "navigation": "INERT"},
+    "discovered_links": {
+      "count": 983,
+      "navigation": "INERT"
+    },
     "authority": "PARAMETER_VALUES_ONLY",
     "ready_to_act": false,
     "authorized_to_act": false,
-    "live_action_enabled": false
+    "live_action_enabled": false,
+    "captured_at": "2026-10-02T09:14:22Z"
   }
 }

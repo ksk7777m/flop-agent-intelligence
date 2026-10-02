@@ -13,22 +13,50 @@
     "tclk_offer_global_winner_boundary", "tclk_offer_wide_evidence", "tclk_source_attestation", "tclk_offer_wide_completeness", "tclk_authenticated_winner", "flop_testnet_readiness", "flop_kol_referral_readiness", "delegation_signature_first_resolution", "settlement_rail_maturity", "security_consolidation"
   ],
   "properties": {
+    "p0_refresh": {"type": "object", "additionalProperties": false, "required": ["evidence_manifest", "runtime_review", "historical_observation_policy", "write_compatibility"], "properties": {"evidence_manifest": {"const": "data/official_baseline/2026-10-02/manifest.json"}, "runtime_review": {"const": "data/technocore_runtime_review.json"}, "historical_observation_policy": {"const": "PRIOR_0130_OBSERVATIONS_RETAINED_NOT_PROMOTED"}, "write_compatibility": {"const": "UNVERIFIED_NO_LIVE_WRITE_PROBE"}}},
     "schema": {"const": "technocore-compatibility-manifest-v1"},
     "status": {"const": "COMPATIBILITY_REVIEW_REQUIRED"},
     "reviewed_at": {"type": "string", "format": "date-time"},
     "reviewed_technocore_agent_version": {"type": "string", "minLength": 1},
     "release_tracking": {
-      "type": "object", "additionalProperties": false,
-      "required": ["latest_released_tag", "tag_commit", "upstream_main_head", "live_openapi_version", "live_observed_at", "unreleased_main_delta", "currentness", "action"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "latest_released_tag",
+        "tag_commit",
+        "upstream_main_head",
+        "live_openapi_version",
+        "live_observed_at",
+        "unreleased_main_delta",
+        "currentness",
+        "action"
+      ],
       "properties": {
-        "latest_released_tag": {"const": "v0.13.0"},
-        "tag_commit": {"const": "45921c3e3699e01a55cde391674815367e0cff6b"},
-        "upstream_main_head": {"const": "20a4457b89ba11254f4aa48217b066884a148d98"},
-        "live_openapi_version": {"const": "0.13.0"},
-        "live_observed_at": {"type": "string", "format": "date-time"},
-        "unreleased_main_delta": {"const": "DOCUMENTATION_ONLY_OPERATOR_MEASUREMENT_PROBE"},
-        "currentness": {"const": "REVIEWED_AT_TIMESTAMP"},
-        "action": {"const": "NO_LIVE_ACTION"}
+        "latest_released_tag": {
+          "const": "v0.14.5"
+        },
+        "tag_commit": {
+          "const": "cd1ce1c55a9956f3cb14ec42c1dd9707981926f9"
+        },
+        "upstream_main_head": {
+          "const": "0e47f770b13cc27e1e2e199d4cdf70a4778c97cc"
+        },
+        "live_openapi_version": {
+          "const": "0.14.5"
+        },
+        "live_observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "unreleased_main_delta": {
+          "const": "STORE_COUNTER_READ_FAILURE_FIX_NOT_RUNTIME_PROVEN"
+        },
+        "currentness": {
+          "const": "REVIEWED_AT_TIMESTAMP"
+        },
+        "action": {
+          "const": "NO_LIVE_ACTION"
+        }
       }
     },
     "source_evidence": {

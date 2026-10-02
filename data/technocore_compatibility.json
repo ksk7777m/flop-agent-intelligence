@@ -1,15 +1,15 @@
 {
   "schema": "technocore-compatibility-manifest-v1",
   "status": "COMPATIBILITY_REVIEW_REQUIRED",
-  "reviewed_at": "2026-09-11T03:29:35Z",
-  "reviewed_technocore_agent_version": "0.13.0",
+  "reviewed_at": "2026-10-02T09:14:22Z",
+  "reviewed_technocore_agent_version": "0.14.5",
   "release_tracking": {
-    "latest_released_tag": "v0.13.0",
-    "tag_commit": "45921c3e3699e01a55cde391674815367e0cff6b",
-    "upstream_main_head": "20a4457b89ba11254f4aa48217b066884a148d98",
-    "live_openapi_version": "0.13.0",
-    "live_observed_at": "2026-09-11T03:29:35Z",
-    "unreleased_main_delta": "DOCUMENTATION_ONLY_OPERATOR_MEASUREMENT_PROBE",
+    "latest_released_tag": "v0.14.5",
+    "tag_commit": "cd1ce1c55a9956f3cb14ec42c1dd9707981926f9",
+    "upstream_main_head": "0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+    "live_openapi_version": "0.14.5",
+    "live_observed_at": "2026-10-02T09:14:22Z",
+    "unreleased_main_delta": "STORE_COUNTER_READ_FAILURE_FIX_NOT_RUNTIME_PROVEN",
     "currentness": "REVIEWED_AT_TIMESTAMP",
     "action": "NO_LIVE_ACTION"
   },
@@ -267,5 +267,11 @@
     "official_trigger_state": "WAITING",
     "network": "NONE",
     "action": "NO_LIVE_ACTION"
+  },
+  "p0_refresh": {
+    "evidence_manifest": "data/official_baseline/2026-10-02/manifest.json",
+    "runtime_review": "data/technocore_runtime_review.json",
+    "historical_observation_policy": "PRIOR_0130_OBSERVATIONS_RETAINED_NOT_PROMOTED",
+    "write_compatibility": "UNVERIFIED_NO_LIVE_WRITE_PROBE"
   }
 }

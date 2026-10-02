@@ -17,7 +17,7 @@ class OfficialBaselineRecoveryTests(unittest.TestCase):
         schema = self.load("schemas/yellow-paper-baseline.v1.json")
         Draft202012Validator(schema).validate(value)
         self.assertEqual(value["source"]["version"], "0.5.0 (draft)")
-        self.assertEqual(value["source"]["updated"], "2026-09-05")
+        self.assertEqual(value["source"]["updated"], "2026-09-24")
         self.assertEqual(value["parameters"], {
             "genesis_supply": 4_400_000_000,
             "genesis_miner_airdrop": 1_200_000_000,
@@ -45,10 +45,10 @@ class OfficialBaselineRecoveryTests(unittest.TestCase):
         schema = self.load("schemas/technocore-compatibility.v1.json")
         Draft202012Validator(schema).validate(value)
         tracking = value["release_tracking"]
-        self.assertEqual(tracking["latest_released_tag"], "v0.13.0")
-        self.assertEqual(tracking["live_openapi_version"], "0.13.0")
+        self.assertEqual(tracking["latest_released_tag"], "v0.14.5")
+        self.assertEqual(tracking["live_openapi_version"], "0.14.5")
         self.assertNotEqual(tracking["tag_commit"], tracking["upstream_main_head"])
-        self.assertEqual(tracking["unreleased_main_delta"], "DOCUMENTATION_ONLY_OPERATOR_MEASUREMENT_PROBE")
+        self.assertEqual(tracking["unreleased_main_delta"], "STORE_COUNTER_READ_FAILURE_FIX_NOT_RUNTIME_PROVEN")
         self.assertEqual(tracking["action"], "NO_LIVE_ACTION")
 
     def test_observatory_payload_is_historical_not_current_room_state(self):

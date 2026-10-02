@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from enum import IntEnum
+from enum import Enum, IntEnum
 from typing import Dict
 
 from .remote_content_policy import ContractProvenance, ReviewedSourceId, SourceTrustTier
@@ -13,6 +13,19 @@ class SourceTier(IntEnum):
     AUTHORITATIVE = 1
     DIRECTLY_LINKED = 2
     COMMUNITY = 3
+
+
+class AuthorityState(str, Enum):
+    """Document maturity, independent of source identity and action authority."""
+    OFFICIAL_NORMATIVE = "OFFICIAL_NORMATIVE"
+    OFFICIAL_NORMATIVE_DRAFT = "OFFICIAL_NORMATIVE_DRAFT"
+    OFFICIAL_PROPOSED = "OFFICIAL_PROPOSED"
+    OFFICIAL_RUNTIME_OBSERVED = "OFFICIAL_RUNTIME_OBSERVED"
+    OFFICIAL_RELEASED = "OFFICIAL_RELEASED"
+    COMMUNITY_ONLY = "COMMUNITY_ONLY"
+    SUPERSEDED = "SUPERSEDED"
+    CONFLICT = "CONFLICT"
+    UNKNOWN = "UNKNOWN"
 
 
 @dataclass(frozen=True)

@@ -96,6 +96,13 @@ class RailCryptoStatus(str, Enum):
 
 class ReadBackStage(str, Enum):
     NOT_STARTED = "NOT_STARTED"
+    ATTEMPT_RECORDED = "ATTEMPT_RECORDED"
+    EFFECT_UNKNOWN = "EFFECT_UNKNOWN"
+    SIGNATURE_INVALID = "SIGNATURE_INVALID"
+    READBACK_MISMATCH = "READBACK_MISMATCH"
+    REDIRECT_REJECTED = "REDIRECT_REJECTED"
+    DUPLICATE_SUPPRESSED = "DUPLICATE_SUPPRESSED"
+    FAILED = "FAILED"
     WRITE_ACCEPTED = "WRITE_ACCEPTED"
     READ_BACK_OBSERVED = "READ_BACK_OBSERVED"
     DECODE_VALID = "DECODE_VALID"
@@ -1346,6 +1353,8 @@ def verify_tclk_alpha_agreement(
 
 
 _READBACK_TRANSITIONS: Mapping[tuple[ReadBackStage, str], ReadBackStage] = MappingProxyType({
+    (ReadBackStage.NOT_STARTED, "attempt_recorded"): ReadBackStage.ATTEMPT_RECORDED,
+    (ReadBackStage.ATTEMPT_RECORDED, "write_accepted"): ReadBackStage.WRITE_ACCEPTED,
     (ReadBackStage.NOT_STARTED, "write_accepted"): ReadBackStage.WRITE_ACCEPTED,
     (ReadBackStage.WRITE_ACCEPTED, "read_back_observed"): ReadBackStage.READ_BACK_OBSERVED,
     (ReadBackStage.READ_BACK_OBSERVED, "decode_valid"): ReadBackStage.DECODE_VALID,
@@ -1355,11 +1364,13 @@ _READBACK_TRANSITIONS: Mapping[tuple[ReadBackStage, str], ReadBackStage] = Mappi
 })
 
 
-def advance_readback(stage: ReadBackStage, event: str) -> ReadBackStage:
+def advance_readback(stage: ReadBackStage, event: str, *,
+                     _transitions=_READBACK_TRANSITIONS,
+                     _error=WireSafetyError) -> ReadBackStage:
     try:
-        return _READBACK_TRANSITIONS[(stage, event)]
+        return _transitions[(stage, event)]
     except KeyError as error:
-        raise WireSafetyError(
+        raise _error(
             "READBACK_TRANSITION_INVALID", "event", event,
             "read-back evidence stages must be sequential") from error
 

@@ -1,0 +1,51 @@
+{
+  "authority": "OFFICIAL_RUNTIME_OBSERVED",
+  "limits": {
+    "max_rooms": {
+      "spec_default": 5120,
+      "runtime_observed": 300000,
+      "effective_value": null,
+      "source": "TECHNOCORE_CONFIG",
+      "observed_at": "2026-10-02T09:14:22Z"
+    },
+    "max_notes_per_ns": {
+      "spec_default": 5120,
+      "runtime_observed": 300000,
+      "effective_value": null,
+      "source": "TECHNOCORE_CONFIG",
+      "observed_at": "2026-10-02T09:14:22Z"
+    },
+    "max_notes_total": {
+      "spec_default": 163840,
+      "runtime_observed": 16777216,
+      "effective_value": null,
+      "source": "TECHNOCORE_CONFIG",
+      "observed_at": "2026-10-02T09:14:22Z"
+    },
+    "rate_read": {
+      "spec_default": 120,
+      "runtime_observed": 600,
+      "effective_value": null,
+      "source": "TECHNOCORE_CONFIG",
+      "observed_at": "2026-10-02T09:14:22Z"
+    },
+    "rate_write": {
+      "spec_default": 30,
+      "runtime_observed": 300,
+      "effective_value": null,
+      "source": "TECHNOCORE_CONFIG",
+      "observed_at": "2026-10-02T09:14:22Z"
+    }
+  },
+  "document_versions": [
+    "0.14.5",
+    "0.14.5",
+    "0.14.5"
+  ],
+  "schema_version": "0.1",
+  "compatibility_verdict": "DOCUMENTS_AGREE_BEHAVIOR_UNVERIFIED",
+  "live_action_enabled": false,
+  "defaults_source_commit": "0e47f770b13cc27e1e2e199d4cdf70a4778c97cc",
+  "defaults_source_path": "src/config.py",
+  "source_manifest": "data/official_baseline/2026-10-02/manifest.json"
+}

@@ -1,0 +1,302 @@
+[
+  {
+    "name": "v0.14.5",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.14.5",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.14.5",
+    "commit": {
+      "sha": "cd1ce1c55a9956f3cb14ec42c1dd9707981926f9",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/cd1ce1c55a9956f3cb14ec42c1dd9707981926f9"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTQuNQ"
+  },
+  {
+    "name": "v0.14.4",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.14.4",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.14.4",
+    "commit": {
+      "sha": "72f65bb783fb5a99f28a46689f9c9b01bd3d4eea",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/72f65bb783fb5a99f28a46689f9c9b01bd3d4eea"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTQuNA"
+  },
+  {
+    "name": "v0.14.3",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.14.3",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.14.3",
+    "commit": {
+      "sha": "f12eacec0e107fbfa5acd98f3c2174f7f72a4f35",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/f12eacec0e107fbfa5acd98f3c2174f7f72a4f35"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTQuMw"
+  },
+  {
+    "name": "v0.14.2",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.14.2",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.14.2",
+    "commit": {
+      "sha": "113757cd3522fc6bfbdc813e5cd6a1df42af09a5",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/113757cd3522fc6bfbdc813e5cd6a1df42af09a5"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTQuMg"
+  },
+  {
+    "name": "v0.14.1",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.14.1",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.14.1",
+    "commit": {
+      "sha": "f49debd0cd0d50271b62f75420549f2592e8020d",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/f49debd0cd0d50271b62f75420549f2592e8020d"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTQuMQ"
+  },
+  {
+    "name": "v0.14.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.14.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.14.0",
+    "commit": {
+      "sha": "e4c4f73f3b28612d7161170b11e08e580b02123a",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/e4c4f73f3b28612d7161170b11e08e580b02123a"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTQuMA"
+  },
+  {
+    "name": "v0.13.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.13.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.13.0",
+    "commit": {
+      "sha": "45921c3e3699e01a55cde391674815367e0cff6b",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/45921c3e3699e01a55cde391674815367e0cff6b"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTMuMA"
+  },
+  {
+    "name": "v0.12.1",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.12.1",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.12.1",
+    "commit": {
+      "sha": "2670ebb11ead1ab9b67307e518f8e8479fc9db47",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/2670ebb11ead1ab9b67307e518f8e8479fc9db47"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTIuMQ"
+  },
+  {
+    "name": "v0.12.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.12.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.12.0",
+    "commit": {
+      "sha": "e88db03c79ae0ae1f6bf9bb2e21e5a1ea42dd0f9",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/e88db03c79ae0ae1f6bf9bb2e21e5a1ea42dd0f9"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTIuMA"
+  },
+  {
+    "name": "v0.11.4",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.11.4",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.11.4",
+    "commit": {
+      "sha": "317c01f126c6be5a7c3e71ec8719c2cb4ecf09b5",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/317c01f126c6be5a7c3e71ec8719c2cb4ecf09b5"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTEuNA"
+  },
+  {
+    "name": "v0.11.3",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.11.3",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.11.3",
+    "commit": {
+      "sha": "a782b0c7c018fd9fe95eaee8fe11c807bf6ffe14",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/a782b0c7c018fd9fe95eaee8fe11c807bf6ffe14"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTEuMw"
+  },
+  {
+    "name": "v0.11.2",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.11.2",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.11.2",
+    "commit": {
+      "sha": "dc8accce8dfed03b6bedf0102d3c356809702756",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/dc8accce8dfed03b6bedf0102d3c356809702756"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTEuMg"
+  },
+  {
+    "name": "v0.11.1",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.11.1",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.11.1",
+    "commit": {
+      "sha": "7a0abb6783a60bc5c1213453254f0edaae9bf16b",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/7a0abb6783a60bc5c1213453254f0edaae9bf16b"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTEuMQ"
+  },
+  {
+    "name": "v0.11.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.11.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.11.0",
+    "commit": {
+      "sha": "cbc6f6d41f5c02888d7f428678f6df25e41edfc7",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/cbc6f6d41f5c02888d7f428678f6df25e41edfc7"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTEuMA"
+  },
+  {
+    "name": "v0.10.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.10.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.10.0",
+    "commit": {
+      "sha": "9c7df0e3616cf28d17e7c8ebeb0c05de6adf117c",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/9c7df0e3616cf28d17e7c8ebeb0c05de6adf117c"
+    },
+    "node_id": "REF_kwDOT265G7FyZWZzL3RhZ3MvdjAuMTAuMA"
+  },
+  {
+    "name": "v0.9.7",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.9.7",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.9.7",
+    "commit": {
+      "sha": "9a7399d6bf2fdede60cebf54bdadbcfa5c04000c",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/9a7399d6bf2fdede60cebf54bdadbcfa5c04000c"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOS43"
+  },
+  {
+    "name": "v0.9.6",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.9.6",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.9.6",
+    "commit": {
+      "sha": "c5cc02fcf1df33c2426ee5f9ef2a4ba519bb778b",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/c5cc02fcf1df33c2426ee5f9ef2a4ba519bb778b"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOS42"
+  },
+  {
+    "name": "v0.9.5",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.9.5",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.9.5",
+    "commit": {
+      "sha": "41ecbbb2345ad2c8317fa2a16c267736fd594fec",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/41ecbbb2345ad2c8317fa2a16c267736fd594fec"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOS41"
+  },
+  {
+    "name": "v0.9.4",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.9.4",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.9.4",
+    "commit": {
+      "sha": "944c918751bfbceb47332f73c87e8997a69ad9fe",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/944c918751bfbceb47332f73c87e8997a69ad9fe"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOS40"
+  },
+  {
+    "name": "v0.9.3",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.9.3",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.9.3",
+    "commit": {
+      "sha": "e6114b38e58889c71d1f7338e3b58fa2db530194",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/e6114b38e58889c71d1f7338e3b58fa2db530194"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOS4z"
+  },
+  {
+    "name": "v0.9.2",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.9.2",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.9.2",
+    "commit": {
+      "sha": "53079408c1581f46eff6acbf6e2eada289d4332c",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/53079408c1581f46eff6acbf6e2eada289d4332c"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOS4y"
+  },
+  {
+    "name": "v0.9.1",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.9.1",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.9.1",
+    "commit": {
+      "sha": "c6ab0b90c1e10562da6a42bdb2b536f4d1dd55e2",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/c6ab0b90c1e10562da6a42bdb2b536f4d1dd55e2"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOS4x"
+  },
+  {
+    "name": "v0.9.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.9.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.9.0",
+    "commit": {
+      "sha": "c99af781c9fb14723cd7f0ba571a5e1d4ec28e66",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/c99af781c9fb14723cd7f0ba571a5e1d4ec28e66"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOS4w"
+  },
+  {
+    "name": "v0.8.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.8.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.8.0",
+    "commit": {
+      "sha": "d8775c2c03e4fc96c24022ffa7103cc765ea94fc",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/d8775c2c03e4fc96c24022ffa7103cc765ea94fc"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuOC4w"
+  },
+  {
+    "name": "v0.7.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.7.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.7.0",
+    "commit": {
+      "sha": "1197c9e9463295fae4670e007a0ffcbac6984ffc",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/1197c9e9463295fae4670e007a0ffcbac6984ffc"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuNy4w"
+  },
+  {
+    "name": "v0.5.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.5.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.5.0",
+    "commit": {
+      "sha": "07fb4fee648e4451da7046b50f99e1337fcd20db",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/07fb4fee648e4451da7046b50f99e1337fcd20db"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuNS4w"
+  },
+  {
+    "name": "v0.4.0",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.4.0",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.4.0",
+    "commit": {
+      "sha": "4cf004e4d506c10bf9dac33977d3c231aa4c716c",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/4cf004e4d506c10bf9dac33977d3c231aa4c716c"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuNC4w"
+  },
+  {
+    "name": "v0.3.3",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.3.3",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.3.3",
+    "commit": {
+      "sha": "a81ef5f64e4aaff7576843ac9e26c65d9b288443",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/a81ef5f64e4aaff7576843ac9e26c65d9b288443"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuMy4z"
+  },
+  {
+    "name": "v0.3.2",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.3.2",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.3.2",
+    "commit": {
+      "sha": "12e02027ab109279110586323f9ffa71426cf6f7",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/12e02027ab109279110586323f9ffa71426cf6f7"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuMy4y"
+  },
+  {
+    "name": "v0.3.1",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-chat/zipball/refs/tags/v0.3.1",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-chat/tarball/refs/tags/v0.3.1",
+    "commit": {
+      "sha": "4a11e024bb082ff0f87139fb8c7781aa4730cf09",
+      "url": "https://api.github.com/repos/flop-labs/technocore-chat/commits/4a11e024bb082ff0f87139fb8c7781aa4730cf09"
+    },
+    "node_id": "REF_kwDOT265G7ByZWZzL3RhZ3MvdjAuMy4x"
+  }
+]

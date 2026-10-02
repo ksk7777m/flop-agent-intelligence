@@ -187,11 +187,12 @@ class NonceAndSignerTests(unittest.TestCase):
         def decoder(_url, request):
             calls.append(request.method)
             return ({"messages": [{"from": "did:key:fixture", "nonce": "7",
-                                    "text": "fixture", "seq": 1}]}
+                                    "text": "fixture", "seq": 1, "sig": "signature"}]}
                     if request.method == "GET" else {"ok": True})
         _, _, _, post, _ = technocore._build_technocore_client(
             lambda *_: None, require, lambda *_: (object(), "did:key:fixture"),
-            lambda *_: ("signature", "fixture"), decoder)
+            lambda *_: ("signature", "fixture"), decoder,
+            signature_verifier=lambda *_: None, attempt_recorder=lambda *_: None)
         result = post(Path("fixture"), "lobby", "fixture", intent=intent,
                       revision=REVISION, config_version="fixture-v1",
                       context="fixture-post", nonce="7",
@@ -208,13 +209,14 @@ class NonceAndSignerTests(unittest.TestCase):
             effects.append(request.method)
             if request.method == "GET":
                 return {"messages": [{"from": "did:key:fixture", "nonce": "7",
-                                      "text": "approved", "seq": "1"}]}
+                                      "text": "approved", "seq": "1", "sig": "signature"}]}
             return {"ok": True}
         _, _, _, post, _ = technocore._build_technocore_client(
             lambda *_: None, require,
             lambda *_: (effects.append("key") or (object(), "did:key:fixture")),
             lambda _key, _room, _nonce, text:
-                (effects.append("sign") or ("signature", text)), decoder)
+                (effects.append("sign") or ("signature", text)), decoder,
+            signature_verifier=lambda *_: None, attempt_recorder=lambda *_: None)
         with mock.patch.object(technocore, "_capture_signing_policy", attacker), \
              mock.patch.object(technocore, "build_signing_context", attacker), \
              mock.patch.object(technocore, "signing_capability_material", attacker), \
@@ -254,14 +256,15 @@ class NonceAndSignerTests(unittest.TestCase):
             post_effects.append(request.method)
             if request.method == "GET":
                 return {"messages": [{"from": "did:key:fixture", "nonce": "7",
-                                      "text": "approved", "seq": "1"}]}
+                                      "text": "approved", "seq": "1", "sig": "signature"}]}
             return {"ok": True}
 
         _, _, _, post, _ = technocore._build_technocore_client(
             lambda *_: None, post_require,
             lambda *_: (post_effects.append("key") or (object(), "did:key:fixture")),
             lambda _key, _room, _nonce, text:
-                (post_effects.append("sign") or ("signature", text)), decoder)
+                (post_effects.append("sign") or ("signature", text)), decoder,
+            signature_verifier=lambda *_: None, attempt_recorder=lambda *_: None)
 
         def attacker(*_args, **_kwargs):
             attacker_calls.append("attacker")

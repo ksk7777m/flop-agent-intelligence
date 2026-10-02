@@ -1,0 +1,12 @@
+[
+  {
+    "name": "close-1",
+    "zipball_url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/zipball/refs/tags/close-1",
+    "tarball_url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/tarball/refs/tags/close-1",
+    "commit": {
+      "sha": "66c1da36538e4b1c685417d2f66922906b13fea0",
+      "url": "https://api.github.com/repos/flop-labs/technocore-close-call-challenge/commits/66c1da36538e4b1c685417d2f66922906b13fea0"
+    },
+    "node_id": "REF_kwDOUqf60rFyZWZzL3RhZ3MvY2xvc2UtMQ"
+  }
+]

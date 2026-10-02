@@ -58,6 +58,57 @@ class VersionEvidence(str, Enum):
     VERSION_UNKNOWN = "VERSION_UNKNOWN"
 
 
+def describe_runtime_limits(config: bytes, manifest: bytes, openapi: bytes, *,
+                            spec_defaults: Mapping[str, Any], observed_at: str) -> Mapping[str, Any]:
+    """Project bounded public documents, never infer deployed write behavior.
+
+    Defaults are supplied from a separately pinned official source, not baked
+    into consumers. Cached observations do not produce actionable effective values.
+    """
+    def decode(raw: bytes) -> Mapping[str, Any]:
+        if type(raw) is not bytes or len(raw) > 2 * 1024 * 1024:
+            raise ObservationError("DOCUMENT_BOUND_INVALID")
+        def pairs(items: Any) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in items:
+                if key in value:
+                    raise ObservationError("DUPLICATE_JSON_KEY")
+                value[key] = item
+            return value
+        try:
+            value = json.loads(raw, object_pairs_hook=pairs,
+                parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        except (ValueError, UnicodeError, RecursionError):
+            raise ObservationError("DOCUMENT_INVALID") from None
+        if type(value) is not dict:
+            raise ObservationError("DOCUMENT_INVALID")
+        return value
+    cfg, agent, api = (decode(raw) for raw in (config, manifest, openapi))
+    if (cfg.get("service") != "technocore-chat" or agent.get("name") != "technocore-chat"
+            or type(api.get("info")) is not dict
+            or api["info"].get("title") != "technocore-chat"
+            or type(cfg.get("settings")) is not dict
+            or not isinstance(observed_at, str) or not _TIME.fullmatch(observed_at)):
+        raise ObservationError("DOCUMENT_IDENTITY_INVALID")
+    versions = [cfg.get("version"), agent.get("version"), api["info"].get("version")]
+    if any(type(version) is not str or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None
+           for version in versions):
+        raise ObservationError("VERSION_INVALID")
+    limits = {}
+    for name in ("max_rooms", "max_notes_per_ns", "max_notes_total", "rate_read", "rate_write"):
+        value, default = cfg["settings"].get(name), spec_defaults.get(name)
+        if any(type(item) is not int or item <= 0 for item in (value, default)):
+            raise ObservationError("LIMIT_INVALID")
+        limits[name] = {"spec_default": default, "runtime_observed": value,
+                        "effective_value": None, "source": "TECHNOCORE_CONFIG",
+                        "observed_at": observed_at}
+    return {"authority": "OFFICIAL_RUNTIME_OBSERVED", "limits": limits,
+            "document_versions": versions, "schema_version": agent.get("schema_version"),
+            "compatibility_verdict": "DOCUMENTS_AGREE_BEHAVIOR_UNVERIFIED" if len(set(versions)) == 1
+                                     else "CONFLICT",
+            "live_action_enabled": False}
+
+
 class Freshness(str, Enum):
     FRESHNESS_UNKNOWN = "FRESHNESS_UNKNOWN"
     POTENTIALLY_STALE = "POTENTIALLY_STALE"
